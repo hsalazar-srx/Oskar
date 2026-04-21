@@ -1,9 +1,10 @@
-# OSKAR — Staging Docker Compose (PRE-8)
+# Oskar — Staging Docker Compose (PRE-8)
 # IIS vhost: oskar-staging.srxwebapp1.local → port 8001
 # Separate ports and data volumes from production.
 # OQ test cases and performance demos run on staging — never on production data.
 #
 # ADR-007: Redis eliminated. Stack = oskar-db-staging · oskar-app · oskar-worker · oskar-frontend
+# Security hardening mirrors production (S1-17).
 #
 # Usage: docker compose -f docker-compose.staging.yml up -d
 
@@ -13,23 +14,32 @@ services:
     image: ${REGISTRY:-oskar-vm.srxglobal.local}/oskar-app:${TAG:-latest}
     container_name: oskar-app-staging
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/logs
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     ports:
       - "8001:8000"
     environment:
       - MOVEX_API_URL=${MOVEX_API_URL}
       - MOVEX_API_KEY=${MOVEX_API_KEY}
       - MOVEX_CONO=${MOVEX_CONO:-300}
-      - DATABASE_URL=postgresql+psycopg2://oskar:${POSTGRES_PASSWORD}@oskar-db-staging:5432/oskar_staging
+      - DATABASE_URL=postgresql+asyncpg://oskar:${POSTGRES_PASSWORD}@oskar-db-staging:5432/oskar_staging
       - AUTH_PROVIDER=ldap
       - LDAP_SERVER=${LDAP_SERVER}
       - LDAP_BASE_DN=${LDAP_BASE_DN}
       - LDAP_BIND_DN=${LDAP_BIND_DN}
       - LDAP_BIND_PW=${LDAP_BIND_PW}
-      - JWT_SECRET=${JWT_SECRET_STAGING}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY_STAGING}
       - JWT_ALGORITHM=HS256
       - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
       - JWT_REFRESH_TOKEN_EXPIRE_HOURS=8
-      - SMTP_HOST=${SMTP_HOST}
+      - REFRESH_TOKEN_SECRET=${REFRESH_TOKEN_SECRET_STAGING}
+      - SMTP_HOST=${SMTP_HOST:-10.10.0.155}
       - SMTP_PORT=${SMTP_PORT:-25}
       - SMTP_SENDER=${SMTP_SENDER}
       - OSKAR_ENV=staging
@@ -46,24 +56,41 @@ services:
     image: ${REGISTRY:-oskar-vm.srxglobal.local}/oskar-app:${TAG:-latest}
     container_name: oskar-worker-staging
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     command: celery -A src.worker worker --loglevel=info --concurrency=2
     environment:
       - MOVEX_API_URL=${MOVEX_API_URL}
       - MOVEX_API_KEY=${MOVEX_API_KEY}
       - MOVEX_CONO=${MOVEX_CONO:-300}
-      - DATABASE_URL=postgresql+psycopg2://oskar:${POSTGRES_PASSWORD}@oskar-db-staging:5432/oskar_staging
+      - DATABASE_URL=postgresql+asyncpg://oskar:${POSTGRES_PASSWORD}@oskar-db-staging:5432/oskar_staging
       - CELERY_SECURITY_KEY=${CELERY_SECURITY_KEY}
-      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_HOST=${SMTP_HOST:-10.10.0.155}
       - SMTP_PORT=${SMTP_PORT:-25}
       - SMTP_SENDER=${SMTP_SENDER}
       - OSKAR_ENV=staging
     depends_on:
-      - oskar-db-staging
+      oskar-db-staging:
+        condition: service_healthy
 
   oskar-frontend:
     image: ${REGISTRY:-oskar-vm.srxglobal.local}/oskar-frontend:${TAG:-latest}
     container_name: oskar-frontend-staging
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     ports:
       - "3001:80"
     environment:
@@ -73,6 +100,8 @@ services:
     image: postgres:16-alpine
     container_name: oskar-db-staging
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     ports:
       - "5433:5432"
     environment:
