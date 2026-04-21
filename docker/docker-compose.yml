@@ -1,0 +1,99 @@
+# OSKAR — Production Docker Compose
+# Target: Linux VM (VMware, Ubuntu 24.04 LTS) on-prem
+# IIS reverse proxy → port 8000 (FastAPI) and port 3000 (React frontend)
+#
+# ADR-007: Redis eliminated. Stack = oskar-db · oskar-app · oskar-worker · oskar-frontend
+# Celery broker: celery[sqlalchemy] PostgreSQL transport (kombu_message table)
+# Session store: jti_blocklist + refresh_tokens tables in oskar-db
+# Event push: HTTP polling GET /api/v1/ecn/{id} every 15–30s
+
+services:
+
+  oskar-app:
+    image: ${REGISTRY:-oskar-vm.srxglobal.local}/oskar-app:${TAG:-latest}
+    container_name: oskar-app
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # ERP
+      - MOVEX_API_URL=${MOVEX_API_URL}
+      - MOVEX_API_KEY=${MOVEX_API_KEY}
+      - MOVEX_CONO=${MOVEX_CONO:-300}
+      # Database — also used as Celery broker (ADR-007)
+      - DATABASE_URL=postgresql+psycopg2://oskar:${POSTGRES_PASSWORD}@oskar-db:5432/oskar
+      # Auth (PRE-3, ADR-006)
+      - AUTH_PROVIDER=ldap
+      - LDAP_SERVER=${LDAP_SERVER}
+      - LDAP_BASE_DN=${LDAP_BASE_DN}
+      - LDAP_BIND_DN=${LDAP_BIND_DN}
+      - LDAP_BIND_PW=${LDAP_BIND_PW}
+      # JWT (ADR-006: 60min access + 8h refresh)
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_ALGORITHM=HS256
+      - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
+      - JWT_REFRESH_TOKEN_EXPIRE_HOURS=8
+      # Email notifications (PRE-9)
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT:-25}
+      - SMTP_SENDER=${SMTP_SENDER}
+    depends_on:
+      oskar-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - oskar-app-logs:/app/logs
+
+  oskar-worker:
+    image: ${REGISTRY:-oskar-vm.srxglobal.local}/oskar-app:${TAG:-latest}
+    container_name: oskar-worker
+    restart: unless-stopped
+    command: celery -A src.worker worker --loglevel=info --concurrency=4
+    environment:
+      - MOVEX_API_URL=${MOVEX_API_URL}
+      - MOVEX_API_KEY=${MOVEX_API_KEY}
+      - MOVEX_CONO=${MOVEX_CONO:-300}
+      - DATABASE_URL=postgresql+psycopg2://oskar:${POSTGRES_PASSWORD}@oskar-db:5432/oskar
+      - CELERY_SECURITY_KEY=${CELERY_SECURITY_KEY}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT:-25}
+      - SMTP_SENDER=${SMTP_SENDER}
+    depends_on:
+      - oskar-db
+
+  oskar-frontend:
+    image: ${REGISTRY:-oskar-vm.srxglobal.local}/oskar-frontend:${TAG:-latest}
+    container_name: oskar-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    environment:
+      - VITE_API_URL=${VITE_API_URL:-/api/v1}
+
+  oskar-db:
+    image: postgres:16-alpine
+    container_name: oskar-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=oskar
+      - POSTGRES_USER=oskar
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - oskar-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oskar -d oskar"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  oskar-db-data:
+  oskar-app-logs:
+
+networks:
+  default:
+    name: oskar-network

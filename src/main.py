@@ -1,0 +1,47 @@
+# OSKAR — FastAPI Application Entry Point
+# Uses skill: integration/rest-api-design v1.0
+# Uses skill: architecture/audit-logging-framework v1.0
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from src.logging_config import configure_logging
+from src.middleware.correlation import CorrelationIdMiddleware
+from src.routers import v1_router
+from src.routers.health import health_router
+
+# Configure structlog before any other module emits a log record
+configure_logging()
+
+app = FastAPI(
+    title="OSKAR Engineering Intelligence Platform",
+    description="ECN workflow, BOM management, and Supplier Intelligence for Scanfil APAC",
+    version="0.1.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
+
+# ── Middleware (order matters: correlation ID first, then CORS) ───────────────
+app.add_middleware(CorrelationIdMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Tighten in production via CORS_ORIGINS env var
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── Routers ───────────────────────────────────────────────────────────────────
+app.include_router(v1_router)
+v1_router.include_router(health_router)
+
+
+@app.get("/health", tags=["system"])
+async def health() -> dict:
+    """Unversioned health check — used by Docker HEALTHCHECK and IIS reverse proxy.
+
+    For full liveness/readiness checks use:
+      GET /api/v1/health/live
+      GET /api/v1/health/ready
+    """
+    return {"status": "ok", "service": "oskar-app"}

@@ -1,0 +1,58 @@
+# OSKAR — Local Development Docker Compose
+# For Lead Engineer workstation use only.
+# Uses local build context, mounts src/ for hot-reload.
+#
+# ADR-007: Redis eliminated. Dev stack = oskar-db-dev · oskar-app-dev
+# Celery broker: PostgreSQL transport (DATABASE_URL)
+#
+# Usage: docker compose -f docker-compose.dev.yml up -d
+# Requires: .env file in project root (copy from .env.example)
+
+services:
+
+  oskar-app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: oskar-app-dev
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - MOVEX_API_URL=${MOVEX_API_URL:-http://host.docker.internal:5000/api}
+      - MOVEX_CONO=${MOVEX_CONO:-300}
+      - DATABASE_URL=postgresql+psycopg2://oskar:devpassword@oskar-db-dev:5432/oskar_dev
+      - AUTH_PROVIDER=ldap
+      - LDAP_SERVER=${LDAP_SERVER}
+      - LDAP_BASE_DN=${LDAP_BASE_DN}
+      - LDAP_BIND_DN=${LDAP_BIND_DN}
+      - LDAP_BIND_PW=${LDAP_BIND_PW}
+      - JWT_SECRET=dev-secret-not-for-production
+      - JWT_ALGORITHM=HS256
+      - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
+      - JWT_REFRESH_TOKEN_EXPIRE_HOURS=8
+      - OSKAR_ENV=development
+    volumes:
+      - ../src:/app/src  # Hot-reload: src/ changes apply without rebuild
+    depends_on:
+      - oskar-db-dev
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+
+  oskar-db-dev:
+    image: postgres:16-alpine
+    container_name: oskar-db-dev
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=oskar_dev
+      - POSTGRES_USER=oskar
+      - POSTGRES_PASSWORD=devpassword
+    volumes:
+      - oskar-db-dev-data:/var/lib/postgresql/data
+
+volumes:
+  oskar-db-dev-data:
+
+networks:
+  default:
+    name: oskar-dev-network

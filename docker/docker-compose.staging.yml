@@ -1,0 +1,95 @@
+# OSKAR — Staging Docker Compose (PRE-8)
+# IIS vhost: oskar-staging.srxwebapp1.local → port 8001
+# Separate ports and data volumes from production.
+# OQ test cases and performance demos run on staging — never on production data.
+#
+# ADR-007: Redis eliminated. Stack = oskar-db-staging · oskar-app · oskar-worker · oskar-frontend
+#
+# Usage: docker compose -f docker-compose.staging.yml up -d
+
+services:
+
+  oskar-app:
+    image: ${REGISTRY:-oskar-vm.srxglobal.local}/oskar-app:${TAG:-latest}
+    container_name: oskar-app-staging
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    environment:
+      - MOVEX_API_URL=${MOVEX_API_URL}
+      - MOVEX_API_KEY=${MOVEX_API_KEY}
+      - MOVEX_CONO=${MOVEX_CONO:-300}
+      - DATABASE_URL=postgresql+psycopg2://oskar:${POSTGRES_PASSWORD}@oskar-db-staging:5432/oskar_staging
+      - AUTH_PROVIDER=ldap
+      - LDAP_SERVER=${LDAP_SERVER}
+      - LDAP_BASE_DN=${LDAP_BASE_DN}
+      - LDAP_BIND_DN=${LDAP_BIND_DN}
+      - LDAP_BIND_PW=${LDAP_BIND_PW}
+      - JWT_SECRET=${JWT_SECRET_STAGING}
+      - JWT_ALGORITHM=HS256
+      - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
+      - JWT_REFRESH_TOKEN_EXPIRE_HOURS=8
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT:-25}
+      - SMTP_SENDER=${SMTP_SENDER}
+      - OSKAR_ENV=staging
+    depends_on:
+      oskar-db-staging:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  oskar-worker:
+    image: ${REGISTRY:-oskar-vm.srxglobal.local}/oskar-app:${TAG:-latest}
+    container_name: oskar-worker-staging
+    restart: unless-stopped
+    command: celery -A src.worker worker --loglevel=info --concurrency=2
+    environment:
+      - MOVEX_API_URL=${MOVEX_API_URL}
+      - MOVEX_API_KEY=${MOVEX_API_KEY}
+      - MOVEX_CONO=${MOVEX_CONO:-300}
+      - DATABASE_URL=postgresql+psycopg2://oskar:${POSTGRES_PASSWORD}@oskar-db-staging:5432/oskar_staging
+      - CELERY_SECURITY_KEY=${CELERY_SECURITY_KEY}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT:-25}
+      - SMTP_SENDER=${SMTP_SENDER}
+      - OSKAR_ENV=staging
+    depends_on:
+      - oskar-db-staging
+
+  oskar-frontend:
+    image: ${REGISTRY:-oskar-vm.srxglobal.local}/oskar-frontend:${TAG:-latest}
+    container_name: oskar-frontend-staging
+    restart: unless-stopped
+    ports:
+      - "3001:80"
+    environment:
+      - VITE_API_URL=/api/v1
+
+  oskar-db-staging:
+    image: postgres:16-alpine
+    container_name: oskar-db-staging
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_DB=oskar_staging
+      - POSTGRES_USER=oskar
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - oskar-db-staging-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oskar -d oskar_staging"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  oskar-db-staging-data:
+
+networks:
+  default:
+    name: oskar-staging-network
