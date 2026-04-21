@@ -27,8 +27,8 @@
 - [x] **PRE-12:** CONO environment mapping — CONO=300 dev/UAT, CONO=100 production ✅ 2026-04-15
 
 ### Remaining ⏳
-- [ ] **P0-1:** `git init` + first commit — name confirmed as **OSKAR** (2026-04-21). Unblocked.
-- [ ] **P0-2:** Add to Knowledge Vault post-commit hook (after P0-1)
+- [x] **P0-1:** `git init` + first commit — ✅ 2026-04-21 (commit 8d18f81)
+- [x] **P0-2:** Add to Knowledge Vault post-commit hook ✅ 2026-04-21
 
 ---
 
@@ -87,7 +87,7 @@
 ### Pre-conditions
 | Pre-condition | Status |
 |--------------|--------|
-| P0-1: git init | ⏳ unblocked — name confirmed as OSKAR (2026-04-21) |
+| P0-1: git init | ✅ 2026-04-21 |
 | LDAPS confirmed with Devian/Manal | ⏳ Manal confirms ~2026-04-24 |
 | `/etc/oskar/secrets.env` on VM | ⏳ Manal runs setup-server-secrets.sh after VM provisioned |
 | structlog + correlation ID (P0-4) | ✅ |
