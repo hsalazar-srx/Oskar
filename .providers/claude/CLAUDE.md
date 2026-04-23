@@ -71,6 +71,24 @@ oskar-state.md (project root)          Session state
 
 ---
 
+## Review Checklist — Data Mutation (Mandatory for every PATCH/PUT/DELETE endpoint)
+
+Added 2026-04-23 after LL-001. Apply before coding any endpoint that modifies shared state.
+
+1. **Concurrent edit protection** — Is optimistic or pessimistic locking in place? What happens
+   if two users submit the same mutation concurrently? (See ADR-008 for the OSKAR pattern.)
+2. **Double-submit prevention** — Can the operation be submitted twice in quick succession?
+   Is there a DB unique constraint or idempotency key that prevents a duplicate record?
+3. **Stale-read / blind-write** — Does the flow read data, present it to a user, and write it
+   back without checking whether the data changed in the interim?
+4. **TOCTOU** — Is any guard condition checked outside the transaction that performs the write?
+   If yes, repeat the check inside the transaction.
+5. **Terminal state protection** — Can a terminal-state record (CLOSED, CANCELLED) be mutated
+   by a concurrent request that arrived before the status committed? Is the status check
+   inside the write transaction?
+
+---
+
 ## Critical Rules (Never Violate)
 
 ### OSKAR Non-Negotiables

@@ -131,6 +131,7 @@
 - [ ] Sprint 1 complete
 
 **Sprint 2 scope (all ⏳):**
+- **Optimistic locking (ADR-008):** `If-Unmodified-Since` check in `ECNService.update_ecn` + `transition_ecn`; 428 if header absent, 409 if stale; OQ-40 through OQ-45
 - Transactional Outbox: `movex_outbox` + Celery tasks, retry 30s → 5min → 30min, FAILED@3, ABANDONED@10
 - ECN write gate: state check + all-approvals check + single-use `write_authorization_token`
 - Rejection flows: restart vs proceed

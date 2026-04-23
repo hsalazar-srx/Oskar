@@ -76,10 +76,10 @@ must be on the ABC before any business logic is written. See `decisions/ADR-005-
 |---------|---------------|---------|-----------------|
 | MMS003 | Get | Item cost information (UCOS) | Read-only; useful for cost review display |
 | MMS175MI | Update | Change item location (warehouse movement) | Not ECN-related |
-| MMS200MI | GetItmBasic, GetItmFac, LstItmFac, GetItmWhsBal, UpdItmBasic | Item master read + basic update | **Partially useful** — `GetItmBasic` feeds item search; `UpdItmBasic` could update STAT/ITDS/FUDS/RESP/UNMS on item change |
+| MMS200MI | GetItmBasic, GetItmFac, LstItmFac, GetItmWhsBal, UpdItmBasic, **AddItmViaItmTyp, AddItmBasic, AddItmFac, AddItmWhs** | Item master full CRUD | Read transactions cover item search/validation; `UpdItmBasic` covers existing-item changes; **Add* transactions now added — cover new item creation path** |
 | MMS310MI | Get, Update | Stock adjustment | Not ECN-related |
 
-**Finding:** None of the 4 exposed programs cover product structure (PDS) or item alias (MMS025MI) operations. All 7 ECN write transactions are missing.
+**Finding:** PDS (product structure) and MMS025MI (item alias) write transactions were missing. `MMS200MI` Add* transactions were also missing — these are required to create new items in Movex as part of the ECN workflow (Stargile used a manual workaround). All gaps now captured in the matrix below.
 
 ---
 
@@ -87,7 +87,11 @@ must be on the ABC before any business logic is written. See `decisions/ADR-005-
 
 | MI Program | Transaction | ECN Purpose | Stargile source | Status in movex-rest-api | Sprint priority |
 |-----------|-------------|------------|----------------|--------------------------|----------------|
-| PDS001MI | AddProduct | Create new product/item header in Movex at APPROVED→IMPLEMENTED | `BOMService.java` — confirmed | **MISSING** | Sprint 2 blocker |
+| MMS200MI | AddItmViaItmTyp | Create item master record (MITMAS) using item type template — **preferred path** for new items; pre-populates defaults from item type. Maps to `ecn_items.item_template` (NIATPL). | 2018-04-17 Branko session — Excel upload template with `is_new_item=true`; confirmed as Stargile normalised workaround (engineers manually created item in Movex first) | **MISSING — added to MMS200MI.json** | Sprint 2 blocker |
+| MMS200MI | AddItmBasic | Create item master record (MITMAS) without template — fallback when no item type applies | Same source | **MISSING — added to MMS200MI.json** | Sprint 2 blocker |
+| MMS200MI | AddItmFac | Create facility-level record (MITFAC) — required after AddItm*; item unusable at facility until this exists | Implicit in Movex item creation sequence | **MISSING — added to MMS200MI.json** | Sprint 2 blocker |
+| MMS200MI | AddItmWhs | Create warehouse-level record (MITWHL) — required after AddItmFac for warehouse transactions | Implicit in Movex item creation sequence | **MISSING — added to MMS200MI.json** | Sprint 2 blocker |
+| PDS001MI | AddProduct | Create product structure header (MPDHED) in Movex | `BOMService.java` — confirmed | **MISSING** | Sprint 2 blocker |
 | PDS002MI | AddComponent | Add BOM line (component + qty + operation) | `BOMService.java` — confirmed | **MISSING** | Sprint 2 blocker |
 | PDS002MI | DeleteComponent | Remove BOM line | `BOMService.java` — confirmed | **MISSING** | Sprint 2 blocker |
 | PDS002MI | UpdateOperation | Modify routing operation | `BOMService.java` — confirmed | **MISSING** | Sprint 2 blocker |
@@ -95,9 +99,20 @@ must be on the ABC before any business logic is written. See `decisions/ADR-005-
 | MMS025MI | AddAlias | Register MPN (POPN) as item alias in MITPOP | `ItemService.addItemAlias()` — graph analysis §8.2 | **MISSING** | Sprint 2 blocker |
 | MPDDOC | (see note) | Drawing number creation — copy `#TEMPLATE` record | `ItemService.createDwno()` — graph analysis §8.1 | **MISSING — may not be an MI program** | Sprint 2 blocker |
 
+**New item write sequence (when `ecn_items.is_new_item = TRUE`):**
+All steps execute at Status 50 (APPROVED) via the Transactional Outbox in order:
+1. `MMS200MI.AddItmViaItmTyp` — create MITMAS record
+2. `MMS200MI.AddItmFac` — create MITFAC record for ECN facility
+3. `MMS200MI.AddItmWhs` — create MITWHL record for default warehouse
+4. `PDS001MI.AddProduct` — create product structure header
+5. `PDS002MI.AddComponent` — BOM lines
+6. `MMS025MI.AddAlias` — register MPN
+
+**Why Stargile did not do this:** Engineers manually created the item in Movex first, then referenced it in Stargile. Confirmed in the 2018-04-17 Branko session (timestamp 43:57): *"this is another step where we use a shortcut sometimes by manually creating it in Movex."* This was a normalised workaround, not a named pain point — which is why it was not flagged in the original gap analysis. OSKAR must eliminate this manual step.
+
 **MPDDOC note:** `createDwno()` copies a `#TEMPLATE` record in the MPDDOC table. This is likely a direct DB2 operation (`PreparedStatementHelper` pattern confirmed in Stargile source), not an MI API call. The `@developer-dotnet` team must confirm: is there an MI program for MPDDOC manipulation, or does movex-rest-api need a custom DB2 endpoint? Flag as investigation item before Sprint 2 design.
 
-**Partial coverage note:** `MMS200MI.UpdItmBasic` is already exposed and covers status, description, and responsible-engineer updates on existing items. This may satisfy the "change item" path for items that already exist in Movex (OSKAR ECN scope: only new items go through `PDS001MI.AddProduct`). Confirm with Branko post-POC.
+**Existing-item change path:** `MMS200MI.UpdItmBasic` (already exposed) covers STAT/ITDS/FUDS/RESP/UNMS updates on items that already exist in Movex. This satisfies the change path for ECN lines where `is_new_item = FALSE`.
 
 ---
 

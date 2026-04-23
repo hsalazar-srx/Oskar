@@ -315,61 +315,6 @@ facility-level item warehouse management in Iteration 1 — this is Phase 2 scop
 - Karen to endorse cutover plan before go-live date is communicated to engineering team.
 
 ---
-
-## 9. DBCHK_OpenECN — SQL Server Background Job (2026-04-14)
-
-**Source:** `[DBSRV].[SRX_Apps].[dbo].[DBCHK_OpenECN]` — stored procedure authored by Karen Lewin, 2024-02-21.
-**Context:** Added to OSKAR scope by Karen (email 2026-04-14). Must be analysed and replaced by OSKAR.
-
----
-
-### What it does
-
-Runs as a SQL Server Agent job on `DBSRV`. Queries replicated Stargile/ComActivity tables in `SRX_Apps` and sends an HTML email digest of all open ECNs (status < 95) for facility `D` (Division D / JB).
-
-**Replaced:** A pre-2013 version that used a Linked Server to AS/400 (DB2 OLE DB). That approach failed in Feb 2024 with an OLE DB hotfix error. The 2024 replacement replicates Stargile/ComActivity tables into SQL Server instead of querying AS/400 directly.
-
-### ZECNHEAD fields queried
-
-| Stargile field | Meaning | Note |
-|----------------|---------|------|
-| `EHZECNID` | ECN ID | |
-| `EHZECNTL` | ECN Title | |
-| `EHZECNST` | ECN Status | Filter: `< 95` (all non-cancelled) |
-| `EHRESP` | Responsible user / initiator | Used twice — once as ECN ID (cursor bug: @str1=EHZECNID, @str4=EHZECNID again), once as resp |
-| `EHZECNTP` | ECN Type (ECO/MCO) | |
-| `EHCUNO` | Customer number | |
-| `EHPRNO` | Product number | |
-| `EHCONO` | Company filter | `= '100'` |
-| `EHFACI` | Facility filter | `= 'D'` (hardcoded) |
-
-**Cursor bug noted:** The cursor fetches `EHZECNID` twice (`@str1` and `@str4`) — the original intent was `@str4 = EHRGDT` (Created date) per the proc comment. The email header says "Created" but the value displayed is the ECN ID again. This is a known data quality issue in the existing report.
-
-### "Next Action Person" — current state
-
-The proc title and 2024 comment say "adding ToUSER as the Next Action Person" but the cursor does **not** include a `ToUSER` or next-action field. `EHRESP` (initiator/responsible) is used as the closest proxy. The true next action person requires joining to `ZECNPRCS` / `ZECNAUTH` / `ZECNUSRL` — which the proc does not currently do. This is an **incomplete feature in Stargile** that OSKAR must fully implement.
-
-### Email delivery
-
-| Detail | Value |
-|--------|-------|
-| Recipient | `karen.lewin@srxglobal.com` (hardcoded — `@email_to` parameter is ignored) |
-| Sender profile | `DBSRV` mail profile |
-| Format | HTML table, styled with inline CSS |
-| Trigger | SQL Server Agent job (schedule not in proc — confirm with Infrastructure) |
-| Facility scope | Division D only (hardcoded `EHFACI = 'D'`) |
-
-### OSKAR replacement scope
-
-OSKAR must provide:
-
-1. **Open ECN dashboard** — live web view replacing the email digest. Filterable by status, facility, assignee, age. Accessible to DC and EM at minimum.
-2. **True "Next Action Person" field** — derived from `ecn_approval_steps` (who currently holds the work item). Not just the originator. This is what Stargile promised but never delivered.
-3. **Scheduled digest email (optional)** — configurable Celery beat task. Sends HTML email of open ECNs. Recipients configurable (not hardcoded). Facility-aware (not just `D`). Sprint 2+ scope.
-4. **Decommission dependency:** `DBCHK_OpenECN` SQL Server job must be turned off when OSKAR goes live. Until then it continues running — parallel operation during cutover period is acceptable.
-
----
-
 ## 8. Graph Analysis Findings (2026-04-10)
 
 Source: `SuperTool/graphify-out2/GRAPH_REPORT.md` — AST analysis of full 424-file Stargile codebase.
@@ -497,15 +442,81 @@ From `ECNRejectProcessSendMessageRule.java` — the most complete notification s
 
 ### 8.6 Updated Movex MI Call Table (Complete)
 
-Replaces Section 4 table — now includes MMS025MI:
+Replaces Section 4 table — includes MMS025MI (graph analysis §8.2) and MMS200MI Add* transactions (2026-04-22, confirmed from 2018-04-17 Branko session):
 
-| MI Program | Transaction | Purpose | When |
-|------------|-------------|---------|------|
-| PDS001MI | AddProduct | Create new product header in Movex | Status 50 — new items |
-| PDS002MI | AddComponent | Add BOM line (component + qty + operation) | Status 50 — BOM changes |
-| PDS002MI | DeleteComponent | Remove BOM line | Status 50 — BOM changes |
-| PDS002MI | UpdateOperation | Modify routing operation | Status 50 — routing changes |
-| PDS002MI | AddOperation | Add new routing step | Status 50 — routing changes |
-| **MMS025MI** | **AddAlias** | **Register MPN (POPN) as alias for item in MITPOP** | **Status 50 — new items with MPN** |
+| MI Program | Transaction | Purpose | When | `is_new_item` gate |
+|------------|-------------|---------|------|--------------------|
+| MMS200MI | AddItmViaItmTyp | Create item master record (MITMAS) via item type template — preferred | Status 50 — new items only | `TRUE` only |
+| MMS200MI | AddItmBasic | Create item master record (MITMAS) without template — fallback | Status 50 — new items only | `TRUE` only |
+| MMS200MI | AddItmFac | Create facility-level record (MITFAC) | Status 50 — new items only, after AddItm* | `TRUE` only |
+| MMS200MI | AddItmWhs | Create warehouse-level record (MITWHL) | Status 50 — new items only, after AddItmFac | `TRUE` only |
+| PDS001MI | AddProduct | Create product structure header (MPDHED) | Status 50 — new items | `TRUE` only |
+| PDS002MI | AddComponent | Add BOM line (component + qty + operation) | Status 50 — BOM changes | Either |
+| PDS002MI | DeleteComponent | Remove BOM line | Status 50 — BOM changes | Either |
+| PDS002MI | UpdateOperation | Modify routing operation | Status 50 — routing changes | Either |
+| PDS002MI | AddOperation | Add new routing step | Status 50 — routing changes | Either |
+| MMS025MI | AddAlias | Register MPN (POPN) as alias for item in MITPOP | Status 50 — new items with MPN | `TRUE` only |
 
-**Track A impact:** `MMS025MI.AddAlias` is a confirmed gap in `movex-rest-api`. Must be added to `transactions/` config before Sprint 2.
+**Execution order for new items (`is_new_item = TRUE`):**
+`AddItmViaItmTyp` → `AddItmFac` → `AddItmWhs` → `AddProduct` → `AddComponent` → `AddAlias`
+Each step is a separate `movex_outbox` entry. MITMAS must exist before MITFAC; MITFAC before MITWHL; MITMAS before MPDHED.
+
+**Why Stargile did not automate this:** Engineers manually created the item in Movex first, then referenced it in Stargile. Confirmed in the 2018-04-17 Branko session (timestamp 43:57): *"this is another step where we use a shortcut sometimes by manually creating it in Movex."* This was a normalised workaround, not a named pain point — OSKAR must eliminate this manual step.
+
+**Track A impact:** All MMS200MI Add* transactions added to `transactions/MMS200MI.json` (2026-04-22). PDS001MI, PDS002MI, MMS025MI transaction files still need to be created before Sprint 2.
+
+---
+
+## 9. DBCHK_OpenECN — SQL Server Background Job (2026-04-14)
+
+**Source:** `[DBSRV].[SRX_Apps].[dbo].[DBCHK_OpenECN]` — stored procedure authored by Karen Lewin, 2024-02-21.
+**Context:** Added to OSKAR scope by Karen (email 2026-04-14). Must be analysed and replaced by OSKAR.
+
+---
+
+### What it does
+
+Runs as a SQL Server Agent job on `DBSRV`. Queries replicated Stargile/ComActivity tables in `SRX_Apps` and sends an HTML email digest of all open ECNs (status < 95) for facility `D` (Division D / JB).
+
+**Replaced:** A pre-2013 version that used a Linked Server to AS/400 (DB2 OLE DB). That approach failed in Feb 2024 with an OLE DB hotfix error. The 2024 replacement replicates Stargile/ComActivity tables into SQL Server instead of querying AS/400 directly.
+
+### ZECNHEAD fields queried
+
+| Stargile field | Meaning | Note |
+|----------------|---------|------|
+| `EHZECNID` | ECN ID | |
+| `EHZECNTL` | ECN Title | |
+| `EHZECNST` | ECN Status | Filter: `< 95` (all non-cancelled) |
+| `EHRESP` | Responsible user / initiator | Used twice — once as ECN ID (cursor bug: @str1=EHZECNID, @str4=EHZECNID again), once as resp |
+| `EHZECNTP` | ECN Type (ECO/MCO) | |
+| `EHCUNO` | Customer number | |
+| `EHPRNO` | Product number | |
+| `EHCONO` | Company filter | `= '100'` |
+| `EHFACI` | Facility filter | `= 'D'` (hardcoded) |
+
+**Cursor bug noted:** The cursor fetches `EHZECNID` twice (`@str1` and `@str4`) — the original intent was `@str4 = EHRGDT` (Created date) per the proc comment. The email header says "Created" but the value displayed is the ECN ID again. This is a known data quality issue in the existing report.
+
+### "Next Action Person" — current state
+
+The proc title and 2024 comment say "adding ToUSER as the Next Action Person" but the cursor does **not** include a `ToUSER` or next-action field. `EHRESP` (initiator/responsible) is used as the closest proxy. The true next action person requires joining to `ZECNPRCS` / `ZECNAUTH` / `ZECNUSRL` — which the proc does not currently do. This is an **incomplete feature in Stargile** that OSKAR must fully implement.
+
+### Email delivery
+
+| Detail | Value |
+|--------|-------|
+| Recipient | `karen.lewin@srxglobal.com` (hardcoded — `@email_to` parameter is ignored) |
+| Sender profile | `DBSRV` mail profile |
+| Format | HTML table, styled with inline CSS |
+| Trigger | SQL Server Agent job (schedule not in proc — confirm with Infrastructure) |
+| Facility scope | Division D only (hardcoded `EHFACI = 'D'`) |
+
+### OSKAR replacement scope
+
+OSKAR must provide:
+
+1. **Open ECN dashboard** — live web view replacing the email digest. Filterable by status, facility, assignee, age. Accessible to DC and EM at minimum.
+2. **True "Next Action Person" field** — derived from `ecn_approval_steps` (who currently holds the work item). Not just the originator. This is what Stargile promised but never delivered.
+3. **Scheduled digest email (optional)** — configurable Celery beat task. Sends HTML email of open ECNs. Recipients configurable (not hardcoded). Facility-aware (not just `D`). Sprint 2+ scope.
+4. **Decommission dependency:** `DBCHK_OpenECN` SQL Server job must be turned off when OSKAR goes live. Until then it continues running — parallel operation during cutover period is acceptable.
+
+---
