@@ -205,6 +205,18 @@ class ECNTransitionError(Exception):
     """Wraps GuardFailed / InvalidTransition for the router layer."""
 
 
+class ECNPreconditionRequired(Exception):
+    """If-Unmodified-Since header absent on a mutating request (ADR-008)."""
+
+
+class ECNConflict(Exception):
+    """Stale write detected — current_updated_at carries the latest timestamp (ADR-008)."""
+
+    def __init__(self, current_updated_at: datetime) -> None:
+        self.current_updated_at = current_updated_at
+        super().__init__(str(current_updated_at))
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -581,6 +593,67 @@ async def _compute_next_action_users(
 
 
 # ---------------------------------------------------------------------------
+# Optimistic locking helpers (ADR-008)
+# ---------------------------------------------------------------------------
+
+async def _check_not_modified(
+    session: AsyncSession,
+    ecn_id: str,
+    if_unmodified_since: datetime | None,
+) -> None:
+    """Raise ECNPreconditionRequired (428) or ECNConflict (409) per ADR-008.
+
+    Must be called inside the same DB transaction as the subsequent write so
+    the check and the write are atomic (TOCTOU prevention).
+
+    if_unmodified_since=None  → 428 Precondition Required
+    if_unmodified_since stale → 409 Conflict with current_updated_at
+    """
+    if if_unmodified_since is None:
+        raise ECNPreconditionRequired()
+
+    row = await session.execute(
+        sa.text("SELECT updated_at FROM ecn_instances WHERE id = :id FOR UPDATE"),
+        {"id": ecn_id},
+    )
+    result = row.first()
+    if result is None:
+        raise ECNNotFound(ecn_id)
+
+    current_updated_at: datetime = result[0]
+    # Normalise both to UTC for comparison — DB returns timezone-aware TIMESTAMPTZ
+    ts_check = if_unmodified_since
+    if ts_check.tzinfo is None:
+        ts_check = ts_check.replace(tzinfo=timezone.utc)
+    if current_updated_at.tzinfo is None:
+        current_updated_at = current_updated_at.replace(tzinfo=timezone.utc)
+
+    if current_updated_at != ts_check:
+        raise ECNConflict(current_updated_at)
+
+
+@dataclass
+class ECNUpdateRequest:
+    """Input for PATCH /api/v1/ecn/{id} (field edits, not status transitions)."""
+    title: str | None = None
+    description: str | None = None
+    is_new_item: bool | None = None
+    routing_changes: bool | None = None
+    operation_changes: bool | None = None
+    new_parts: bool | None = None
+    lead_time_changes: bool | None = None
+    change_to_documents: bool | None = None
+    wapc_delta_pct: float | None = None
+    wapc_threshold_override: bool | None = None
+    is_emergency: bool | None = None
+    emergency_reason: str | None = None
+    requires_customer_approval: bool | None = None
+    customer_approval_reference: str | None = None
+    regulatory_impact: bool | None = None
+    extra_data: dict[str, Any] | None = None
+
+
+# ---------------------------------------------------------------------------
 # Public service API
 # ---------------------------------------------------------------------------
 
@@ -701,6 +774,73 @@ class ECNService:
         approval_steps = await _get_approval_steps(self._session, ecn_id)
         return _row_to_detail(row, role_assignments, approval_steps)
 
+    # ── Update fields ─────────────────────────────────────────────────────────
+
+    async def update_ecn(
+        self,
+        ecn_id: str,
+        req: ECNUpdateRequest,
+        if_unmodified_since: datetime | None,
+    ) -> ECNDetail:
+        """Patch writable fields on an ECN (DRAFT or REJECTED status only).
+
+        ADR-008: if_unmodified_since must match updated_at or raises 428/409.
+        The timestamp check and the UPDATE run in the same transaction.
+        """
+        await _check_not_modified(self._session, ecn_id, if_unmodified_since)
+
+        # Verify the ECN exists and is in an editable status
+        row = await _load_ecn_row(self._session, ecn_id)
+        if row is None:
+            raise ECNNotFound(ecn_id)
+        if int(row["status"]) not in (ECNStatus.DRAFT, ECNStatus.REJECTED):
+            raise ECNValidationError(
+                f"ECN can only be edited in DRAFT or REJECTED status. "
+                f"Current status: {ECNStatus(int(row['status'])).name}"
+            )
+
+        # Build SET clause from non-None fields only
+        set_parts: list[str] = []
+        params: dict[str, Any] = {"id": ecn_id}
+
+        def _maybe(field: str, value: Any) -> None:
+            if value is not None:
+                set_parts.append(f"{field} = :{field}")
+                params[field] = value
+
+        if req.title is not None:
+            if not req.title.strip():
+                raise ECNValidationError("title cannot be blank.")
+            set_parts.append("title = :title")
+            params["title"] = req.title.strip()
+        _maybe("description", req.description)
+        for flag in (
+            "is_new_item", "routing_changes", "operation_changes",
+            "new_parts", "lead_time_changes", "change_to_documents",
+            "wapc_threshold_override", "is_emergency",
+            "requires_customer_approval", "regulatory_impact",
+        ):
+            val = getattr(req, flag)
+            if val is not None:
+                set_parts.append(f"{flag} = :{flag}")
+                params[flag] = val
+        _maybe("wapc_delta_pct", req.wapc_delta_pct)
+        _maybe("emergency_reason", req.emergency_reason)
+        _maybe("customer_approval_reference", req.customer_approval_reference)
+        if req.extra_data is not None:
+            set_parts.append("extra_data = :extra_data::jsonb")
+            params["extra_data"] = str(req.extra_data).replace("'", '"')
+
+        if not set_parts:
+            return await self.get(ecn_id)
+
+        await self._session.execute(
+            sa.text(f"UPDATE ecn_instances SET {', '.join(set_parts)} WHERE id = :id"),
+            params,
+        )
+        log.info("ecn.updated", ecn_id=ecn_id)
+        return await self.get(ecn_id)
+
     # ── Status transition ─────────────────────────────────────────────────────
 
     async def transition(
@@ -708,19 +848,25 @@ class ECNService:
         ecn_id: str,
         req: ECNStatusTransitionRequest,
         actor_username: str,
+        if_unmodified_since: datetime | None = None,
     ) -> ECNDetail:
         """Apply a workflow trigger to an ECN.
 
         Steps:
-        1. Load ECN from DB
-        2. Hydrate ECNModel + TransitionContext
-        3. Fetch previous SHA-256 hash for chain
-        4. Build ECNWorkflowMachine + fire trigger
-        5. UPDATE ecn_instances.status (and pre_hold_status if ON_HOLD/resume)
-        6. Write ecn_transition_history row
-        7. Handle rejection record insert (if trigger='reject')
-        8. Return updated detail
+        1. ADR-008: check If-Unmodified-Since (inside transaction — TOCTOU prevention)
+        2. Load ECN from DB
+        3. Hydrate ECNModel + TransitionContext
+        4. Fetch previous SHA-256 hash for chain
+        5. Build ECNWorkflowMachine + fire trigger
+        6. UPDATE ecn_instances.status (and pre_hold_status if ON_HOLD/resume)
+        7. Write ecn_transition_history row
+        8. Handle rejection record insert (if trigger='reject')
+        9. Return updated detail
         """
+        # ADR-008: optimistic lock check BEFORE machine fires (TOCTOU prevention)
+        if if_unmodified_since is not None:
+            await _check_not_modified(self._session, ecn_id, if_unmodified_since)
+
         row = await _load_ecn_row(self._session, ecn_id)
         if row is None:
             raise ECNNotFound(ecn_id)

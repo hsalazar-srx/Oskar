@@ -19,23 +19,28 @@ Sources:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Annotated, Any
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth.dependencies import CurrentUser, get_current_user
 from src.db import get_session
 from src.services.ecn import (
+    ECNConflict,
     ECNCreateRequest,
     ECNDetail,
     ECNNotFound,
+    ECNPreconditionRequired,
     ECNService,
     ECNStatusTransitionRequest,
     ECNSummary,
     ECNTransitionError,
+    ECNUpdateRequest,
     ECNValidationError,
     VALID_FACILITIES,
 )
@@ -79,6 +84,26 @@ class ECNCreateBody(BaseModel):
         if upper not in VALID_FACILITIES:
             raise ValueError(f"Unknown facility '{v}'. Valid: {sorted(VALID_FACILITIES)}")
         return upper
+
+
+class ECNUpdateBody(BaseModel):
+    """Body for PATCH /api/v1/ecn/{id} — field edits (ADR-008)."""
+    title: str | None = Field(None, min_length=1, max_length=200)
+    description: str | None = None
+    is_new_item: bool | None = None
+    routing_changes: bool | None = None
+    operation_changes: bool | None = None
+    new_parts: bool | None = None
+    lead_time_changes: bool | None = None
+    change_to_documents: bool | None = None
+    wapc_delta_pct: float | None = None
+    wapc_threshold_override: bool | None = None
+    is_emergency: bool | None = None
+    emergency_reason: str | None = None
+    requires_customer_approval: bool | None = None
+    customer_approval_reference: str | None = None
+    regulatory_impact: bool | None = None
+    extra_data: dict[str, Any] | None = None
 
 
 class ECNTransitionBody(BaseModel):
@@ -240,6 +265,36 @@ def _summary_out(s: ECNSummary) -> ECNSummaryOut:
     )
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _parse_if_unmodified_since(header: str | None) -> datetime | None:
+    """Parse RFC 7231 If-Unmodified-Since header to UTC datetime, or None."""
+    if header is None:
+        return None
+    try:
+        dt = parsedate_to_datetime(header)
+        return dt.astimezone(timezone.utc).replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _raise_optimistic_lock_errors(exc: ECNConflict | ECNPreconditionRequired) -> None:
+    if isinstance(exc, ECNPreconditionRequired):
+        raise HTTPException(
+            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+            detail="If-Unmodified-Since header is required for this operation.",
+        )
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "ECN_MODIFIED",
+            "message": "This ECN was modified by another user. Reload and reapply your changes.",
+            "current_updated_at": exc.current_updated_at.isoformat(),
+        },
+    )
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 
@@ -324,8 +379,13 @@ async def get_ecn(
     ecn_id: str,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    response: Response,
 ) -> ECNDetailOut:
-    """Fetch a single ECN with role assignments and approval steps."""
+    """Fetch a single ECN with role assignments and approval steps.
+
+    Returns Last-Modified header (RFC 7231) so clients can supply
+    If-Unmodified-Since on subsequent mutation requests (ADR-008).
+    """
     svc = ECNService(session)
     try:
         detail = await svc.get(ecn_id)
@@ -334,7 +394,62 @@ async def get_ecn(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"ECN {ecn_id!r} not found",
         )
+    response.headers["Last-Modified"] = detail.updated_at.strftime(
+        "%a, %d %b %Y %H:%M:%S GMT"
+    )
     return _detail_out(detail)
+
+
+@ecn_router.patch("/{ecn_id}", response_model=ECNDetailOut)
+async def update_ecn(
+    ecn_id: str,
+    body: ECNUpdateBody,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    if_unmodified_since: Annotated[str | None, Header()] = None,
+) -> ECNDetailOut:
+    """Edit writable fields on an ECN (DRAFT or REJECTED status only).
+
+    Requires If-Unmodified-Since header (RFC 7231) matching the ECN's
+    current updated_at value (ADR-008).
+      428 — header absent
+      409 — ECN was modified since the client last fetched it
+    """
+    svc = ECNService(session)
+    req = ECNUpdateRequest(
+        title=body.title,
+        description=body.description,
+        is_new_item=body.is_new_item,
+        routing_changes=body.routing_changes,
+        operation_changes=body.operation_changes,
+        new_parts=body.new_parts,
+        lead_time_changes=body.lead_time_changes,
+        change_to_documents=body.change_to_documents,
+        wapc_delta_pct=body.wapc_delta_pct,
+        wapc_threshold_override=body.wapc_threshold_override,
+        is_emergency=body.is_emergency,
+        emergency_reason=body.emergency_reason,
+        requires_customer_approval=body.requires_customer_approval,
+        customer_approval_reference=body.customer_approval_reference,
+        regulatory_impact=body.regulatory_impact,
+        extra_data=body.extra_data,
+    )
+    ts = _parse_if_unmodified_since(if_unmodified_since)
+    try:
+        detail = await svc.update_ecn(ecn_id, req, if_unmodified_since=ts)
+    except (ECNPreconditionRequired, ECNConflict) as exc:
+        _raise_optimistic_lock_errors(exc)
+    except ECNNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"ECN {ecn_id!r} not found",
+        )
+    except ECNValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        )
+    return _detail_out(detail)  # type: ignore[return-value]
 
 
 @ecn_router.patch("/{ecn_id}/status", response_model=ECNDetailOut)
@@ -343,6 +458,7 @@ async def transition_ecn_status(
     body: ECNTransitionBody,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    if_unmodified_since: Annotated[str | None, Header()] = None,
 ) -> ECNDetailOut:
     """Fire a workflow trigger on an ECN.
 
@@ -354,6 +470,10 @@ async def transition_ecn_status(
     `actor_role` identifies which role the caller is exercising (e.g. 'DC', 'QM').
     Guard conditions are enforced by the state machine — 422 is returned if the
     caller's role or the ECN's current state does not permit the trigger.
+
+    Requires If-Unmodified-Since header (ADR-008):
+      428 — header absent
+      409 — stale write (ECN modified since client last fetched it)
     """
     svc = ECNService(session)
     req = ECNStatusTransitionRequest(
@@ -365,8 +485,13 @@ async def transition_ecn_status(
         expected_resume_date=body.expected_resume_date,
         role_id=body.role_id,
     )
+    ts = _parse_if_unmodified_since(if_unmodified_since)
     try:
-        detail = await svc.transition(ecn_id, req, actor_username=user.username)
+        detail = await svc.transition(
+            ecn_id, req, actor_username=user.username, if_unmodified_since=ts
+        )
+    except (ECNPreconditionRequired, ECNConflict) as exc:
+        _raise_optimistic_lock_errors(exc)
     except ECNNotFound:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -377,4 +502,4 @@ async def transition_ecn_status(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         )
-    return _detail_out(detail)
+    return _detail_out(detail)  # type: ignore[return-value]

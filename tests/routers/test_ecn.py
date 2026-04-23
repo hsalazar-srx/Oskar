@@ -23,8 +23,10 @@ from src.db import get_session
 from src.main import app
 from src.services.ecn import (
     ApprovalStep,
+    ECNConflict,
     ECNDetail,
     ECNNotFound,
+    ECNPreconditionRequired,
     ECNService,
     ECNSummary,
     ECNTransitionError,
@@ -378,3 +380,161 @@ class TestListECNs:
         with patch.object(ECNService, "list_ecns", mock_list):
             client.get("/api/v1/ecn/?age_days=14")
         assert mock_list.call_args.kwargs["age_days"] == 14
+
+
+# ── Optimistic locking — OQ-40 through OQ-45 (ADR-008) ───────────────────────
+
+_VALID_TS = "Wed, 23 Apr 2026 04:10:00 GMT"
+_STALE_TS = "Tue, 22 Apr 2026 10:00:00 GMT"
+
+
+class TestOptimisticLocking:
+    """OQ-40 through OQ-45: verify ADR-008 If-Unmodified-Since enforcement."""
+
+    # OQ-40: GET returns Last-Modified; correct header on subsequent PATCH succeeds
+    def test_oq40_get_returns_last_modified_header(self, client: TestClient) -> None:
+        with patch.object(ECNService, "get", new_callable=AsyncMock, return_value=_detail()):
+            resp = client.get("/api/v1/ecn/ecn-0001")
+        assert resp.status_code == 200
+        assert "last-modified" in resp.headers
+
+    # OQ-40 (continued): valid If-Unmodified-Since on PATCH /status succeeds
+    def test_oq40_valid_header_on_status_patch_succeeds(self, client: TestClient) -> None:
+        after = _detail(ecn_status=ECNStatus.SUBMITTED)
+        with patch.object(ECNService, "transition", new_callable=AsyncMock, return_value=after):
+            resp = client.patch(
+                "/api/v1/ecn/ecn-0001/status",
+                json={"trigger": "submit", "actor_role": "OR"},
+                headers={"If-Unmodified-Since": _VALID_TS},
+            )
+        assert resp.status_code == 200
+
+    # OQ-40 (continued): valid If-Unmodified-Since on PATCH (field edit) succeeds
+    def test_oq40_valid_header_on_field_patch_succeeds(self, client: TestClient) -> None:
+        after = _detail(title="Updated Title")
+        with patch.object(ECNService, "update_ecn", new_callable=AsyncMock, return_value=after):
+            resp = client.patch(
+                "/api/v1/ecn/ecn-0001",
+                json={"title": "Updated Title"},
+                headers={"If-Unmodified-Since": _VALID_TS},
+            )
+        assert resp.status_code == 200
+
+    # OQ-41: stale If-Unmodified-Since on PATCH /status → 409 with current_updated_at
+    def test_oq41_stale_header_on_status_patch_returns_409(self, client: TestClient) -> None:
+        current_ts = datetime(2026, 4, 23, 6, 0, 0, tzinfo=timezone.utc)
+        with patch.object(
+            ECNService, "transition", new_callable=AsyncMock,
+            side_effect=ECNConflict(current_ts),
+        ):
+            resp = client.patch(
+                "/api/v1/ecn/ecn-0001/status",
+                json={"trigger": "submit", "actor_role": "OR"},
+                headers={"If-Unmodified-Since": _STALE_TS},
+            )
+        assert resp.status_code == 409
+        body = resp.json()
+        assert body["detail"]["code"] == "ECN_MODIFIED"
+        assert "current_updated_at" in body["detail"]
+
+    # OQ-41 (continued): stale header on PATCH (field edit) → 409
+    def test_oq41_stale_header_on_field_patch_returns_409(self, client: TestClient) -> None:
+        current_ts = datetime(2026, 4, 23, 6, 0, 0, tzinfo=timezone.utc)
+        with patch.object(
+            ECNService, "update_ecn", new_callable=AsyncMock,
+            side_effect=ECNConflict(current_ts),
+        ):
+            resp = client.patch(
+                "/api/v1/ecn/ecn-0001",
+                json={"title": "New"},
+                headers={"If-Unmodified-Since": _STALE_TS},
+            )
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "ECN_MODIFIED"
+
+    # OQ-42: absent If-Unmodified-Since on PATCH /status → 428
+    def test_oq42_absent_header_on_status_patch_returns_428(self, client: TestClient) -> None:
+        with patch.object(
+            ECNService, "transition", new_callable=AsyncMock,
+            side_effect=ECNPreconditionRequired(),
+        ):
+            resp = client.patch(
+                "/api/v1/ecn/ecn-0001/status",
+                json={"trigger": "submit", "actor_role": "OR"},
+                # no If-Unmodified-Since header
+            )
+        assert resp.status_code == 428
+
+    # OQ-42 (continued): absent header on PATCH (field edit) → 428
+    def test_oq42_absent_header_on_field_patch_returns_428(self, client: TestClient) -> None:
+        with patch.object(
+            ECNService, "update_ecn", new_callable=AsyncMock,
+            side_effect=ECNPreconditionRequired(),
+        ):
+            resp = client.patch(
+                "/api/v1/ecn/ecn-0001",
+                json={"title": "New"},
+                # no If-Unmodified-Since header
+            )
+        assert resp.status_code == 428
+
+    # OQ-43: two concurrent PATCHes — second (stale) loses with 409
+    def test_oq43_concurrent_patches_second_loses(self, client: TestClient) -> None:
+        after = _detail(ecn_status=ECNStatus.SUBMITTED)
+        current_ts = datetime(2026, 4, 23, 4, 10, 1, tzinfo=timezone.utc)
+
+        call_count = 0
+
+        async def _side_effect(*args: Any, **kwargs: Any) -> ECNDetail:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return after
+            raise ECNConflict(current_ts)
+
+        with patch.object(ECNService, "transition", side_effect=_side_effect):
+            r1 = client.patch(
+                "/api/v1/ecn/ecn-0001/status",
+                json={"trigger": "submit", "actor_role": "OR"},
+                headers={"If-Unmodified-Since": _VALID_TS},
+            )
+            r2 = client.patch(
+                "/api/v1/ecn/ecn-0001/status",
+                json={"trigger": "submit", "actor_role": "OR"},
+                headers={"If-Unmodified-Since": _VALID_TS},
+            )
+        assert r1.status_code == 200
+        assert r2.status_code == 409
+
+    # OQ-44: stale header on status transition → 409 (not 422)
+    def test_oq44_stale_on_transition_returns_409_not_422(self, client: TestClient) -> None:
+        current_ts = datetime(2026, 4, 23, 5, 0, 0, tzinfo=timezone.utc)
+        with patch.object(
+            ECNService, "transition", new_callable=AsyncMock,
+            side_effect=ECNConflict(current_ts),
+        ):
+            resp = client.patch(
+                "/api/v1/ecn/ecn-0001/status",
+                json={"trigger": "accept", "actor_role": "DC"},
+                headers={"If-Unmodified-Since": _STALE_TS},
+            )
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "ECN_MODIFIED"
+
+    # OQ-45: stale header on field edit → 409 with correct error shape
+    def test_oq45_stale_field_edit_returns_409_with_error_shape(self, client: TestClient) -> None:
+        current_ts = datetime(2026, 4, 23, 7, 30, 0, tzinfo=timezone.utc)
+        with patch.object(
+            ECNService, "update_ecn", new_callable=AsyncMock,
+            side_effect=ECNConflict(current_ts),
+        ):
+            resp = client.patch(
+                "/api/v1/ecn/ecn-0001",
+                json={"routing_changes": True},
+                headers={"If-Unmodified-Since": _STALE_TS},
+            )
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert detail["code"] == "ECN_MODIFIED"
+        assert detail["message"] == "This ECN was modified by another user. Reload and reapply your changes."
+        assert "current_updated_at" in detail
