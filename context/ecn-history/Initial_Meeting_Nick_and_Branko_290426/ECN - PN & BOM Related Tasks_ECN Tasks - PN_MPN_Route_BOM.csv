@@ -1,0 +1,30 @@
+Example time required for a 100 PN BOM to get it up in Movex,Unnamed: 1,Unnamed: 2,Unnamed: 3,Unnamed: 4
+Category,Task,AVG (Min),,Comments
+BOM Prep,Invalid MPNs,30,300,"manual check - no tool - totally based on Quoted BOM - if an MPN is wrong it will be discovered at Procurement stage
+Mainly wrong packaging type selected - tubes, tray, reel, etc. Initial check done by Quote Team"
+,Search and propose correct MPNs,30,,"Manual check - no tool - mainly add the right packaging type to the MPNs - or add multiple packaging types like reel preferred, tube as alternative. Initial check done by Quote Team"
+,Ref Des <> QTY mismatch,0,,Rely on Stargile check during upload
+,Sanitise description of the parts (Create New Part Description),120,,Check if description fits our STD and has less than 30 characters - if not we need to use Digikey BOM Upload to populate STD description. If parts are not found at DK - manual search Octopart and Internet is done
+,"Check customer BOM against Quoted BOM
+Rev check, MPN, Ref Des, QTY or check new customer BOM against Movex BOM",120,,"Excel check - mainly to detect if any ALTERNATIVES have been added during RFQ, which at this stage are not approved by the customer. If approval needed additional delays will occur - send email to the customer and wait for approval. For new rev - Could take longer depending on BOM format, number of alternative MPNs and number of changes"
+ECN Templates Prep & Upload,Check which PN are already created in Movex,60,820,"Checking by Alias is simpler, checking by MPN takes longer especially if there are alternatives for MPN with non-identical format."
+,Create new PN names where needed,250,,Generate the list of parts that need new PN - 5min/PN assumption you create 50PN
+,Populate Product & Procurement Group,120,,manual lookup with the Proc & Prod Grp Matrix
+,Populate Procurement Parameters,120,,Template & QCW including the SRX PN column has to be sent by email to Procurement to add Procurement parameters. Can be done as a separate ECN by Procurement
+,Populate SRX PN & SC Template,30,,"need SRX PN, DESC, Item STATUS, ECN NO, ECN LINE, Is New Item, Proc Group, Prod Group, Item Group, UOM, Item Template No. All Templates are done in XLSX and then need to be saved as TXT tab delimited for upload in Stargile, otherwise won't work"
+,Raise ECN Stargile for PN & SC,15,,"ECN1 - Create SRX PN & Stock CODE - need SRX PN, DESC, Item STATUS, ECN NO, ECN LINE"
+,Find and Populate Manufacturer No,30,,manual - you have Manuf Name and need to find Manuf Code - VLOOKUP once you download all the supplier info
+,Populate SRX MPN Template,30,,
+,Raise ECN Stargile for MPN,15,,"ECN2 - MPN Uploads (different template) - need PN, MPN, Manufacturer (30), Manufacturer Code"
+,Populate SRX Route Template,15,,need QCW or LQ to copy paste
+,Raise ECN Stargile for Route,15,,ECN3 – Routing Upload - PE needs to get from PM the batch quantity in order to load the right routings
+,"Get Operation No for each part (Split BOM SMT, TH, Mechanical, Packing)",60,,manual - Depends on part description and CAD data availability
+,Populate SRX BOM Template,30,,
+,Raise ECN Stargile for BOM,30,,"ECN4 – BOM Upload: PN, QTY, Reference Designator, Operation Number (50-SMT, 100-TH, 160-Mechanical, 190-Packing)"
+Final BOM Check,Check Movex BOM (uploaded by ECN) against original customer BOM,30,60,next day once Ref Des are available - download BOM and check against customer BOM
+,Send BOM to the customer for a final check,30,,"email, reply, checks"
+,,,,
+,Total(min),1180,Minutes,
+,Total(hours),19.666666666666668,Hours,
+,Total (days) - uninterrupted work,2.6222222222222222,Days,
+,Total (days) - realistic estimation (with interruptions),3.9333333333333336,Days,

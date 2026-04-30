@@ -40,14 +40,14 @@ graph TB
   E(["👤 Engineer / Approver<br/>~50 users"])
 
   subgraph Scanfil_APAC["Scanfil APAC"]
-    OSKAR["OSKAR Platform<br/>─────────────────<br/>ECN · BOM · Supplier Intelligence<br/>FastAPI · PostgreSQL · Celery<br/>Linux VM (VMware)"]:::system
-    SMP["SM-Portal<br/>─────────────────<br/>M3 data · MyInvois · RBA rates<br/>.NET 8 · React<br/>SRXWEBAPP1"]:::system
+    OSKAR["OSKAR Platform<br/>─────────────────<br/>ECN · BOM · Supplier Intelligence<br/>FastAPI · PostgreSQL · Celery<br/>Linux VM <br/>"]:::system
+    OSKAR["OSKAR Platform<br/>─────────────────<br/>ECN · BOM · Supplier Intelligence<br/>FastAPI · PostgreSQL · Celery<br/>Linux VM <br/><br/>"]:::system
+    SMP["SM-Portal<br/>─────────────────<br/>M3 data · <br/>.NET 8 · React<br/>SRXWEBAPP1"]:::system
     MAPI["movex-rest-api<br/>─────────────────<br/>.NET 8 M3 MI adapter<br/>Shared by OSKAR + SM-Portal<br/>SRXWEBAPP1"]:::shared
   end
 
   MOVEX[("Movex / M3<br/>─────────────────<br/>ERP — Single Source of Truth<br/>IBM i · DB2 · CONO 100<br/>MVXCOBJ")]:::external
   AD["Active Directory<br/>─────────────────<br/>On-prem LDAP<br/>Engineer authentication"]:::external
-  LHDN["LHDN / MyInvois<br/>─────────────────<br/>e-Invoicing<br/>MyInvois-Service only"]:::external
   SUPPLIERS["Supplier APIs<br/>─────────────────<br/>DigiKey (Phase 1 — real)<br/>Mouser · RS · Arrow · Avnet<br/>(Phase 3 — stubs)"]:::external
 
   E -->|"ECN workflow, BOM, Supplier signals<br/>HTTPS / JWT"| OSKAR
@@ -61,7 +61,6 @@ graph TB
   SMP   -->|"Windows Negotiate<br/>NTLM/Kerberos"| AD
 
   OSKAR -->|"Part search, pricing, availability<br/>HTTPS / OAuth2"| SUPPLIERS
-  SMP   -->|"e-Invoice submission<br/>via MyInvois-Service"| LHDN
 ```
 
 ---
@@ -87,7 +86,6 @@ graph TB
 
     subgraph WSL2["WSL2 — Existing Services"]
       movexapi_svc["movex-rest-api<br/>.NET 8 — /api"]
-      myinvois_svc["MyInvois-Service<br/>.NET 8"]
     end
 
     subgraph SMPortal["SM-Portal"]
@@ -100,7 +98,7 @@ graph TB
     direction TB
     Harbor["Harbor Registry<br/>oskar-vm.srxglobal.local"]
 
-    subgraph DockerProd["Docker Compose — Production (ADR-007: Redis eliminated)"]
+    subgraph DockerProd["Docker Compose — Production"]
       oskar_fe["oskar-frontend<br/>React/TS — :3000"]
       oskar_app["oskar-app<br/>FastAPI — :8000<br/>/api/v1/"]
       oskar_worker["oskar-worker<br/>Celery (PostgreSQL broker)"]
@@ -134,7 +132,6 @@ graph TB
   smportal_be -->|"Windows Negotiate"| AD
 
   movexapi_svc -->|"DB2 / IBM i socket"| IBMI
-  myinvois_svc -->|"DB2 direct"| IBMI
 ```
 
 ---
@@ -644,13 +641,13 @@ sequenceDiagram
     end
 
     MG->>SYS: complete_management_review\nMANAGEMENT_REVIEW → APPROVED
-    Note over SYS: movex_outbox entries created atomically\nwith status advance (Transactional Outbox)
+    Note over SYS:  movex_outbox entries created atomically<br>with status advance (Transactional Outbox)  
 
     SYS->>DC: movex_write_complete\nAPPROVED → IMPLEMENTED
-    Note over SYS,DC: All MI calls confirmed\nCelery dispatches email notification
+    Note over SYS,DC: All MI calls confirmed<br>Celery dispatches email notification
 
     DC->>DC: close\nIMPLEMENTED → CLOSED
-    Note over DC: ISO 13485 gate:\ncustomer_approved_at required if flag set
+    Note over DC: ISO 13485 gate:<br>customer_approved_at required if flag set
 ```
 
 ### 14.4 Rejection and Recovery Paths

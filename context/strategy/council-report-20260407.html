@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OSKAR Architecture Council Report — 2026-04-07</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8f9fa; color: #1a1a2e; line-height: 1.6; font-size: 15px; }
+  .page { max-width: 900px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+
+  /* Header */
+  .header { background: #1a1a2e; color: #fff; padding: 2rem; border-radius: 8px; margin-bottom: 2rem; }
+  .header h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.5rem; }
+  .header .subtitle { color: #a0aec0; font-size: 0.9rem; }
+  .question-box { background: #f0f4ff; border-left: 4px solid #4361ee; padding: 1rem 1.25rem; border-radius: 0 6px 6px 0; margin-bottom: 2rem; font-size: 0.92rem; color: #2d3748; }
+
+  /* Verdict sections */
+  .verdict { background: #fff; border-radius: 8px; border: 1px solid #e2e8f0; margin-bottom: 1.5rem; overflow: hidden; }
+  .verdict-header { padding: 1rem 1.25rem; font-weight: 700; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 0.5rem; }
+  .verdict-body { padding: 1.25rem; font-size: 0.92rem; color: #2d3748; }
+  .verdict-body p { margin-bottom: 0.75rem; }
+  .verdict-body p:last-child { margin-bottom: 0; }
+  .verdict-body strong { color: #1a1a2e; }
+
+  .agrees .verdict-header { background: #ebf8f0; color: #276749; }
+  .clashes .verdict-header { background: #fff5eb; color: #b7531a; }
+  .blindspots .verdict-header { background: #ebf0ff; color: #2c5282; }
+  .recommendation .verdict-header { background: #1a1a2e; color: #fff; font-size: 1rem; }
+  .one-thing .verdict-header { background: #2b6cb0; color: #fff; font-size: 1rem; }
+  .one-thing .verdict-body { font-size: 1.05rem; font-weight: 500; color: #1a1a2e; }
+
+  /* Agreement visual */
+  .alignment-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.75rem; margin-bottom: 2rem; }
+  .advisor-card { background: #fff; border-radius: 8px; border: 1px solid #e2e8f0; padding: 0.75rem; text-align: center; }
+  .advisor-card .name { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.5rem; color: #4a5568; }
+  .advisor-card .verdict-tag { font-size: 0.7rem; padding: 0.2rem 0.5rem; border-radius: 20px; display: inline-block; font-weight: 600; }
+  .tag-warning { background: #fff3cd; color: #856404; }
+  .tag-critical { background: #fde8e8; color: #9b1c1c; }
+  .tag-insight { background: #def7ec; color: #03543f; }
+  .tag-caution { background: #fdf6b2; color: #723b13; }
+  .tag-action { background: #e1effe; color: #1e429f; }
+  .peer-consensus { background: #fff; border-radius: 8px; border: 1px solid #e2e8f0; padding: 1rem 1.25rem; margin-bottom: 2rem; }
+  .peer-consensus h3 { font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #4a5568; margin-bottom: 0.75rem; }
+  .peer-row { display: flex; align-items: center; justify-content: space-between; padding: 0.4rem 0; border-bottom: 1px solid #f1f5f9; font-size: 0.85rem; }
+  .peer-row:last-child { border-bottom: none; }
+  .peer-label { color: #4a5568; }
+  .peer-winner { font-weight: 700; color: #1a1a2e; }
+  .peer-blind { color: #b7531a; font-style: italic; }
+
+  /* Collapsible advisors */
+  .advisors-section { margin-bottom: 2rem; }
+  .advisors-section h2 { font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #4a5568; margin-bottom: 1rem; }
+  details { background: #fff; border-radius: 8px; border: 1px solid #e2e8f0; margin-bottom: 0.75rem; overflow: hidden; }
+  summary { padding: 0.85rem 1.25rem; cursor: pointer; font-weight: 600; font-size: 0.9rem; display: flex; align-items: center; justify-content: space-between; list-style: none; user-select: none; }
+  summary::-webkit-details-marker { display: none; }
+  summary::after { content: '▸'; color: #a0aec0; font-size: 0.85rem; transition: transform 0.2s; }
+  details[open] summary::after { transform: rotate(90deg); }
+  .advisor-content { padding: 1.25rem; font-size: 0.88rem; color: #2d3748; border-top: 1px solid #f1f5f9; line-height: 1.7; }
+  .advisor-content p { margin-bottom: 0.75rem; }
+  .advisor-content p:last-child { margin-bottom: 0; }
+
+  .contrarian summary { border-left: 4px solid #e53e3e; }
+  .first-principles summary { border-left: 4px solid #ed8936; }
+  .expansionist summary { border-left: 4px solid #48bb78; }
+  .outsider summary { border-left: 4px solid #9f7aea; }
+  .executor summary { border-left: 4px solid #4299e1; }
+
+  /* Action list */
+  .action-list { list-style: none; counter-reset: actions; }
+  .action-list li { counter-increment: actions; display: flex; gap: 0.75rem; margin-bottom: 0.75rem; align-items: flex-start; }
+  .action-list li::before { content: counter(actions); background: #1a1a2e; color: #fff; width: 1.5rem; height: 1.5rem; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 700; flex-shrink: 0; margin-top: 0.1rem; }
+
+  /* Footer */
+  .footer { text-align: center; font-size: 0.8rem; color: #a0aec0; padding-top: 2rem; border-top: 1px solid #e2e8f0; margin-top: 2rem; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="header">
+    <h1>OSKAR Architecture Council Report</h1>
+    <div class="subtitle">LLM Council · 5 Advisors · 5 Peer Reviews · Chairman Synthesis · 2026-04-07</div>
+  </div>
+
+  <div class="question-box">
+    <strong>Question:</strong> Is the OSKAR v4.1 architecture sound? What are the critical risks, hidden assumptions, or structural decisions that will cause the most pain — and what should be changed or strengthened before the first line of code is written?
+  </div>
+
+  <!-- Advisor alignment grid -->
+  <div class="alignment-grid">
+    <div class="advisor-card contrarian">
+      <div class="name">Contrarian</div>
+      <div class="verdict-tag tag-critical">Complexity overload</div>
+    </div>
+    <div class="advisor-card first-principles">
+      <div class="name">First Principles</div>
+      <div class="verdict-tag tag-warning">Wrong question asked</div>
+    </div>
+    <div class="advisor-card expansionist">
+      <div class="name">Expansionist</div>
+      <div class="verdict-tag tag-insight">Upside undervalued</div>
+    </div>
+    <div class="advisor-card outsider">
+      <div class="name">Outsider</div>
+      <div class="verdict-tag tag-caution">Delivery model broken</div>
+    </div>
+    <div class="advisor-card executor">
+      <div class="name">Executor</div>
+      <div class="verdict-tag tag-action">3 blockers, fix Monday</div>
+    </div>
+  </div>
+
+  <!-- Peer review consensus -->
+  <div class="peer-consensus">
+    <h3>Peer Review Consensus (5 reviewers)</h3>
+    <div class="peer-row"><span class="peer-label">Strongest advisor (all 5 agreed)</span><span class="peer-winner">The Executor — actionable, specific, time-bound</span></div>
+    <div class="peer-row"><span class="peer-label">Biggest blind spot (all 5 agreed)</span><span class="peer-blind">The Expansionist — motivational fiction, zero failure mode engagement</span></div>
+    <div class="peer-row"><span class="peer-label">What all advisors missed</span><span class="peer-winner">The hard decommission deadline + IFS migration as cancellation event</span></div>
+  </div>
+
+  <!-- Chairman Verdict -->
+  <div class="verdict agrees">
+    <div class="verdict-header">✓ Where the Council Agrees</div>
+    <div class="verdict-body">
+      <p><strong>The single-engineer constraint is the load-bearing risk.</strong> Not the technology choices, not the abstraction patterns. One person cannot maintain operational competence across FastAPI, PostgreSQL, Redis (three logical DBs), Celery, React/TypeScript, Docker Compose on WSL2, IIS, JWT+LDAP, six supplier adapters, two ERP adapters, asyncio concurrency, an immutable audit chain, and ISO 13485 IQ/OQ/PQ — while delivering features on a 12-week clock. The architecture was designed as if complexity has no carrying cost. It does, and one person pays it.</p>
+      <p><strong>The Redis single-instance configuration is a concrete failure mode.</strong> Three logical DBs with incompatible operational requirements — a message broker, a cache with eviction, and an appendonly event stream — sharing one instance means one memory spike takes down all three simultaneously. On WSL2, memory limits are opaque. This is not a theoretical risk. It is a production outage waiting for a date.</p>
+      <p><strong>The Expansionist is the most dangerous voice in the room.</strong> All five reviewers named it independently. "Competitive moat," "training data nobody else has," "group-level asset" — motivational fiction dressed as strategic analysis. It romanticizes every constraint and engages with zero failure modes. The kind of advice that makes a bad decision feel visionary.</p>
+    </div>
+  </div>
+
+  <div class="verdict clashes">
+    <div class="verdict-header">⚡ Where the Council Clashes</div>
+    <div class="verdict-body">
+      <p><strong>Architecture-first vs. delivery-first.</strong> The Contrarian and First Principles Thinker argue the architecture is fundamentally wrong for the constraint — strip it. The ECN module is not iteration one of OSKAR, it <em>is</em> OSKAR. Ship it. Let architecture emerge from real integration pressure.</p>
+      <p>The Executor disagrees in form but not substance: the architecture is <em>defensible</em>, but three specific blockers must be resolved before writing line one. Fix Redis, stub five of six supplier adapters, get a named sign-off owner for IQ/OQ/PQ.</p>
+      <p>The Outsider takes a third cut: the risk is not architectural unsoundness but the absence of documentation and the presence of a second parallel system (the MAS framework in this repository) solving the same adapter and intelligence problems with no recorded decision about why both exist.</p>
+      <p>These positions are not irreconcilable. The Contrarian and First Principles Thinker are right about the strategic error. The Executor is right about the immediate tactical fixes. The Outsider is right that the MAS overlap is an unresolved structural question nobody else raised.</p>
+    </div>
+  </div>
+
+  <div class="verdict blindspots">
+    <div class="verdict-header">◎ Blind Spots the Council Caught</div>
+    <div class="verdict-body">
+      <p><strong>The decommission deadline is the actual binding constraint.</strong> Three of five reviewers named this independently. Two legacy systems are being mandatorily decommissioned. There is a hard cutover date. That date — not the architecture, not the IFS migration, not the funding model — is the constraint driving every scope, sequencing, and simplification decision. What is the minimum viable replacement surface area of OSKAR required to avoid a production gap on that date? That question has not been answered. Everything else is subordinate to it.</p>
+      <p><strong>The IFS migration "TBD" is not a risk — it is a potential project cancellation event.</strong> If IFS ships before OSKAR reaches its credibility-first funding threshold, the business case for OSKAR collapses. Additionally: if IFS uses different part numbering, BOM structures, or change order semantics than Movex, the SHA-256 audit chain becomes inconsistent mid-history. An immutable chain with a changed SSoT is an architectural contradiction that must be resolved before the chain schema is finalized.</p>
+      <p><strong>WSL2 as a production runtime is a specific operational failure pattern.</strong> Kernel updates, memory limits, Docker daemon restarts under IIS — well-documented Windows Server production failure modes, not theoretical concerns. ISO 13485 environments require predictable, documented infrastructure. WSL2 is not that.</p>
+      <p><strong>The overlap with the existing MAS framework is undocumented and unresolved.</strong> This repository already defines agents, skills, and adapter patterns for the same ecosystem. OSKAR has its own `ai/` folder, `.providers/` adapters, and ERP adapter pattern. That is the same problem being solved twice by one person with no recorded architectural decision about why.</p>
+    </div>
+  </div>
+
+  <div class="verdict recommendation">
+    <div class="verdict-header">⟶ The Recommendation</div>
+    <div class="verdict-body" style="color:#e2e8f0;">
+      <p>Do not build OSKAR as currently scoped. Build the ECN replacement first, call it OSKAR, and treat everything else as a decision to be made after you have shipped something that survives production contact.</p>
+      <p>Before writing line one, resolve these five things in order:</p>
+      <ol class="action-list" style="margin-top:0.75rem;">
+        <li><strong style="color:#fff;">Get the decommission date and work backwards.</strong> Everything — scope, abstraction depth, adapter completeness — is a function of that date. If you don't know it, you are building a plan with a missing constraint.</li>
+        <li><strong style="color:#fff;">Split Redis immediately.</strong> Celery broker gets its own container. One docker-compose.yml change. This is not a refactor you do later. It is a pre-condition for a stable iteration 1.</li>
+        <li><strong style="color:#fff;">Make a formal decision about IFS migration scope boundary.</strong> Either IFS is explicitly out of scope for OSKAR v1 — documented, stakeholder-agreed — or the ERP adapter abstraction layer becomes the primary deliverable, not a supporting pattern. There is no third option.</li>
+        <li><strong style="color:#fff;">Name the IQ/OQ/PQ sign-off owner this week.</strong> If it is you, that is a conflict under ISO 13485. The sign-off role changes how you design audit chain outputs. Structural dependency, not documentation task.</li>
+        <li><strong style="color:#fff;">Stub five of six supplier adapters.</strong> Build the ABC, wire one real supplier, stub the rest. Cut it now or debug async cancellation errors during ECN go-live.</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="verdict one-thing">
+    <div class="verdict-header">★ The One Thing to Do First</div>
+    <div class="verdict-body">
+      Find the decommission date for both legacy systems. Write it on the wall.<br><br>
+      Every other decision in this architecture — what to simplify, what to defer, what to build now versus stub — is downstream of that date. You may discover the current scope is exactly right. You may discover you have six weeks to ship a working ECN replacement and nothing else matters until that is done. You will not know which world you are in until you have that number.<br><br>
+      The architecture is not unsound. The delivery model is operating without its primary constraint visible. Fix that first.
+    </div>
+  </div>
+
+  <!-- Advisor full responses (collapsible) -->
+  <div class="advisors-section" style="margin-top:2rem;">
+    <h2>Full Advisor Responses</h2>
+
+    <details class="contrarian">
+      <summary>The Contrarian — Complexity overload</summary>
+      <div class="advisor-content">
+        <p>The single-engineer constraint invalidates the architecture's complexity budget. This is not a platform — it is a distributed system that requires a team. Count the moving parts: FastAPI, PostgreSQL 16, Redis with three logical DBs, Celery, React/TypeScript, Docker Compose on WSL2, IIS reverse proxy, JWT+LDAP, six supplier adapters with circuit breakers, two ERP adapters, asyncio concurrency, SHA-256 audit chain, and ISO 13485 IQ/OQ/PQ documentation per iteration. One engineer cannot maintain operational competence across all of this simultaneously while delivering features on a 12-week clock.</p>
+        <p>The hidden assumption killing this: The architecture was designed as if complexity is free when you own all the decisions. It is not. Every abstraction layer is future maintenance debt that must be carried by whoever inherits this — including the current author six months from now under deadline pressure.</p>
+        <p>Redis three-logical-DB split is the first thing that will bite you. Celery broker on DB0, cache on DB1, event stream with appendonly on DB2 — incompatible persistence and eviction requirements. Running them on a single Redis instance means the appendonly policy fights the cache eviction policy. This is a configuration conflict that does not manifest until production load.</p>
+        <p>The IFS migration date is "TBD" but the ERP adapter pattern is foundational. If IFS replaces Movex before Iteration 3 ships, every business rule encoded against Movex semantics must be re-examined.</p>
+        <p>Before writing code: strip the architecture to what one engineer can operate at 3am when it breaks.</p>
+      </div>
+    </details>
+
+    <details class="first-principles">
+      <summary>The First Principles Thinker — Wrong question</summary>
+      <div class="advisor-content">
+        <p>The question being asked is wrong. "Is this architecture sound?" presupposes architecture is the risk. It isn't. The risk is scope mass versus delivery capacity.</p>
+        <p>What are we actually solving? A single engineer must replace two production systems under mandatory decommission with a platform that also serves as the foundation for MES, X-ray, Data Warehouse, EDI, and RPA. That last sentence is not a product definition — it is a failure mode described in advance.</p>
+        <p>The architecture isn't unsound. It's correct for a team of five with 18 months. For one person under credibility-first funding, every abstraction layer you add is future optionality purchased with present capacity. Most of it won't be exercised before the funding model requires a win.</p>
+        <p>The hidden assumption that will cause the most pain: that "foundation for future integrations" and "single engineer delivery" are compatible goals. They are not. Foundations require over-engineering relative to current need. Delivery under constraint requires ruthless under-engineering relative to future possibility.</p>
+        <p>What to change before the first line of code: Reframe the mandate. ECN module is not iteration one of OSKAR — it is OSKAR. Ship it. Prove value. Let the architecture emerge from actual integration pressure. The SupplierAdapter ABC, the IFSAdapter stub, the LLM provider pattern — none of these exist because there's a current requirement. They exist because they feel responsible. That feeling is the enemy of delivery.</p>
+      </div>
+    </details>
+
+    <details class="expansionist">
+      <summary>The Expansionist — Upside undervalued ⚠️ Flagged by all 5 reviewers as dangerous</summary>
+      <div class="advisor-content">
+        <p>The buried treasure here is the LLM-agnostic `ai/` context folder and provider adapter pattern. That's not a nice-to-have — that's the seed of something genuinely transformative if you treat it as a first-class citizen from day one.</p>
+        <p>A single engineer at a 170-person ISO 13485 site building an Engineering Intelligence Platform is not a constraint story. It's a competitive moat story. You're building institutional intelligence infrastructure at a cost point that would make a consulting firm weep. The Scanfil Group acquisition context makes this exponentially more interesting — you're not building for JB Malaysia, you're potentially building the template for every Scanfil site globally.</p>
+        <p>The event stream is undervalued. Appendonly Redis with an immutable SHA-256 audit chain means you're one step from a real-time manufacturing intelligence feed. Every ECN, every BOM delta, every supplier signal — that's training data for domain-specific models nobody else has.</p>
+        <p>The IFS migration coming is leverage — you're building the abstraction layer that makes the migration invisible to every downstream system.</p>
+        <p>The move I'd make before writing line one: explicitly designate the event stream schema as a group-level asset. Document it as "Scanfil APAC Manufacturing Event Standard v0.1." That framing transforms a local engineering tool into infrastructure worth replicating across sites.</p>
+        <p><em>Note: All 5 peer reviewers flagged this response as the most dangerous — it reframes constraints as opportunities without engaging with any concrete failure mode.</em></p>
+      </div>
+    </details>
+
+    <details class="outsider">
+      <summary>The Outsider — Delivery model broken</summary>
+      <div class="advisor-content">
+        <p>The word "OSKAR" appears nowhere in any spec, architecture document, or decision record in this repository. You are describing a greenfield platform at a level of abstraction that sounds complete, but there is no evidence it has been written down anywhere that survives a conversation ending.</p>
+        <p>You are building a second MAS framework in parallel. This repository already defines agents, skills, governance rules, and adapter patterns for the same ecosystem. OSKAR has its own `ai/` folder, `.providers/` adapters, and ERP adapter pattern. That is the same problem being solved twice, by one person, with no documented decision about why.</p>
+        <p>"Single Lead Engineer" is load-bearing and unexamined — there is no bus-factor analysis, no handoff documentation plan, no succession path.</p>
+        <p>"Credibility-first funding model" means the architecture will be shaped by what looks impressive, not what survives production. That is how you get Docker Compose on WSL2 under IIS in an ISO 13485 environment — a stack that works in a demo and becomes a support nightmare at 2am.</p>
+        <p>The IFS migration date is "TBD" but is treated as a non-risk. If IFS lands mid-iteration two, the ERP adapter pattern, Movex as unconditional SSoT, and the MovexRestAdapter are all invalidated simultaneously.</p>
+        <p>The architecture is not unsound. The delivery model is.</p>
+      </div>
+    </details>
+
+    <details class="executor">
+      <summary>The Executor — 3 blockers, fix Monday ★ Strongest per all 5 reviewers</summary>
+      <div class="advisor-content">
+        <p><strong>Three things will kill this before week 8. Fix them Monday.</strong></p>
+        <p><strong>1. Redis event stream (DB2) is not a queue — it's a liability.</strong> Redis appendonly with three logical DBs on a single instance means one memory spike takes down your Celery broker AND your cache AND your event stream simultaneously. On Windows Server WSL2, Redis memory limits are opaque. Split Celery broker to a separate Redis container before writing line one. One docker-compose.yml change, 20 minutes, done.</p>
+        <p><strong>2. The SupplierAdapter ABC with asyncio.gather and circuit breakers is overbuilt for iteration 1.</strong> Six supplier APIs behind a full adapter pattern with per-provider circuit breakers means you're building infrastructure that won't be tested under real load until iteration 3. Build the ABC, stub five adapters, wire one real supplier. The pattern is sound — the scope is not. Cut it now or you'll be debugging async cancellation errors during ECN go-live.</p>
+        <p><strong>3. ISO 13485 IQ/OQ/PQ per iteration is a paper commitment, not a plan.</strong> "Per iteration" means three validation cycles. Each cycle needs test protocols, execution evidence, and sign-off. Who signs? If it's you, that's a conflict. If it's QA, do they have bandwidth? Get a name on that sign-off role this week, because it changes how you design your audit chain outputs.</p>
+        <p>The architecture is defensible. The delivery model has three unresolved blockers. Solve those before writing a schema.</p>
+      </div>
+    </details>
+  </div>
+
+  <!-- Peer review highlights (collapsible) -->
+  <div class="advisors-section">
+    <h2>Peer Review Highlights</h2>
+    <details>
+      <summary>All 5 peer reviews — key findings</summary>
+      <div class="advisor-content">
+        <p><strong>Strongest (all 5 agreed):</strong> The Executor. Concrete, actionable, time-bound, respects the engineer's competence while being honest about systemic risk.</p>
+        <p><strong>Biggest blind spot (all 5 agreed):</strong> The Expansionist. Motivational fiction. Reframes every constraint as opportunity without engaging with a single concrete failure mode. Dangerous precisely because it sounds compelling.</p>
+        <p><strong>What all advisors missed — Reviewer 1 &amp; 3:</strong> The decommission deadline is the actual binding constraint. Two legacy systems are being mandatorily decommissioned. The hard cutover date should drive every scope, sequencing, and simplification decision. The council debated the blueprint while ignoring the demolition notice.</p>
+        <p><strong>What all advisors missed — Reviewer 2:</strong> WSL2 as a production runtime is a specific operational failure pattern (kernel updates, memory limits, Docker daemon restarts under IIS). Also: the IFS migration is a potential project cancellation event, not just a technical risk.</p>
+        <p><strong>What all advisors missed — Reviewer 4:</strong> IFS migration is a data model risk to the audit chain. If IFS uses different part numbering or BOM semantics, the SHA-256 chain becomes inconsistent mid-history. What happens to an immutable audit trail when the SSoT changes? Must be answered before the chain schema is finalized.</p>
+        <p><strong>What all advisors missed — Reviewer 5:</strong> A formal IFS scope freeze is required. Either IFS is explicitly out of scope for OSKAR v1 by stakeholder agreement, or the ERP adapter becomes the primary deliverable. Building Movex-as-SSoT rules on an unresolved migration timeline creates a system that may need to be rebuilt.</p>
+      </div>
+    </details>
+  </div>
+
+  <div class="footer">
+    Council session · 2026-04-07 · OSKAR Engineering Intelligence Platform v4.1 · Scanfil APAC<br>
+    Full transcript: <code>council-transcript-20260407.md</code>
+  </div>
+
+</div>
+</body>
+</html>

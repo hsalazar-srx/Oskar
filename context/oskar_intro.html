@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OSKAR — Engineering Intelligence Platform</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --navy:#0B1829;
+  --navy2:#0F2238;
+  --navy3:#162d4a;
+  --teal:#00C2A8;
+  --teal2:#00a38d;
+  --blue:#2563EB;
+  --slate:#8BA3BC;
+  --white:#F0F4F8;
+  --amber:#F59E0B;
+  --red:#EF4444;
+  --green:#10B981;
+  --purple:#8B5CF6;
+}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--navy);color:var(--white);font-family:'DM Sans',sans-serif}
+.deck{width:100vw;height:100vh;position:relative;overflow:hidden}
+
+/* SLIDES */
+.slide{position:absolute;inset:0;display:flex;flex-direction:column;padding:52px 64px 44px;opacity:0;transform:translateX(60px);transition:opacity .42s ease,transform .42s ease;pointer-events:none}
+.slide.active{opacity:1;transform:none;pointer-events:all}
+.slide.exit{opacity:0;transform:translateX(-60px)}
+
+/* TITLE SLIDE */
+.slide-title{justify-content:center;align-items:flex-start;background:var(--navy)}
+.slide-title::before{content:'';position:absolute;top:-120px;right:-80px;width:560px;height:560px;border-radius:50%;border:1px solid rgba(0,194,168,.08);pointer-events:none}
+.slide-title::after{content:'';position:absolute;top:-60px;right:-30px;width:380px;height:380px;border-radius:50%;border:1px solid rgba(0,194,168,.12);pointer-events:none}
+.oskar-word{font-family:'Syne',sans-serif;font-weight:800;font-size:96px;letter-spacing:-2px;color:var(--teal);line-height:1;margin-bottom:8px}
+.oskar-sub{font-family:'Syne',sans-serif;font-weight:400;font-size:22px;color:var(--slate);letter-spacing:3px;text-transform:uppercase;margin-bottom:48px}
+.title-pills{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:56px}
+.pill{padding:6px 16px;border-radius:20px;font-size:13px;font-weight:500;border:1px solid}
+.pill-teal{background:rgba(0,194,168,.1);border-color:rgba(0,194,168,.3);color:var(--teal)}
+.pill-slate{background:rgba(139,163,188,.08);border-color:rgba(139,163,188,.2);color:var(--slate)}
+.title-meta{display:flex;gap:40px}
+.meta-item{display:flex;flex-direction:column;gap:4px}
+.meta-label{font-size:11px;color:var(--slate);text-transform:uppercase;letter-spacing:2px}
+.meta-value{font-size:15px;font-weight:500;color:var(--white)}
+
+/* DIAGRAM SLIDES */
+.slide-diagram{background:var(--navy)}
+.slide-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px;flex-shrink:0}
+.slide-num{font-family:'Syne',sans-serif;font-size:11px;font-weight:600;color:var(--teal);text-transform:uppercase;letter-spacing:3px;margin-bottom:6px}
+.slide-title-text{font-family:'Syne',sans-serif;font-size:20px;font-weight:700;color:var(--white);max-width:640px;line-height:1.3}
+.slide-tag{font-size:11px;padding:4px 12px;border-radius:12px;background:rgba(0,194,168,.12);border:1px solid rgba(0,194,168,.2);color:var(--teal);white-space:nowrap;align-self:flex-start;margin-top:4px}
+.diagram-area{flex:1;background:rgba(255,255,255,.03);border-radius:12px;border:1px solid rgba(139,163,188,.1);overflow:hidden;display:flex;align-items:center;justify-content:center;padding:24px;min-height:0}
+.diagram-area svg{width:100%;height:100%;max-height:100%}
+.slide-caption{margin-top:14px;font-size:12.5px;color:var(--slate);line-height:1.65;border-left:2px solid var(--teal2);padding-left:14px;flex-shrink:0}
+
+/* NAV */
+.nav-bar{position:fixed;bottom:0;left:0;right:0;height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 64px;background:rgba(11,24,41,.85);backdrop-filter:blur(8px);border-top:1px solid rgba(139,163,188,.1);z-index:100}
+.nav-btn{background:none;border:1px solid rgba(139,163,188,.2);color:var(--slate);padding:6px 18px;border-radius:6px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:13px;transition:all .15s;display:flex;align-items:center;gap:6px}
+.nav-btn:hover{border-color:var(--teal);color:var(--teal)}
+.nav-btn:disabled{opacity:.25;cursor:not-allowed}
+.dots{display:flex;gap:8px;align-items:center}
+.dot{width:7px;height:7px;border-radius:50%;background:rgba(139,163,188,.25);cursor:pointer;transition:all .2s}
+.dot.active{background:var(--teal);width:22px;border-radius:4px}
+.dot:hover:not(.active){background:rgba(0,194,168,.4)}
+.slide-counter{font-size:12px;color:var(--slate);font-family:'Syne',sans-serif;font-weight:600;letter-spacing:1px;min-width:52px;text-align:right}
+
+/* KEY HINT */
+.key-hint{position:fixed;top:20px;right:64px;font-size:11px;color:rgba(139,163,188,.4);pointer-events:none}
+
+/* SVG OVERRIDES for dark background */
+.diagram-area .box{fill:rgba(255,255,255,.06);stroke:rgba(139,163,188,.25)}
+.diagram-area text{fill:#c8d8e8}
+
+/* --- CUSTOM SVG CLASSES FOR DARK THEME --- */
+.dn-teal rect,.dn-teal circle{fill:#0a3d36;stroke:#00C2A8;stroke-width:.8}
+.dn-teal text{fill:#a7efe6 !important}
+.dn-blue rect{fill:#0d2a4a;stroke:#2563EB;stroke-width:.8}
+.dn-blue text{fill:#b0ccf0 !important}
+.dn-purple rect{fill:#1a1040;stroke:#8B5CF6;stroke-width:.8}
+.dn-purple text{fill:#c4b5fd !important}
+.dn-gray rect{fill:#1a2a3a;stroke:#4a6380;stroke-width:.8}
+.dn-gray text{fill:#8BA3BC !important}
+.dn-amber rect{fill:#2a1e00;stroke:#F59E0B;stroke-width:.8}
+.dn-amber text{fill:#fcd34d !important}
+.dn-red rect{fill:#2d0808;stroke:#EF4444;stroke-width:.8}
+.dn-red text{fill:#fca5a5 !important}
+.dn-green rect{fill:#052a1a;stroke:#10B981;stroke-width:.8}
+.dn-green text{fill:#6ee7b7 !important}
+.dn-border{fill:none;stroke:rgba(139,163,188,.15);stroke-width:1}
+.dn-arr{fill:none;stroke:#4a6380;stroke-width:1.2}
+.dn-arr-teal{fill:none;stroke:#00C2A8;stroke-width:1}
+.dn-arr-green{fill:none;stroke:#10B981;stroke-width:.9}
+.dn-dash{fill:none;stroke:#4a6380;stroke-width:1;stroke-dasharray:5 3}
+.dn-text{fill:#c8d8e8 !important;font-size:12px}
+.dn-text-sm{fill:#8BA3BC !important;font-size:11px}
+.dn-text-lg{fill:#e8f0f8 !important;font-size:14px;font-weight:600}
+.dn-label{fill:#64788e !important;font-size:10px}
+</style>
+</head>
+<body>
+<div class="deck" id="deck">
+
+<!-- SLIDE 0: TITLE -->
+<div id="slide-0" class="slide slide-title active" data-index="0">
+  <div style="max-width:700px;z-index:1">
+    <div class="oskar-word">OSKAR</div>
+    <div class="oskar-sub">Engineering Intelligence Platform</div>
+    <div class="title-pills">
+      <span class="pill pill-teal">ECN module</span>
+      <span class="pill pill-teal">BOM module</span>
+      <span class="pill pill-teal">Supplier Intelligence</span>
+      <span class="pill pill-slate">Replaces Stargile + PLMServer</span>
+      <span class="pill pill-slate">24-week programme</span>
+      <span class="pill pill-slate">ISO 13485 compliant</span>
+    </div>
+    <div class="title-meta">
+      <div class="meta-item">
+        <span class="meta-label">Organisation</span>
+        <span class="meta-value">Scanfil APAC Manufacturing</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Strategy version</span>
+        <span class="meta-value">v2.0</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Programme</span>
+        <span class="meta-value">IT / Engineering Modernisation</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Quantified benefit</span>
+        <span class="meta-value" style="color:var(--teal)">~$379K / year</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 1: CURRENT STATE -->
+<div id="slide-1" class="slide slide-diagram" data-index="1">
+  <div class="slide-header">
+    <div>
+      <div class="slide-num">Diagram 1 of 7</div>
+      <div class="slide-title-text">Current state — two independent legacy systems</div>
+    </div>
+    <div class="slide-tag">Context</div>
+  </div>
+  <div class="diagram-area">
+    <svg viewBox="0 0 700 340" xmlns="http://www.w3.org/2000/svg">
+      <defs><marker id="a1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#4a6380" stroke-width="1.5" stroke-linecap="round"/></marker>
+      <marker id="a1r" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#EF4444" stroke-width="1.5" stroke-linecap="round"/></marker></defs>
+      <g class="dn-gray"><rect x="220" y="14" width="260" height="54" rx="8"/><text class="dn-text-lg" x="350" y="37" text-anchor="middle" dominant-baseline="central">Movex / M3 ERP</text><text class="dn-text-sm" x="350" y="55" text-anchor="middle" dominant-baseline="central">shared data layer — source of truth</text></g>
+      <line x1="164" y1="130" x2="280" y2="68" class="dn-arr" marker-end="url(#a1)"/>
+      <line x1="540" y1="130" x2="420" y2="68" class="dn-arr" marker-end="url(#a1)"/>
+      <g class="dn-teal"><rect x="40" y="130" width="248" height="54" rx="8"/><text class="dn-text-lg" x="164" y="151" text-anchor="middle" dominant-baseline="central">Stargile</text><text class="dn-text-sm" x="164" y="169" text-anchor="middle" dominant-baseline="central">Java ECN — own MI API classes</text></g>
+      <g class="dn-blue"><rect x="412" y="130" width="248" height="54" rx="8"/><text class="dn-text-lg" x="536" y="151" text-anchor="middle" dominant-baseline="central">PLMServer</text><text class="dn-text-sm" x="536" y="169" text-anchor="middle" dominant-baseline="central">PHP BOM + Supplier Intelligence</text></g>
+      <g class="dn-red"><rect x="306" y="140" width="88" height="34" rx="6"/><text class="dn-text-sm" x="350" y="153" text-anchor="middle" dominant-baseline="central">no direct</text><text class="dn-text-sm" x="350" y="167" text-anchor="middle" dominant-baseline="central">integration</text></g>
+      <line x1="288" y1="184" x2="306" y2="184" class="dn-dash" marker-end="url(#a1r)" stroke="#EF4444"/>
+      <text class="dn-text-sm" style="fill:#EF4444" x="350" y="206" text-anchor="middle">manual BOM re-upload required</text>
+      <g class="dn-amber"><rect x="40" y="220" width="248" height="100" rx="6"/><text class="dn-text-lg" x="164" y="238" text-anchor="middle" dominant-baseline="central">Stargile pain points</text><text class="dn-text-sm" x="52" y="260" dominant-baseline="central">Status 50 push failures: routine</text><text class="dn-text-sm" x="52" y="278" dominant-baseline="central">Own Java MI — not shared</text><text class="dn-text-sm" x="52" y="296" dominant-baseline="central">No IFS migration path</text><text class="dn-text-sm" x="52" y="314" dominant-baseline="central">No MAS v2.0 integration</text></g>
+      <g class="dn-amber"><rect x="412" y="220" width="248" height="100" rx="6"/><text class="dn-text-lg" x="536" y="238" text-anchor="middle" dominant-baseline="central">PLMServer pain points</text><text class="dn-text-sm" x="424" y="260" dominant-baseline="central">13+ min BOM processing — NPS -40</text><text class="dn-text-sm" x="424" y="278" dominant-baseline="central">Largely abandoned by engineers</text><text class="dn-text-sm" x="424" y="296" dominant-baseline="central">HTTPS disabled — security risk</text><text class="dn-text-sm" x="424" y="314" dominant-baseline="central">No BOM versioning or comparison</text></g>
+    </svg>
+  </div>
+  <div class="slide-caption">Engineers manually re-upload BOM data from Movex into PLMServer after completing an ECN. No direct integration. Neither system produces events for MAS v2.0 agents. Status 50 push failures in Stargile are part of regular operating procedure.</div>
+</div>
+
+<!-- SLIDE 2: OSKAR ARCHITECTURE -->
+<div id="slide-2" class="slide slide-diagram" data-index="2">
+  <div class="slide-header">
+    <div>
+      <div class="slide-num">Diagram 2 of 7</div>
+      <div class="slide-title-text">OSKAR platform architecture — three modules, one foundation</div>
+    </div>
+    <div class="slide-tag">Architecture</div>
+  </div>
+  <div class="diagram-area">
+    <svg viewBox="0 0 700 430" xmlns="http://www.w3.org/2000/svg">
+      <defs><marker id="a2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#4a6380" stroke-width="1.5" stroke-linecap="round"/></marker></defs>
+      <g class="dn-gray"><rect x="210" y="10" width="280" height="46" rx="8"/><text class="dn-text-lg" x="350" y="27" text-anchor="middle" dominant-baseline="central">SM-Portal</text><text class="dn-text-sm" x="350" y="45" text-anchor="middle" dominant-baseline="central">shared frontend — module integration</text></g>
+      <line x1="350" y1="56" x2="350" y2="78" class="dn-arr" marker-end="url(#a2)"/>
+      <rect x="24" y="78" width="652" height="194" rx="12" class="dn-border"/>
+      <text class="dn-text-lg" style="fill:var(--teal)" x="350" y="98" text-anchor="middle" dominant-baseline="central">OSKAR Engineering Intelligence Platform</text>
+      <g class="dn-teal"><rect x="40" y="108" width="194" height="152" rx="8"/><text class="dn-text-lg" x="137" y="127" text-anchor="middle" dominant-baseline="central">ECN module</text><text class="dn-text-sm" x="137" y="145" text-anchor="middle" dominant-baseline="central">replaces Stargile</text><text class="dn-text-sm" x="52" y="167" dominant-baseline="central">Change notes + approval</text><text class="dn-text-sm" x="52" y="185" dominant-baseline="central">ISO 13485 audit trail</text><text class="dn-text-sm" x="52" y="203" dominant-baseline="central">ERP adapter pattern</text><text class="dn-text-sm" x="52" y="221" dominant-baseline="central">MAS v2.0 agent</text><text class="dn-text-sm" x="52" y="239" dominant-baseline="central">IFS migration ready</text></g>
+      <g class="dn-blue"><rect x="252" y="108" width="194" height="152" rx="8"/><text class="dn-text-lg" x="349" y="127" text-anchor="middle" dominant-baseline="central">BOM module</text><text class="dn-text-sm" x="349" y="145" text-anchor="middle" dominant-baseline="central">replaces PLMServer BOM</text><text class="dn-text-sm" x="264" y="167" dominant-baseline="central">Platform draft BOM</text><text class="dn-text-sm" x="264" y="185" dominant-baseline="central">Version history + diff</text><text class="dn-text-sm" x="264" y="203" dominant-baseline="central">BOM comparison</text><text class="dn-text-sm" x="264" y="221" dominant-baseline="central">Optimistic locking</text><text class="dn-text-sm" x="264" y="239" dominant-baseline="central">RoHS / REACH flags</text></g>
+      <g class="dn-purple"><rect x="464" y="108" width="194" height="152" rx="8"/><text class="dn-text-lg" x="561" y="127" text-anchor="middle" dominant-baseline="central">Supplier intelligence</text><text class="dn-text-sm" x="561" y="145" text-anchor="middle" dominant-baseline="central">replaces PLMServer APIs</text><text class="dn-text-sm" x="476" y="167" dominant-baseline="central">6 supplier adapters</text><text class="dn-text-sm" x="476" y="185" dominant-baseline="central">Parallel async &lt;90 sec</text><text class="dn-text-sm" x="476" y="203" dominant-baseline="central">Redis cache 4-hr TTL</text><text class="dn-text-sm" x="476" y="221" dominant-baseline="central">Circuit breakers</text><text class="dn-text-sm" x="476" y="239" dominant-baseline="central">Alt. component search</text></g>
+      <line x1="190" y1="272" x2="120" y2="300" class="dn-arr" marker-end="url(#a2)"/>
+      <line x1="538" y1="272" x2="565" y2="300" class="dn-arr" marker-end="url(#a2)"/>
+      <g class="dn-gray"><rect x="24" y="300" width="130" height="44" rx="6"/><text class="dn-text-lg" x="89" y="318" text-anchor="middle" dominant-baseline="central">ERP adapter</text><text class="dn-text-sm" x="89" y="336" text-anchor="middle" dominant-baseline="central">abstract interface</text></g>
+      <line x1="154" y1="322" x2="170" y2="322" class="dn-arr" marker-end="url(#a2)"/>
+      <g class="dn-gray"><rect x="170" y="300" width="160" height="44" rx="6"/><text class="dn-text-lg" x="250" y="318" text-anchor="middle" dominant-baseline="central">movex-rest-api</text><text class="dn-text-sm" x="250" y="336" text-anchor="middle" dominant-baseline="central">.NET — existing</text></g>
+      <line x1="330" y1="322" x2="346" y2="322" class="dn-arr" marker-end="url(#a2)"/>
+      <g class="dn-gray"><rect x="346" y="300" width="136" height="44" rx="6"/><text class="dn-text-lg" x="414" y="318" text-anchor="middle" dominant-baseline="central">Movex / IFS</text><text class="dn-text-sm" x="414" y="336" text-anchor="middle" dominant-baseline="central">site-aware config</text></g>
+      <text class="dn-text-sm" style="fill:var(--teal)" x="414" y="358" text-anchor="middle">IFS adapter stub: Sprint 4</text>
+      <g class="dn-purple"><rect x="496" y="300" width="180" height="44" rx="6"/><text class="dn-text-lg" x="586" y="318" text-anchor="middle" dominant-baseline="central">6 supplier APIs</text><text class="dn-text-sm" x="586" y="336" text-anchor="middle" dominant-baseline="central">DigiKey · Mouser · others</text></g>
+      <g class="dn-teal"><rect x="24" y="374" width="420" height="34" rx="6"/><text class="dn-text-lg" x="234" y="391" text-anchor="middle" dominant-baseline="central">Redis Streams — event bus + supplier cache</text></g>
+      <g class="dn-blue"><rect x="456" y="374" width="220" height="34" rx="6"/><text class="dn-text-lg" x="566" y="391" text-anchor="middle" dominant-baseline="central">MAS v2.0 — 2 agents</text></g>
+    </svg>
+  </div>
+  <div class="slide-caption">Three modules share one PostgreSQL database, one Redis instance, one auth layer, and one audit log. Two adapter patterns isolate the platform from any specific ERP (Movex today, IFS for Site B later) and any supplier API. No integration contracts between modules.</div>
+</div>
+
+<!-- SLIDE 3: DATA AUTHORITY -->
+<div id="slide-3" class="slide slide-diagram" data-index="3">
+  <div class="slide-header">
+    <div>
+      <div class="slide-num">Diagram 3 of 7</div>
+      <div class="slide-title-text">Data authority — Movex remains source of truth for committed BOMs</div>
+    </div>
+    <div class="slide-tag">Architecture correction</div>
+  </div>
+  <div class="diagram-area">
+    <svg viewBox="0 0 700 360" xmlns="http://www.w3.org/2000/svg">
+      <defs><marker id="a3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#4a6380" stroke-width="1.5" stroke-linecap="round"/></marker>
+      <marker id="a3t" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#00C2A8" stroke-width="1.5" stroke-linecap="round"/></marker></defs>
+      <line x1="350" y1="10" x2="350" y2="348" fill="none" stroke="rgba(139,163,188,.12)" stroke-width="1" stroke-dasharray="6 4"/>
+      <text class="dn-text-lg" style="fill:var(--amber)" x="175" y="18" text-anchor="middle">Today</text>
+      <text class="dn-text-lg" style="fill:var(--teal)" x="525" y="18" text-anchor="middle">With OSKAR</text>
+      <g class="dn-gray"><rect x="55" y="28" width="230" height="56" rx="8" stroke-width="1.2" stroke="#F59E0B"/><text class="dn-text-lg" x="170" y="50" text-anchor="middle" dominant-baseline="central">Movex / M3</text><text class="dn-text-sm" x="170" y="68" text-anchor="middle" dominant-baseline="central">source of truth — both systems</text></g>
+      <line x1="100" y1="130" x2="116" y2="84" class="dn-arr" marker-end="url(#a3)"/>
+      <line x1="224" y1="130" x2="224" y2="84" class="dn-arr" marker-end="url(#a3)"/>
+      <g class="dn-teal"><rect x="40" y="130" width="116" height="44" rx="6"/><text class="dn-text-lg" x="98" y="147" text-anchor="middle" dominant-baseline="central">Stargile</text><text class="dn-text-sm" x="98" y="165" text-anchor="middle" dominant-baseline="central">Java MI calls</text></g>
+      <g class="dn-blue"><rect x="168" y="130" width="116" height="44" rx="6"/><text class="dn-text-lg" x="226" y="147" text-anchor="middle" dominant-baseline="central">PLMServer</text><text class="dn-text-sm" x="226" y="165" text-anchor="middle" dominant-baseline="central">SQL Server read</text></g>
+      <line x1="156" y1="152" x2="168" y2="152" class="dn-dash" stroke="#EF4444"/>
+      <text class="dn-text-sm" style="fill:rgba(239,68,68,.7)" x="162" y="200" text-anchor="middle">manual handoff</text>
+      <g class="dn-red"><rect x="40" y="218" width="244" height="100" rx="6"/><text class="dn-text-lg" x="162" y="238" text-anchor="middle" dominant-baseline="central">problems</text><text class="dn-text-sm" x="52" y="260" dominant-baseline="central">Sync fragile if Movex changes</text><text class="dn-text-sm" x="52" y="278" dominant-baseline="central">No version history or AI layer</text><text class="dn-text-sm" x="52" y="296" dominant-baseline="central">Both systems can become stale</text><text class="dn-text-sm" x="52" y="314" dominant-baseline="central">ISO 13485 traceability at risk</text></g>
+      <rect x="376" y="28" width="280" height="128" rx="10" fill="rgba(0,194,168,.06)" stroke="rgba(0,194,168,.3)" stroke-width="1"/>
+      <text class="dn-text-lg" style="fill:var(--teal)" x="516" y="50" text-anchor="middle" dominant-baseline="central">OSKAR platform layer</text>
+      <text class="dn-text-sm" x="516" y="68" text-anchor="middle" dominant-baseline="central">change workflow · draft state</text>
+      <g class="dn-teal"><rect x="390" y="82" width="66" height="26" rx="6"/><text class="dn-text-sm" x="423" y="95" text-anchor="middle" dominant-baseline="central">ECN</text></g>
+      <g class="dn-blue"><rect x="470" y="82" width="66" height="26" rx="6"/><text class="dn-text-sm" x="503" y="95" text-anchor="middle" dominant-baseline="central">BOM</text></g>
+      <g class="dn-purple"><rect x="550" y="82" width="94" height="26" rx="6"/><text class="dn-text-sm" x="597" y="95" text-anchor="middle" dominant-baseline="central">Supplier intel</text></g>
+      <text class="dn-text-sm" x="516" y="140" text-anchor="middle">version history · AI events · audit log</text>
+      <line x1="516" y1="156" x2="516" y2="178" class="dn-arr-teal" marker-end="url(#a3t)"/>
+      <text class="dn-text-sm" style="fill:var(--teal)" x="516" y="172" text-anchor="middle">approved changes only</text>
+      <g class="dn-gray"><rect x="390" y="178" width="252" height="56" rx="8" stroke-width="1.2" stroke="#00C2A8"/><text class="dn-text-lg" x="516" y="199" text-anchor="middle" dominant-baseline="central">Movex / M3</text><text class="dn-text-sm" x="516" y="217" text-anchor="middle" dominant-baseline="central">committed production BOM — SOT</text></g>
+      <g class="dn-green"><rect x="390" y="252" width="252" height="88" rx="6"/><text class="dn-text-lg" x="516" y="272" text-anchor="middle" dominant-baseline="central">benefits</text><text class="dn-text-sm" x="402" y="294" dominant-baseline="central">No sync risk · ISO 13485 aligned</text><text class="dn-text-sm" x="402" y="312" dominant-baseline="central">IFS migration safe</text><text class="dn-text-sm" x="402" y="330" dominant-baseline="central">Full AI queryability</text></g>
+    </svg>
+  </div>
+  <div class="slide-caption">The v1.0 "platform owns the BOM" framing was corrected. Movex holds the committed production BOM — MRP, purchasing, and ISO 13485 auditors all depend on it. OSKAR holds the change workflow, draft state, version chain, and supplier intelligence: the intelligence layer Movex cannot provide.</div>
+</div>
+
+<!-- SLIDE 4: TWO-SITE DEPLOYMENT -->
+<div id="slide-4" class="slide slide-diagram" data-index="4">
+  <div class="slide-header">
+    <div>
+      <div class="slide-num">Diagram 4 of 7</div>
+      <div class="slide-title-text">Two-site deployment — configuration, not architecture</div>
+    </div>
+    <div class="slide-tag">Infrastructure</div>
+  </div>
+  <div class="diagram-area">
+    <svg viewBox="0 0 700 380" xmlns="http://www.w3.org/2000/svg">
+      <defs><marker id="a4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#4a6380" stroke-width="1.5" stroke-linecap="round"/></marker>
+      <marker id="a4d" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#8B5CF6" stroke-width="1.5" stroke-linecap="round"/></marker></defs>
+      <g class="dn-gray"><rect x="215" y="14" width="270" height="56" rx="8"/><text class="dn-text-lg" x="350" y="35" text-anchor="middle" dominant-baseline="central">Git — same codebase</text><text class="dn-text-sm" x="350" y="53" text-anchor="middle" dominant-baseline="central">same Docker images to both sites</text></g>
+      <line x1="280" y1="70" x2="188" y2="100" class="dn-arr" marker-end="url(#a4)"/>
+      <line x1="420" y1="70" x2="512" y2="100" class="dn-arr" marker-end="url(#a4)"/>
+      <rect x="24" y="100" width="290" height="172" rx="8" fill="rgba(0,194,168,.05)" stroke="rgba(0,194,168,.25)" stroke-width=".8"/>
+      <text class="dn-text-lg" style="fill:var(--teal)" x="169" y="122" text-anchor="middle" dominant-baseline="central">Site A</text>
+      <text class="dn-text-sm" x="40" y="146" dominant-baseline="central">.env.site_a</text>
+      <text class="dn-text-sm" style="fill:#00C2A8" x="40" y="164" dominant-baseline="central">ERP_ADAPTER = movex</text>
+      <text class="dn-text-sm" x="40" y="182" dominant-baseline="central">SITE_ID = site_a</text>
+      <text class="dn-text-sm" x="40" y="208" dominant-baseline="central">Docker stack:</text>
+      <text class="dn-text-sm" x="40" y="226" dominant-baseline="central">app · db · redis · worker</text>
+      <text class="dn-text-sm" style="fill:var(--teal)" x="169" y="254" text-anchor="middle" dominant-baseline="central">Movex permanent</text>
+      <rect x="386" y="100" width="290" height="172" rx="8" fill="rgba(37,99,235,.06)" stroke="rgba(37,99,235,.3)" stroke-width=".8"/>
+      <text class="dn-text-lg" style="fill:#60a5fa" x="531" y="122" text-anchor="middle" dominant-baseline="central">Site B</text>
+      <text class="dn-text-sm" x="402" y="146" dominant-baseline="central">.env.site_b</text>
+      <text class="dn-text-sm" style="fill:#60a5fa" x="402" y="164" dominant-baseline="central">ERP_ADAPTER = movex (now)</text>
+      <text class="dn-text-sm" style="fill:#a78bfa" x="402" y="182" dominant-baseline="central">ERP_ADAPTER = ifs (future)</text>
+      <text class="dn-text-sm" x="402" y="208" dominant-baseline="central">Docker stack:</text>
+      <text class="dn-text-sm" x="402" y="226" dominant-baseline="central">app · db · redis · worker</text>
+      <text class="dn-text-sm" style="fill:#60a5fa" x="531" y="254" text-anchor="middle" dominant-baseline="central">Movex now — IFS later</text>
+      <line x1="169" y1="272" x2="169" y2="300" class="dn-arr" marker-end="url(#a4)"/>
+      <line x1="459" y1="272" x2="459" y2="300" class="dn-arr" marker-end="url(#a4)"/>
+      <line x1="567" y1="272" x2="567" y2="300" fill="none" stroke="#8B5CF6" stroke-width="1" stroke-dasharray="5 3" marker-end="url(#a4d)"/>
+      <g class="dn-teal"><rect x="56" y="300" width="226" height="44" rx="6"/><text class="dn-text-lg" x="169" y="318" text-anchor="middle" dominant-baseline="central">Movex — Site A</text><text class="dn-text-sm" x="169" y="336" text-anchor="middle" dominant-baseline="central">permanent SOT</text></g>
+      <g class="dn-blue"><rect x="388" y="300" width="128" height="44" rx="6"/><text class="dn-text-lg" x="452" y="318" text-anchor="middle" dominant-baseline="central">Movex — B</text><text class="dn-text-sm" x="452" y="336" text-anchor="middle" dominant-baseline="central">current</text></g>
+      <g class="dn-purple"><rect x="526" y="300" width="128" height="44" rx="6"/><text class="dn-text-lg" x="590" y="318" text-anchor="middle" dominant-baseline="central">IFS — Site B</text><text class="dn-text-sm" x="590" y="336" text-anchor="middle" dominant-baseline="central">future</text></g>
+      <text class="dn-text-sm" style="fill:#a78bfa" x="554" y="360" text-anchor="middle">env file change only</text>
+      <text class="dn-text-sm" style="fill:#a78bfa" x="554" y="376" text-anchor="middle">zero platform code changes</text>
+    </svg>
+  </div>
+  <div class="slide-caption">Both sites are the same SRX entity — multi-configuration, not multi-tenancy. Identical Docker images from the same repository. Site A points to Movex permanently. Site B swaps one environment variable when IFS migration begins. When Site B splits across two countries, each country gets a new Docker instance — no code changes.</div>
+</div>
+
+<!-- SLIDE 5: ECN STATE MACHINE -->
+<div id="slide-5" class="slide slide-diagram" data-index="5">
+  <div class="slide-header">
+    <div>
+      <div class="slide-num">Diagram 5 of 7</div>
+      <div class="slide-title-text">ECN state machine — complete workflow with error recovery</div>
+    </div>
+    <div class="slide-tag">ECN module</div>
+  </div>
+  <div class="diagram-area">
+    <svg viewBox="0 0 700 550" xmlns="http://www.w3.org/2000/svg">
+      <defs><marker id="a5" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#4a6380" stroke-width="1.5" stroke-linecap="round"/></marker></defs>
+      <g class="dn-gray"><rect x="130" y="20" width="230" height="46" rx="8"/><text class="dn-text-lg" x="245" y="38" text-anchor="middle" dominant-baseline="central">Draft — Status 10</text><text class="dn-text-sm" x="245" y="56" text-anchor="middle" dominant-baseline="central">engineer creates ECN</text></g>
+      <line x1="245" y1="66" x2="245" y2="96" class="dn-arr" marker-end="url(#a5)"/>
+      <g class="dn-gray"><rect x="130" y="96" width="230" height="46" rx="8"/><text class="dn-text-lg" x="245" y="114" text-anchor="middle" dominant-baseline="central">Submitted — Status 20</text><text class="dn-text-sm" x="245" y="132" text-anchor="middle" dominant-baseline="central">routed to approvers</text></g>
+      <line x1="245" y1="142" x2="245" y2="172" class="dn-arr" marker-end="url(#a5)"/>
+      <g class="dn-teal"><rect x="130" y="172" width="230" height="46" rx="8"/><text class="dn-text-lg" x="245" y="190" text-anchor="middle" dominant-baseline="central">Under review — Status 30</text><text class="dn-text-sm" x="245" y="208" text-anchor="middle" dominant-baseline="central">approvals in progress</text></g>
+      <line x1="245" y1="218" x2="245" y2="248" class="dn-arr" marker-end="url(#a5)"/>
+      <line x1="360" y1="195" x2="438" y2="195" class="dn-arr" marker-end="url(#a5)"/>
+      <g class="dn-teal"><rect x="130" y="248" width="230" height="46" rx="8"/><text class="dn-text-lg" x="245" y="266" text-anchor="middle" dominant-baseline="central">Approved — Status 40</text><text class="dn-text-sm" x="245" y="284" text-anchor="middle" dominant-baseline="central">all approvals received</text></g>
+      <line x1="245" y1="294" x2="245" y2="316" class="dn-arr" marker-end="url(#a5)"/>
+      <rect x="130" y="308" width="230" height="24" rx="4" fill="rgba(0,194,168,.08)" stroke="rgba(0,194,168,.3)" stroke-width=".5"/>
+      <text class="dn-text-sm" style="fill:var(--teal)" x="245" y="320" text-anchor="middle" dominant-baseline="central">validate_payload — pre-check before push</text>
+      <line x1="245" y1="332" x2="245" y2="356" class="dn-arr" marker-end="url(#a5)"/>
+      <g class="dn-amber"><rect x="130" y="356" width="230" height="46" rx="8"/><text class="dn-text-lg" x="245" y="374" text-anchor="middle" dominant-baseline="central">ERP pending — Status 50</text><text class="dn-text-sm" x="245" y="392" text-anchor="middle" dominant-baseline="central">push in progress via movex-rest-api</text></g>
+      <line x1="245" y1="402" x2="245" y2="432" class="dn-arr" marker-end="url(#a5)"/>
+      <line x1="360" y1="379" x2="438" y2="379" class="dn-arr" marker-end="url(#a5)"/>
+      <g class="dn-teal"><rect x="130" y="432" width="230" height="46" rx="8"/><text class="dn-text-lg" x="245" y="450" text-anchor="middle" dominant-baseline="central">ERP success — Status 60</text><text class="dn-text-sm" x="245" y="468" text-anchor="middle" dominant-baseline="central">Movex confirmed update</text></g>
+      <line x1="245" y1="478" x2="245" y2="500" class="dn-arr" marker-end="url(#a5)"/>
+      <g class="dn-green"><rect x="130" y="500" width="230" height="40" rx="8" stroke-width="1.2" stroke="#10B981"/><text class="dn-text-lg" x="245" y="514" text-anchor="middle" dominant-baseline="central">Completed — Status 70</text><text class="dn-text-sm" style="fill:#6ee7b7" x="245" y="532" text-anchor="middle" dominant-baseline="central">immutable · ISO 13485 terminal</text></g>
+      <g class="dn-red"><rect x="438" y="172" width="210" height="56" rx="8"/><text class="dn-text-lg" x="543" y="192" text-anchor="middle" dominant-baseline="central">Rejected — Status 90</text><text class="dn-text-sm" x="543" y="210" text-anchor="middle" dominant-baseline="central">immutable terminal</text></g>
+      <g class="dn-red"><rect x="438" y="356" width="210" height="46" rx="8"/><text class="dn-text-lg" x="543" y="374" text-anchor="middle" dominant-baseline="central">ERP failed — Status 55</text><text class="dn-text-sm" x="543" y="392" text-anchor="middle" dominant-baseline="central">error received</text></g>
+      <line x1="543" y1="402" x2="543" y2="428" class="dn-arr" marker-end="url(#a5)"/>
+      <g class="dn-amber"><rect x="438" y="428" width="210" height="56" rx="8"/><text class="dn-text-lg" x="543" y="448" text-anchor="middle" dominant-baseline="central">Error recovery — Status 57</text><text class="dn-text-sm" x="543" y="466" text-anchor="middle" dominant-baseline="central">engineer corrects payload</text></g>
+      <path d="M438 456 L412 456 L412 379 L360 379" fill="none" stroke="#4a6380" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#a5)"/>
+      <text class="dn-text-sm" style="fill:var(--amber)" x="405" y="412" text-anchor="end">retry</text>
+    </svg>
+  </div>
+  <div class="slide-caption">validate_payload fires before any Movex push — pre-checking effective date conflicts, eliminating the most common class of Status 50 failures documented in the April 2018 transcript. Status 70 (Completed) is a new explicit terminal state providing the ISO 13485-compliant, immutable audit endpoint.</div>
+</div>
+
+<!-- SLIDE 6: SUPPLIER PERFORMANCE -->
+<div id="slide-6" class="slide slide-diagram" data-index="6">
+  <div class="slide-header">
+    <div>
+      <div class="slide-num">Diagram 6 of 7</div>
+      <div class="slide-title-text">Supplier intelligence — 13 minutes → under 90 seconds</div>
+    </div>
+    <div class="slide-tag">Supplier Intelligence module</div>
+  </div>
+  <div class="diagram-area">
+    <svg viewBox="0 0 700 360" xmlns="http://www.w3.org/2000/svg">
+      <defs><marker id="a6" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#4a6380" stroke-width="1.5" stroke-linecap="round"/></marker>
+      <marker id="a6g" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#10B981" stroke-width="1.5" stroke-linecap="round"/></marker></defs>
+      <line x1="350" y1="10" x2="350" y2="350" fill="none" stroke="rgba(139,163,188,.1)" stroke-width="1" stroke-dasharray="6 4"/>
+      <text class="dn-text-lg" style="fill:var(--amber)" x="175" y="18" text-anchor="middle">PLMServer today</text>
+      <text class="dn-text-lg" style="fill:var(--teal)" x="525" y="18" text-anchor="middle">OSKAR</text>
+      <g class="dn-gray"><rect x="36" y="28" width="80" height="24" rx="4"/><text class="dn-text-sm" x="76" y="40" text-anchor="middle" dominant-baseline="central">Part 1</text></g>
+      <g class="dn-gray"><rect x="36" y="60" width="80" height="24" rx="4"/><text class="dn-text-sm" x="76" y="72" text-anchor="middle" dominant-baseline="central">Part 2</text></g>
+      <g class="dn-gray"><rect x="36" y="92" width="80" height="24" rx="4"/><text class="dn-text-sm" x="76" y="104" text-anchor="middle" dominant-baseline="central">Part 3</text></g>
+      <text class="dn-text-sm" x="76" y="134" text-anchor="middle">... 100 parts</text>
+      <line x1="116" y1="92" x2="148" y2="92" class="dn-arr" marker-end="url(#a6)"/>
+      <text class="dn-text-sm" x="132" y="83" text-anchor="middle">one</text>
+      <text class="dn-text-sm" x="132" y="103" text-anchor="middle">at a time</text>
+      <g class="dn-amber"><rect x="148" y="68" width="160" height="48" rx="6"/><text class="dn-text-lg" x="228" y="88" text-anchor="middle" dominant-baseline="central">Supplier API call</text><text class="dn-text-sm" x="228" y="106" text-anchor="middle" dominant-baseline="central">wait for response</text></g>
+      <g class="dn-red"><rect x="36" y="192" width="272" height="56" rx="6"/><text class="dn-text-lg" x="172" y="212" text-anchor="middle" dominant-baseline="central">~1,200 seconds</text><text class="dn-text-sm" x="172" y="230" text-anchor="middle" dominant-baseline="central">100 × 6 suppliers × 2s each</text></g>
+      <text class="dn-text-sm" style="fill:rgba(239,68,68,.7)" x="172" y="268" text-anchor="middle">No cache · SSL disabled</text>
+      <text class="dn-text-sm" style="fill:rgba(239,68,68,.7)" x="172" y="286" text-anchor="middle">One failure aborts everything</text>
+      <g class="dn-teal"><rect x="366" y="28" width="80" height="24" rx="4"/><text class="dn-text-sm" x="406" y="40" text-anchor="middle" dominant-baseline="central">Part 1</text></g>
+      <g class="dn-teal"><rect x="366" y="60" width="80" height="24" rx="4"/><text class="dn-text-sm" x="406" y="72" text-anchor="middle" dominant-baseline="central">Part 2</text></g>
+      <g class="dn-teal"><rect x="366" y="92" width="80" height="24" rx="4"/><text class="dn-text-sm" x="406" y="104" text-anchor="middle" dominant-baseline="central">Part 3</text></g>
+      <text class="dn-text-sm" x="406" y="134" text-anchor="middle">all 100 concurrent</text>
+      <line x1="446" y1="40" x2="492" y2="40" class="dn-arr-green" marker-end="url(#a6g)"/>
+      <line x1="446" y1="72" x2="492" y2="72" class="dn-arr-green" marker-end="url(#a6g)"/>
+      <line x1="446" y1="92" x2="492" y2="92" class="dn-arr-green" marker-end="url(#a6g)"/>
+      <line x1="446" y1="92" x2="492" y2="120" class="dn-arr-green" marker-end="url(#a6g)"/>
+      <line x1="446" y1="92" x2="492" y2="150" class="dn-arr-green" marker-end="url(#a6g)"/>
+      <line x1="446" y1="92" x2="492" y2="180" class="dn-arr-green" marker-end="url(#a6g)"/>
+      <g class="dn-gray"><rect x="492" y="28" width="172" height="24" rx="4"/><text class="dn-text-sm" x="578" y="40" text-anchor="middle" dominant-baseline="central">DigiKey</text></g>
+      <g class="dn-gray"><rect x="492" y="60" width="172" height="24" rx="4"/><text class="dn-text-sm" x="578" y="72" text-anchor="middle" dominant-baseline="central">Mouser</text></g>
+      <g class="dn-gray"><rect x="492" y="92" width="172" height="24" rx="4"/><text class="dn-text-sm" x="578" y="104" text-anchor="middle" dominant-baseline="central">Element14</text></g>
+      <g class="dn-gray"><rect x="492" y="124" width="172" height="24" rx="4"/><text class="dn-text-sm" x="578" y="136" text-anchor="middle" dominant-baseline="central">Future Electronics</text></g>
+      <g class="dn-gray"><rect x="492" y="156" width="172" height="24" rx="4"/><text class="dn-text-sm" x="578" y="168" text-anchor="middle" dominant-baseline="central">Verical / Arrow</text></g>
+      <g class="dn-gray"><rect x="492" y="188" width="172" height="24" rx="4"/><text class="dn-text-sm" x="578" y="200" text-anchor="middle" dominant-baseline="central">Octopart</text></g>
+      <g class="dn-teal"><rect x="366" y="224" width="156" height="36" rx="6"/><text class="dn-text-lg" x="444" y="236" text-anchor="middle" dominant-baseline="central">Redis cache</text><text class="dn-text-sm" x="444" y="252" text-anchor="middle" dominant-baseline="central">4-hr TTL · 70%+ hit rate</text></g>
+      <g class="dn-green"><rect x="366" y="272" width="298" height="52" rx="6" stroke-width="1.2" stroke="#10B981"/><text class="dn-text-lg" x="515" y="291" text-anchor="middle" dominant-baseline="central">Under 90 seconds</text><text class="dn-text-sm" x="515" y="309" text-anchor="middle" dominant-baseline="central">all 100 parts × 6 suppliers concurrent</text></g>
+      <text class="dn-text-sm" style="fill:rgba(16,185,129,.7)" x="515" y="336" text-anchor="middle">per-supplier circuit breaker</text>
+      <text class="dn-text-sm" style="fill:rgba(16,185,129,.7)" x="515" y="352" text-anchor="middle">one failure does not abort others</text>
+    </svg>
+  </div>
+  <div class="slide-caption">The root cause of PLMServer's abandonment: sequential API calls producing 13+ minutes per BOM. OSKAR uses asyncio.gather with per-supplier semaphores — all 100 parts fan out to all 6 suppliers simultaneously. Redis caches results for 4 hours. A mandatory Sprint 3 performance demo shows engineers sub-90-second processing with real data before UAT.</div>
+</div>
+
+<!-- SLIDE 7: PROGRAMME ROADMAP -->
+<div id="slide-7" class="slide slide-diagram" data-index="7">
+  <div class="slide-header">
+    <div>
+      <div class="slide-num">Diagram 7 of 7</div>
+      <div class="slide-title-text">24-week programme roadmap — four phases, five build sprints</div>
+    </div>
+    <div class="slide-tag">Programme</div>
+  </div>
+  <div class="diagram-area">
+    <svg viewBox="0 0 700 340" xmlns="http://www.w3.org/2000/svg">
+      <defs><marker id="a7" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#4a6380" stroke-width="1.5" stroke-linecap="round"/></marker></defs>
+      <text class="dn-text-sm" x="156" y="14" text-anchor="middle">W1</text>
+      <text class="dn-text-sm" x="248" y="14" text-anchor="middle">W5</text>
+      <text class="dn-text-sm" x="294" y="14" text-anchor="middle">W7</text>
+      <text class="dn-text-sm" x="447" y="14" text-anchor="middle">W14</text>
+      <text class="dn-text-sm" x="601" y="14" text-anchor="middle">W21</text>
+      <text class="dn-text-sm" x="689" y="14" text-anchor="middle">W24</text>
+      <text class="dn-text-lg" x="70" y="60" text-anchor="middle" dominant-baseline="central">Phase 1</text>
+      <text class="dn-text-sm" x="70" y="78" text-anchor="middle" dominant-baseline="central">Discovery</text>
+      <text class="dn-text-lg" x="70" y="122" text-anchor="middle" dominant-baseline="central">Phase 2</text>
+      <text class="dn-text-sm" x="70" y="140" text-anchor="middle" dominant-baseline="central">Architecture</text>
+      <text class="dn-text-lg" x="70" y="184" text-anchor="middle" dominant-baseline="central">Phase 3</text>
+      <text class="dn-text-sm" x="70" y="202" text-anchor="middle" dominant-baseline="central">Build</text>
+      <text class="dn-text-lg" x="70" y="246" text-anchor="middle" dominant-baseline="central">Phase 4</text>
+      <text class="dn-text-sm" x="70" y="264" text-anchor="middle" dominant-baseline="central">Cutover</text>
+      <g class="dn-teal"><rect x="156" y="38" width="92" height="44" rx="6"/><text class="dn-text-sm" x="202" y="60" text-anchor="middle" dominant-baseline="central">Wks 1–4</text></g>
+      <g class="dn-blue"><rect x="248" y="100" width="46" height="44" rx="6"/><text class="dn-text-sm" x="271" y="122" text-anchor="middle" dominant-baseline="central">5–6</text></g>
+      <g class="dn-purple"><rect x="294" y="162" width="307" height="44" rx="6"/><text class="dn-text-sm" x="447" y="184" text-anchor="middle" dominant-baseline="central">Wks 7–20 — five sprints</text></g>
+      <g class="dn-green"><rect x="601" y="224" width="88" height="44" rx="6" stroke-width="1.2" stroke="#10B981"/><text class="dn-text-sm" x="645" y="246" text-anchor="middle" dominant-baseline="central">21–24</text></g>
+      <text class="dn-text-sm" x="316" y="218" text-anchor="middle">S1</text>
+      <text class="dn-text-sm" x="378" y="218" text-anchor="middle">S2</text>
+      <text class="dn-text-sm" x="440" y="218" text-anchor="middle">S3</text>
+      <text class="dn-text-sm" x="502" y="218" text-anchor="middle">S4</text>
+      <text class="dn-text-sm" x="572" y="218" text-anchor="middle">S5</text>
+      <polygon points="248,90 256,100 248,110 240,100" fill="#F59E0B" opacity=".9"/>
+      <polygon points="294,152 302,162 294,172 286,162" fill="#F59E0B" opacity=".9"/>
+      <polygon points="601,214 609,224 601,234 593,224" fill="#F59E0B" opacity=".9"/>
+      <polygon points="689,268 697,276 689,284 681,276" fill="#10B981" opacity=".9"/>
+      <text class="dn-text-sm" style="fill:var(--amber)" x="248" y="88" text-anchor="middle">gate 1</text>
+      <text class="dn-text-sm" style="fill:var(--amber)" x="294" y="150" text-anchor="middle">gate 2</text>
+      <text class="dn-text-sm" style="fill:var(--amber)" x="601" y="212" text-anchor="middle">gate 3</text>
+      <text class="dn-text-sm" style="fill:var(--green)" x="689" y="266" text-anchor="middle">go-live</text>
+      <text class="dn-text-sm" x="156" y="282" text-anchor="start">2-system analysis</text>
+      <text class="dn-text-sm" x="156" y="298" text-anchor="start">MI gap analysis</text>
+      <text class="dn-text-sm" x="248" y="282" text-anchor="start">gap endpoints</text>
+      <text class="dn-text-sm" x="248" y="298" text-anchor="start">data model final</text>
+      <text class="dn-text-sm" x="390" y="282" text-anchor="middle">perf demo Sprint 3 (mandatory)</text>
+      <text class="dn-text-sm" x="390" y="298" text-anchor="middle">IFS stub Sprint 4</text>
+      <text class="dn-text-sm" x="639" y="282" text-anchor="middle">both systems</text>
+      <text class="dn-text-sm" x="639" y="298" text-anchor="middle">decommissioned</text>
+      <rect x="156" y="312" width="534" height="22" rx="4" fill="rgba(0,194,168,.05)" stroke="rgba(0,194,168,.2)" stroke-width=".5"/>
+      <text class="dn-text-sm" style="fill:var(--teal)" x="423" y="323" text-anchor="middle" dominant-baseline="central">Total programme: 24 weeks · Stargile + PLMServer replaced · Org AI Platform foundation established</text>
+    </svg>
+  </div>
+  <div class="slide-caption">Phase 1 has a new deliverable vs v1.0: the Stargile MI program inventory and movex-rest-api gap analysis. The .NET team adds missing endpoints in Phase 2 — this is a hard Sprint 3 gate. Sprint 3 includes a mandatory performance demonstration to engineers before Sprint 5 UAT. Both legacy systems have independent cutover sequences in Phase 4.</div>
+</div>
+
+</div>
+
+<!-- NAV BAR -->
+<div class="nav-bar">
+  <button class="nav-btn" onclick="go(-cur)"> &#8962; home </button>
+  <button class="nav-btn" id="prevBtn" onclick="go(-1)" disabled>&#8592; prev</button>
+  <div class="dots" id="dots"></div>
+  <button class="nav-btn" id="nextBtn" onclick="go(1)">next &#8594;</button>
+  <div class="slide-counter" id="counter">1 / 8</div>
+</div>
+
+<div class="key-hint">&#8592; &#8594; arrow keys to navigate</div>
+
+<script>
+const slides=document.querySelectorAll('.slide');
+const dots=document.getElementById('dots');
+const counter=document.getElementById('counter');
+const prevBtn=document.getElementById('prevBtn');
+const nextBtn=document.getElementById('nextBtn');
+let cur=0;
+const N=slides.length;
+
+for(let i=0;i<N;i++){
+  const d=document.createElement('div');
+  d.className='dot'+(i===0?' active':'');
+  d.onclick=()=>go(i-cur);
+  dots.appendChild(d);
+}
+
+function go(delta){
+  const next=Math.max(0,Math.min(N-1,cur+delta));
+  if(next===cur)return;
+  slides[cur].classList.add('exit');
+  slides[cur].classList.remove('active');
+  setTimeout(()=>slides[cur-delta<=0?Math.max(0,cur):cur].classList.remove('exit'),420);
+  cur=next;
+  slides[cur].classList.add('active');
+  slides[cur].classList.remove('exit');
+  document.querySelectorAll('.dot').forEach((d,i)=>d.classList.toggle('active',i===cur));
+  counter.textContent=`${cur+1} / ${N}`;
+  prevBtn.disabled=cur===0;
+  nextBtn.disabled=cur===N-1;
+}
+
+document.addEventListener('keydown',e=>{
+  if(e.key==='ArrowRight'||e.key==='ArrowDown')go(1);
+  if(e.key==='ArrowLeft'||e.key==='ArrowUp')go(-1);
+});
+</script>
+</body>
+</html>

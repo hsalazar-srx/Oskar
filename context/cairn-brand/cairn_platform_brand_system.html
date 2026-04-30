@@ -1,0 +1,409 @@
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+.section { margin-bottom: 2.5rem; }
+.section-label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+  margin-bottom: 1rem;
+  padding-left: 2px;
+}
+.card {
+  background: var(--color-background-primary);
+  border: 0.5px solid var(--color-border-tertiary);
+  border-radius: var(--border-radius-lg);
+  padding: 20px 22px;
+}
+.card + .card { margin-top: 10px; }
+
+.wordmark-wrap {
+  background: var(--color-background-secondary);
+  border-radius: var(--border-radius-lg);
+  padding: 2rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2rem;
+}
+.wordmark-dark {
+  background: #1a1a18;
+  border-radius: var(--border-radius-lg);
+  padding: 2rem 3rem;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.wordmark-light {
+  background: #f8f7f3;
+  border-radius: var(--border-radius-lg);
+  padding: 2rem 3rem;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.wm-text-dark {
+  font-size: 28px;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  color: #f0ede6;
+}
+.wm-text-light {
+  font-size: 28px;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  color: #1a1a18;
+}
+.wm-sub {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.wm-sub-dark { color: #6b6a63; }
+.wm-sub-light { color: #888780; }
+
+.tagline-main {
+  font-size: 22px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  line-height: 1.3;
+  margin-bottom: 6px;
+  letter-spacing: -0.02em;
+}
+.tagline-rationale {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+.tagline-context {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-tertiary);
+  margin-bottom: 4px;
+}
+
+.module-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0,1fr));
+  gap: 10px;
+}
+.module-card {
+  background: var(--color-background-primary);
+  border: 0.5px solid var(--color-border-tertiary);
+  border-radius: var(--border-radius-lg);
+  padding: 16px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.module-card:hover { border-color: var(--color-border-secondary); }
+.stone-mark {
+  width: 32px;
+  height: 32px;
+  margin-bottom: 10px;
+}
+.module-name {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  margin-bottom: 3px;
+}
+.module-full {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  margin-bottom: 8px;
+  letter-spacing: 0.02em;
+}
+.module-desc {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+.palette-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+.swatch-wrap { display: flex; flex-direction: column; align-items: center; gap: 6px; flex: 1; }
+.swatch {
+  width: 100%;
+  height: 48px;
+  border-radius: var(--border-radius-md);
+}
+.swatch-name { font-size: 11px; color: var(--color-text-tertiary); text-align: center; }
+.swatch-hex { font-size: 10px; color: var(--color-text-tertiary); text-align: center; font-family: var(--font-mono); }
+
+.voice-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.voice-card {
+  background: var(--color-background-secondary);
+  border-radius: var(--border-radius-md);
+  padding: 14px 16px;
+}
+.voice-label {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-tertiary);
+  margin-bottom: 6px;
+}
+.voice-text {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  font-style: italic;
+}
+
+.explore-btn {
+  margin-top: 12px;
+  font-size: 12px;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-radius: var(--border-radius-md);
+  border: 0.5px solid var(--color-border-secondary);
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+.explore-btn:hover { background: var(--color-background-secondary); }
+</style>
+
+<div style="padding: 0.5rem 0 2rem;">
+
+  <div class="section">
+    <div class="section-label">Wordmark</div>
+    <div class="wordmark-wrap">
+      <div class="wordmark-dark">
+        <svg width="36" height="42" viewBox="0 0 36 42" fill="none">
+          <rect x="10" y="32" width="16" height="8" rx="2" fill="#5DCAA5"/>
+          <rect x="7"  y="22" width="22" height="8" rx="2" fill="#3C3489"/>
+          <rect x="4"  y="12" width="28" height="8" rx="2" fill="#534AB7"/>
+          <rect x="8"  y="2"  width="20" height="8" rx="2" fill="#7F77DD"/>
+        </svg>
+        <div>
+          <div class="wm-text-dark">Cairn</div>
+          <div class="wm-sub wm-sub-dark">engineering intelligence platform</div>
+        </div>
+      </div>
+      <div class="wordmark-light">
+        <svg width="36" height="42" viewBox="0 0 36 42" fill="none">
+          <rect x="10" y="32" width="16" height="8" rx="2" fill="#1D9E75"/>
+          <rect x="7"  y="22" width="22" height="8" rx="2" fill="#3C3489"/>
+          <rect x="4"  y="12" width="28" height="8" rx="2" fill="#534AB7"/>
+          <rect x="8"  y="2"  width="20" height="8" rx="2" fill="#7F77DD"/>
+        </svg>
+        <div>
+          <div class="wm-text-light">Cairn</div>
+          <div class="wm-sub wm-sub-light">engineering intelligence platform</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Taglines</div>
+
+    <div class="card">
+      <div class="tagline-context">Primary — all audiences</div>
+      <div class="tagline-main">Every stone in its place.</div>
+      <div class="tagline-rationale">Short enough to live on a login screen. Implies intentionality, structure, and the idea that nothing is ad hoc — every part, every change, every approval has a defined position in the workflow.</div>
+    </div>
+
+    <div class="card">
+      <div class="tagline-context">Engineering audience</div>
+      <div class="tagline-main">Change it once. Know it everywhere.</div>
+      <div class="tagline-rationale">Speaks directly to the ECN pain point — today a change ripples through email threads, spreadsheets, and a legacy portal that cannot be extended. Cairn makes one approved change propagate to every affected BOM with full audit trail and ISO 13485-compliant traceability.</div>
+    </div>
+
+    <div class="card">
+      <div class="tagline-context">Procurement / supply chain</div>
+      <div class="tagline-main">Know what you need before you need it.</div>
+      <div class="tagline-rationale">Live pricing and availability from DigiKey, Mouser, Arrow, and Element14 — cached, normalised, and enriched against the M3 part master. Not just price lookup: EOL risk, alternate sourcing, and BOM impact before a PO is raised.</div>
+    </div>
+
+    <div class="card">
+      <div class="tagline-context">Leadership / Dream Factory framing</div>
+      <div class="tagline-main">The engineering pillar of Dream Factory.</div>
+      <div class="tagline-rationale">Cairn is not a replacement tool. It is the engineering workflow and intelligence pillar of the Scanfil APAC Dream Factory 2026 programme — and the platform foundation for MES integration, Data Warehouse, EDI/RPA, and predictive quality initiatives that follow.</div>
+    </div>
+
+  </div>
+
+  <div class="section">
+    <div class="section-label">Modules — the stones of Cairn</div>
+    <div class="module-grid">
+
+      <div class="module-card" onclick="sendPrompt('Design the Cairn Ledger module in detail — data model, key screens, and M3 integration points')">
+        <svg class="stone-mark" viewBox="0 0 32 32">
+          <rect x="4" y="20" width="24" height="10" rx="3" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+          <rect x="8" y="12" width="16" height="8"  rx="2" fill="#9FE1CB" stroke="#0F6E56" stroke-width="0.5"/>
+          <rect x="11" y="6"  width="10" height="6"  rx="2" fill="#5DCAA5" stroke="#0F6E56" stroke-width="0.5"/>
+        </svg>
+        <div class="module-name">Ledger</div>
+        <div class="module-full">Bill of Materials</div>
+        <div class="module-desc">Multi-level BOM management with M3 part master sync (MPDHED, MPDMAT), revision history, and live pricing enrichment. The version-controlled record of what gets built.</div>
+      </div>
+
+      <div class="module-card" onclick="sendPrompt('Design the Cairn Shift module in detail — ECN workflow, approval routing, and M3 integration points')">
+        <svg class="stone-mark" viewBox="0 0 32 32">
+          <rect x="4" y="20" width="24" height="10" rx="3" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+          <rect x="8" y="12" width="16" height="8"  rx="2" fill="#CECBF6" stroke="#534AB7" stroke-width="0.5"/>
+          <rect x="11" y="6"  width="10" height="6"  rx="2" fill="#AFA9EC" stroke="#534AB7" stroke-width="0.5"/>
+        </svg>
+        <div class="module-name">Shift</div>
+        <div class="module-full">Engineering Change Notes</div>
+        <div class="module-desc">13-status ECN state machine with 16 configurable approval roles. Human-in-the-loop — no Movex write without explicit approval. BOM impact propagates automatically on close. Replaces Stargile.</div>
+      </div>
+
+      <div class="module-card" onclick="sendPrompt('Design the Cairn Vein module in detail — supplier data, component API integration, and sourcing workflows')">
+        <svg class="stone-mark" viewBox="0 0 32 32">
+          <rect x="4" y="20" width="24" height="10" rx="3" fill="#FAECE7" stroke="#993C1D" stroke-width="0.5"/>
+          <rect x="8" y="12" width="16" height="8"  rx="2" fill="#F5C4B3" stroke="#993C1D" stroke-width="0.5"/>
+          <rect x="11" y="6"  width="10" height="6"  rx="2" fill="#F0997B" stroke="#993C1D" stroke-width="0.5"/>
+        </svg>
+        <div class="module-name">Vein</div>
+        <div class="module-full">Supplier & Component Data</div>
+        <div class="module-desc">Async multi-distributor API fan-out — DigiKey, Mouser, Arrow, Element14 — with Redis cache and per-supplier circuit breaker. Normalised pricing and availability that feeds Ledger and Shift. Replaces PLMServer APIManager entirely.</div>
+      </div>
+
+      <div class="module-card" onclick="sendPrompt('Design the Cairn Trace module in detail — audit trail, lineage, and compliance reporting')">
+        <svg class="stone-mark" viewBox="0 0 32 32">
+          <rect x="4" y="20" width="24" height="10" rx="3" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+          <rect x="8" y="12" width="16" height="8"  rx="2" fill="#FAC775" stroke="#854F0B" stroke-width="0.5"/>
+          <rect x="11" y="6"  width="10" height="6"  rx="2" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5"/>
+        </svg>
+        <div class="module-name">Trace</div>
+        <div class="module-full">Audit & Lineage</div>
+        <div class="module-desc">Immutable SHA-256 hash chain across every ECN state transition, BOM revision, and supplier record change. ISO 13485-compliant lineage. Queryable by part, ECN, or date range. Audit-ready export.</div>
+      </div>
+
+      <div class="module-card" onclick="sendPrompt('Design the Cairn Signal module in detail — alerts, EOL monitoring, and supply risk notifications')">
+        <svg class="stone-mark" viewBox="0 0 32 32">
+          <rect x="4" y="20" width="24" height="10" rx="3" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+          <rect x="8" y="12" width="16" height="8"  rx="2" fill="#B5D4F4" stroke="#185FA5" stroke-width="0.5"/>
+          <rect x="11" y="6"  width="10" height="6"  rx="2" fill="#85B7EB" stroke="#185FA5" stroke-width="0.5"/>
+        </svg>
+        <div class="module-name">Signal</div>
+        <div class="module-full">Alerts & Risk Intelligence</div>
+        <div class="module-desc">EOL alerts, price spike detection, PCN notifications, and supply disruption signals — surfaced before they become procurement emergencies. AI-assisted alternate part suggestions mapped to the approved supplier list.</div>
+      </div>
+
+      <div class="module-card" onclick="sendPrompt('Design the Cairn Core module — the M3 integration layer and internal part master sync')">
+        <svg class="stone-mark" viewBox="0 0 32 32">
+          <rect x="4" y="20" width="24" height="10" rx="3" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+          <rect x="8" y="12" width="16" height="8"  rx="2" fill="#D3D1C7" stroke="#5F5E5A" stroke-width="0.5"/>
+          <rect x="11" y="6"  width="10" height="6"  rx="2" fill="#B4B2A9" stroke="#5F5E5A" stroke-width="0.5"/>
+        </svg>
+        <div class="module-name">Core</div>
+        <div class="module-full">M3 Integration & Part Master</div>
+        <div class="module-desc">The foundation stone. Bidirectional Movex sync (MITMAS, MIPUR, MPDHED, MPDMAT). IPN → MPN mapping, approved supplier lists, and standard cost write-back from market data. Movex is always the source of truth — Core enforces it.</div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Color palette</div>
+    <div class="card">
+      <div class="palette-row">
+        <div class="swatch-wrap">
+          <div class="swatch" style="background:#1a1a18;"></div>
+          <div class="swatch-name">Basalt</div>
+          <div class="swatch-hex">#1a1a18</div>
+        </div>
+        <div class="swatch-wrap">
+          <div class="swatch" style="background:#3C3489;"></div>
+          <div class="swatch-name">Slate</div>
+          <div class="swatch-hex">#3C3489</div>
+        </div>
+        <div class="swatch-wrap">
+          <div class="swatch" style="background:#7F77DD;"></div>
+          <div class="swatch-name">Lichen</div>
+          <div class="swatch-hex">#7F77DD</div>
+        </div>
+        <div class="swatch-wrap">
+          <div class="swatch" style="background:#1D9E75;"></div>
+          <div class="swatch-name">Moss</div>
+          <div class="swatch-hex">#1D9E75</div>
+        </div>
+        <div class="swatch-wrap">
+          <div class="swatch" style="background:#D3D1C7;"></div>
+          <div class="swatch-name">Fieldstone</div>
+          <div class="swatch-hex">#D3D1C7</div>
+        </div>
+        <div class="swatch-wrap">
+          <div class="swatch" style="background:#f8f7f3;"></div>
+          <div class="swatch-name">Chalk</div>
+          <div class="swatch-hex">#f8f7f3</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Voice & tone</div>
+    <div class="voice-row">
+      <div class="voice-card">
+        <div class="voice-label">What Cairn sounds like</div>
+        <div class="voice-text">"3 components in this BOM are approaching end-of-life. Signal has identified 2 qualified alternates for each. Review before your next build cycle."</div>
+      </div>
+      <div class="voice-card">
+        <div class="voice-label">What Cairn does not sound like</div>
+        <div class="voice-text">"Warning: Potential supply chain disruption detected! Immediate action required for optimal procurement outcomes across your component portfolio."</div>
+      </div>
+      <div class="voice-card">
+        <div class="voice-label">On ECN approval</div>
+        <div class="voice-text">"ECN-0042 approved at Status 50. 7 BOMs updated in Ledger. Movex push queued — awaiting Document Controller confirmation before commit."</div>
+      </div>
+      <div class="voice-card">
+        <div class="voice-label">On an empty state</div>
+        <div class="voice-text">"No parts flagged for review. Cairn is watching."</div>
+      </div>
+      <div class="voice-card">
+        <div class="voice-label">On a Movex write</div>
+        <div class="voice-text">"Movex updated. PDS002MI AddComponent confirmed for 4 parts. Trace has the full audit record."</div>
+      </div>
+      <div class="voice-card">
+        <div class="voice-label">On a compliance query</div>
+        <div class="voice-text">"ECN-0031 — initiated by Bryan, approved by Engineering Manager and Document Controller, committed to Movex on 2026-03-14. Full SHA-256 chain available in Trace."</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Internal usage</div>
+    <div class="card">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+        <div>
+          <div style="font-size:13px;font-weight:500;color:var(--color-text-primary);margin-bottom:6px;">Natural language in context</div>
+          <div style="font-size:13px;color:var(--color-text-secondary);line-height:1.7;">
+            "Check it in Cairn"<br>
+            "Raise a Shift for that"<br>
+            "Pull the BOM from Ledger"<br>
+            "Vein is showing a price spike on that MPN"<br>
+            "Trace has the full audit chain"<br>
+            "Signal caught it before procurement did"<br>
+            "Core hasn't synced that part yet"
+          </div>
+        </div>
+        <div>
+          <div style="font-size:13px;font-weight:500;color:var(--color-text-primary);margin-bottom:6px;">What to avoid</div>
+          <div style="font-size:13px;color:var(--color-text-secondary);line-height:1.7;">
+            "The Cairn system" — just "Cairn"<br>
+            "Cairn platform tool" — redundant<br>
+            "Cairn BOM module" — use "Ledger"<br>
+            "Cairn ECN module" — use "Shift"<br>
+            Acronyms for module names<br>
+            "Next-gen" or "AI-powered" in UI copy<br>
+            "Stargile replacement" — Cairn is the successor
+          </div>
+        </div>
+      </div>
+    </div>
+    <button class="explore-btn" onclick="sendPrompt('Generate a Cairn platform one-pager for the Dream Factory steering committee — QSDC framing, module overview, Dream Factory alignment, and delivery roadmap through go-live')">Generate stakeholder one-pager ↗</button>
+  </div>
+
+</div>

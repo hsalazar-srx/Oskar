@@ -4,7 +4,7 @@
 > No tool-specific syntax. Readable by any LLM tool or none.
 
 This file documents the Stargile ECN data model, workflow, and Movex integration as
-recovered directly from the Stargile source code (`c:/Projects/SuperTool/Stargile_Source_Code/`).
+recovered directly from the Stargile source code (`c:/Projects/SuperTool/Stargile_Source_Code/` — SuperTool is the archived predecessor workspace; source code stays there).
 It is the authoritative reference for OSKAR ECN module design decisions.
 
 **Sources analysed:**
@@ -13,7 +13,7 @@ It is the authoritative reference for OSKAR ECN module design decisions.
 - `Startronics/src/java/com/startronics/ecn/` — business logic, rules, service classes
 - `2016-12-22 Branko/Nick kick-off transcript`
 - `2018-04-17 Branko session (items, BOMs, routes)`
-- `SuperTool/graphify-out2/GRAPH_REPORT.md` — AST graph analysis: 424 files, 4146 nodes, 5057 edges, 173 communities (2026-04-10)
+- `c:/Projects/SuperTool/graphify-out2/GRAPH_REPORT.md` — AST graph analysis: 424 files, 4146 nodes, 5057 edges, 173 communities (2026-04-10)
 
 ---
 
@@ -317,7 +317,7 @@ facility-level item warehouse management in Iteration 1 — this is Phase 2 scop
 ---
 ## 8. Graph Analysis Findings (2026-04-10)
 
-Source: `SuperTool/graphify-out2/GRAPH_REPORT.md` — AST analysis of full 424-file Stargile codebase.
+Source: `c:/Projects/SuperTool/graphify-out2/GRAPH_REPORT.md` — AST analysis of full 424-file Stargile codebase.
 These findings extend and correct the earlier static source analysis in Sections 1–7.
 
 ---

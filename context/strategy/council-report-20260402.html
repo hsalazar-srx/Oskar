@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Council Report — OSKAR Platform Strategy</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8f9fa; color: #1a1a2e; line-height: 1.65; font-size: 15px; }
+  .container { max-width: 900px; margin: 0 auto; padding: 40px 24px 80px; }
+
+  /* Header */
+  .header { background: #1a1a2e; color: #fff; border-radius: 12px; padding: 36px 40px; margin-bottom: 32px; }
+  .header-label { font-size: 11px; text-transform: uppercase; letter-spacing: 2px; color: #7c8db5; margin-bottom: 8px; }
+  .header h1 { font-size: 22px; font-weight: 700; margin-bottom: 12px; }
+  .header-meta { font-size: 13px; color: #a0aec0; }
+  .question-box { background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 16px 20px; margin-top: 20px; font-size: 14px; color: #e2e8f0; line-height: 1.6; }
+
+  /* Verdict */
+  .verdict { background: #fff; border-radius: 12px; padding: 36px 40px; margin-bottom: 24px; border: 1px solid #e2e8f0; }
+  .verdict h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 2px; color: #7c8db5; margin-bottom: 24px; }
+  .verdict-section { margin-bottom: 28px; }
+  .verdict-section:last-child { margin-bottom: 0; }
+  .verdict-section h3 { font-size: 16px; font-weight: 700; color: #1a1a2e; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 2px solid #e2e8f0; }
+  .verdict-section h3.agree { border-color: #10b981; color: #065f46; }
+  .verdict-section h3.clash { border-color: #f59e0b; color: #92400e; }
+  .verdict-section h3.blind { border-color: #8b5cf6; color: #4c1d95; }
+  .verdict-section h3.rec { border-color: #2563eb; color: #1e3a8a; }
+  .verdict-section h3.one { border-color: #ef4444; color: #7f1d1d; }
+  .verdict-section p { margin-bottom: 10px; }
+  .verdict-section p:last-child { margin-bottom: 0; }
+  .verdict-section strong { font-weight: 600; }
+
+  .one-thing { background: #fff7ed; border: 2px solid #f59e0b; border-radius: 10px; padding: 20px 24px; margin-top: 8px; font-size: 15px; line-height: 1.6; }
+
+  /* Agreement grid */
+  .agreement-card { background: #fff; border-radius: 12px; padding: 28px 32px; margin-bottom: 24px; border: 1px solid #e2e8f0; }
+  .agreement-card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 2px; color: #7c8db5; margin-bottom: 20px; }
+  .advisor-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 20px; }
+  .advisor-cell { border-radius: 8px; padding: 10px 8px; text-align: center; font-size: 12px; font-weight: 600; }
+  .advisor-cell .name { font-size: 11px; margin-bottom: 4px; }
+  .advisor-cell .stance { font-size: 10px; font-weight: 400; margin-top: 4px; line-height: 1.3; }
+  .cell-warn { background: #fef3c7; border: 1px solid #fcd34d; color: #92400e; }
+  .cell-caution { background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; }
+  .cell-expand { background: #ecfdf5; border: 1px solid #6ee7b7; color: #065f46; }
+  .cell-exec { background: #eff6ff; border: 1px solid #93c5fd; color: #1e3a8a; }
+  .cell-outside { background: #fdf4ff; border: 1px solid #d8b4fe; color: #581c87; }
+
+  /* Collapsible sections */
+  .collapsible { background: #fff; border-radius: 12px; border: 1px solid #e2e8f0; margin-bottom: 12px; overflow: hidden; }
+  .collapsible summary { padding: 16px 20px; cursor: pointer; font-weight: 600; font-size: 14px; list-style: none; display: flex; justify-content: space-between; align-items: center; user-select: none; }
+  .collapsible summary::-webkit-details-marker { display: none; }
+  .collapsible summary::after { content: '▼'; font-size: 11px; color: #9ca3af; transition: transform 0.2s; }
+  .collapsible[open] summary::after { transform: rotate(180deg); }
+  .collapsible summary:hover { background: #f9fafb; }
+  .collapsible-body { padding: 0 20px 20px; border-top: 1px solid #f3f4f6; padding-top: 16px; }
+  .collapsible-body p { margin-bottom: 8px; font-size: 14px; line-height: 1.65; }
+  .collapsible-body p:last-child { margin-bottom: 0; }
+  .collapsible-body strong { font-weight: 600; }
+  .collapsible-body em { font-style: italic; color: #6b7280; }
+
+  .advisor-tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-bottom: 10px; }
+  .tag-contrarian { background: #fef2f2; color: #991b1b; border: 1px solid #fca5a5; }
+  .tag-firstprinciples { background: #fefce8; color: #854d0e; border: 1px solid #fde047; }
+  .tag-expansionist { background: #f0fdf4; color: #166534; border: 1px solid #86efac; }
+  .tag-outsider { background: #fdf4ff; color: #6b21a8; border: 1px solid #d8b4fe; }
+  .tag-executor { background: #eff6ff; color: #1e40af; border: 1px solid #93c5fd; }
+
+  .review-item { border-left: 3px solid #e2e8f0; padding-left: 14px; margin-bottom: 14px; font-size: 14px; }
+  .review-item:last-child { margin-bottom: 0; }
+  .review-q { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #9ca3af; margin-bottom: 4px; }
+
+  .section-header { font-size: 13px; text-transform: uppercase; letter-spacing: 2px; color: #9ca3af; margin-bottom: 12px; margin-top: 8px; }
+
+  /* Footer */
+  .footer { text-align: center; color: #9ca3af; font-size: 12px; margin-top: 48px; }
+  .footer a { color: #6b7280; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-label">LLM Council Report</div>
+    <h1>OSKAR Engineering Intelligence Platform — Strategy Review</h1>
+    <div class="header-meta">Scanfil APAC Manufacturing &nbsp;·&nbsp; April 2, 2026 &nbsp;·&nbsp; 5 advisors · 5 peer reviewers · 1 chairman</div>
+    <div class="question-box">
+      <strong>Question:</strong> Is the OSKAR platform strategy a good strategy? — Replacing Stargile (Java ECN) and PLMServer (PHP BOM/supplier intelligence) with a unified Python/FastAPI + React platform. 24-week programme. ISO 13485-regulated. 7–8 engineers. 2 sites in Malaysia.
+    </div>
+  </div>
+
+  <!-- Chairman Verdict -->
+  <div class="verdict">
+    <h2>Chairman's Verdict</h2>
+
+    <div class="verdict-section">
+      <h3 class="agree">Where the Council Agrees</h3>
+      <p><strong>The timeline is fiction.</strong> Every advisor, from different angles, arrived at the same conclusion: 24 weeks to replace two production-critical systems, validate under ISO 13485, integrate with a live ERP, and ramp a team on a new stack is not a plan — it is an aspiration dressed as a schedule. Without a 4–6 week shadow mode period explicitly budgeted, the number is made up.</p>
+      <p><strong>ISO 13485 validation is not a Phase 4 activity.</strong> The validation protocol must precede application code, not follow it. The cost of failure is not a project delay — it is an audit finding or a medical device non-conformance. No advisor disagreed on this point.</p>
+      <p><strong>The ERP adapter pattern is premature generalization.</strong> You have Movex. Build for Movex. Abstract when you have a second ERP. Multi-ERP abstraction as a sprint-one priority is scope-creep baked into the foundation before anything ships.</p>
+      <p><strong>The in-flight ECN problem is real and unaddressed.</strong> You cannot have two systems of record simultaneously during cutover. The migration plan for live change orders is where this project will actually succeed or fail — and it is not addressed in the proposal.</p>
+    </div>
+
+    <div class="verdict-section">
+      <h3 class="clash">Where the Council Clashes</h3>
+      <p><strong>Is OSKAR the right level of intervention, or is it solving a latency problem with a platform programme?</strong> The First Principles Thinker argued the 13-minute supplier query may be a data access problem, not an architecture problem. The Executor accepted the programme as the right frame. Both sides have merit — and neither produced evidence. That gap is actionable: run the performance spike before committing.</p>
+      <p><strong>Is the Expansionist's SaaS framing a vision or a distraction?</strong> The Expansionist argued ISO 13485 compliance is a moat and the ERP adapter is a multi-tenant foundation. Every peer reviewer called this the biggest blind spot in the council. The critique is precise: the team has no product management, no sales motion, no multi-tenant security posture, and has not shipped v1. The SaaS framing should not influence architectural or timeline decisions for this programme.</p>
+    </div>
+
+    <div class="verdict-section">
+      <h3 class="blind">Blind Spots the Council Caught</h3>
+      <p><strong>Data migration was missed by all five advisors and caught by all five peer reviewers.</strong> Stargile and PLMServer contain years of ECN history, validated BOMs, and change orders. Under ISO 13485, migrating that data is not an ETL job — it is a validated migration with full audit trail integrity requirements. This is a first-class workstream that must be scoped, resourced, and validated separately from the application build. It was not mentioned once in the original advisory round.</p>
+      <p><strong>Human change management and user adoption were missed by all five advisors.</strong> Engineers keeping shadow spreadsheets during cutover is a compliance disaster. A technically superior system that engineers route around is worse than a 13-minute query. Who is responsible for change management? Is there a period where legacy systems are explicitly prohibited? These questions are absent from the proposal.</p>
+    </div>
+
+    <div class="verdict-section">
+      <h3 class="rec">The Recommendation</h3>
+      <p><strong>Proceed — but not as currently scoped. Restructure into three gates before committing the full 24-week programme.</strong></p>
+      <p><strong>Gate 1 (weeks 1–4):</strong> Run the First Principles spike. Wire a FastAPI service to existing data sources. Hit the supplier query performance target. This either validates the migration premise or reveals targeted optimisation is sufficient. Do this before a single line of OSKAR application code is written.</p>
+      <p><strong>Gate 2 (weeks 1–4, parallel):</strong> Draft the ISO 13485 validation protocol and the data migration specification before any application code. Assign explicit ownership to a named person. If no one can own it, the programme cannot proceed without external regulatory resource.</p>
+      <p><strong>Gate 3 (week 5 decision):</strong> If the spike succeeds and validation ownership is confirmed, restructure the plan to include: shadow mode period (4–6 weeks parallel operation before cutover), data migration as a parallel workstream, a change management and user adoption plan, and a hard rule that multi-ERP abstraction is out of scope for v1.</p>
+      <p>The strategy is sound. The plan is not yet ready to execute.</p>
+    </div>
+
+    <div class="verdict-section">
+      <h3 class="one">The One Thing to Do First</h3>
+      <div class="one-thing">
+        Before writing a single line of OSKAR application code, assign one named engineer to draft the ISO 13485 validation protocol and the data migration specification. Not a committee. Not a future task. One person, accountable, with a two-week deadline to produce a first draft of both documents. Everything else — technology choices, timeline, team allocation — is downstream of whether those two documents are credible. If they are, the programme has a foundation. If they cannot be written, the programme cannot be safely run.
+      </div>
+    </div>
+  </div>
+
+  <!-- Advisor Alignment Visual -->
+  <div class="agreement-card">
+    <h2>Advisor Positions at a Glance</h2>
+    <div class="advisor-grid">
+      <div class="advisor-cell cell-warn">
+        <div class="name">Contrarian</div>
+        ⚠️
+        <div class="stance">Proceed with major restructure — timeline, validation ownership, in-flight ECNs all unaddressed</div>
+      </div>
+      <div class="advisor-cell cell-caution">
+        <div class="name">First Principles</div>
+        🔍
+        <div class="stance">Wrong level of intervention — prove legacy incapability before committing 24 weeks</div>
+      </div>
+      <div class="advisor-cell cell-expand">
+        <div class="name">Expansionist</div>
+        🚀
+        <div class="stance">Build it right — then ask if you're sitting on a SaaS product for all CEMs</div>
+      </div>
+      <div class="advisor-cell cell-outside">
+        <div class="name">Outsider</div>
+        👁️
+        <div class="stance">Jargon hides the user value story; two simultaneous replacements in regulated env is alarming</div>
+      </div>
+      <div class="advisor-cell cell-exec">
+        <div class="name">Executor</div>
+        ⚡
+        <div class="stance">Executable — but sequencing is wrong; shadow mode and Python skill audit must come first</div>
+      </div>
+    </div>
+    <p style="font-size:13px;color:#6b7280;"><strong>Consensus:</strong> Timeline unrealistic · ISO validation must be sprint-1 · In-flight ECN gap is critical · Data migration overlooked · Change management absent</p>
+  </div>
+
+  <!-- Advisor Responses (collapsible) -->
+  <div class="section-header">Advisor Responses</div>
+
+  <details class="collapsible">
+    <summary><span class="advisor-tag tag-contrarian">The Contrarian</span> &nbsp; Timeline is a wish list; ERP adapter is premature; in-flight ECNs unaddressed</summary>
+    <div class="collapsible-body">
+      <p>The 24-week timeline is the first thing I'd attack. You're replacing two production-critical systems, adding ISO 13485 IQ/OQ/PQ validation, integrating with a live ERP, and shipping a new Python/FastAPI stack — with 7–8 engineers who presumably have day jobs supporting the systems you're replacing. That's not a programme plan, that's a wish list.</p>
+      <p>The IQ/OQ/PQ requirement deserves more scrutiny than it's getting. ISO 13485 software validation for a system touching medical device BOMs and change workflows isn't a checkbox at week 22. It's a documentation and evidence burden that will bleed into every sprint. Who owns it? Is there a dedicated regulatory engineer or is this falling on the same team writing FastAPI routes?</p>
+      <p>The ERP adapter pattern concerns me. "Multi-ERP support" is a classic scope-creep vector baked into the architecture before you've shipped anything. You have Movex. Build for Movex. Abstract later when you have a second ERP. Every hour spent on adapter generalization is an hour not spent making the Movex integration bulletproof.</p>
+      <p>The async supplier API target of under 90 seconds sounds impressive until you ask: what happens when one supplier API times out? Parallel async failures in a regulated environment have a way of producing inconsistent BOM states that are very expensive to audit.</p>
+      <p>The deepest question no one is asking: what happens to live ECNs mid-migration? You cannot have two systems of record simultaneously during cutover. The migration plan for in-flight change orders is where this project will actually succeed or fail, and I don't see it addressed.</p>
+    </div>
+  </details>
+
+  <details class="collapsible">
+    <summary><span class="advisor-tag tag-firstprinciples">First Principles Thinker</span> &nbsp; You're asking the wrong question — prove the systems are broken first</summary>
+    <div class="collapsible-body">
+      <p><strong>The question being asked is wrong.</strong> "Is this a good strategy?" assumes the problem is <em>what to build</em>. The actual problem is whether the root cause justifies a 24-week greenfield programme.</p>
+      <p>What is actually broken? ECN workflow is slow and disconnected from BOM data. Supplier intelligence takes 13+ minutes. These are latency and integration problems — not architecture problems.</p>
+      <p>Does a new platform solve that? Maybe. But so would an adapter layer over the existing systems, or targeted API additions to Stargile. You haven't demonstrated the legacy systems are fundamentally incapable — only that they're slow and siloed.</p>
+      <p>The real question: is the 13-minute supplier query a symptom of bad architecture, or bad data access patterns? If it's the latter, you fix the query. You don't replace the system.</p>
+      <p>What first principles demands: prove the existing systems are structurally incapable before committing 24 weeks. Run one parallel spike — wire a FastAPI service to your existing data sources and hit your &lt;90s target. If you can, the migration argument weakens significantly. If you can't, you've found the real constraint.</p>
+    </div>
+  </details>
+
+  <details class="collapsible">
+    <summary><span class="advisor-tag tag-expansionist">The Expansionist</span> &nbsp; OSKAR is undersized — this could be a SaaS product for all CEMs globally</summary>
+    <div class="collapsible-body">
+      <p>OSKAR is undersized for what it could become. You're building an Engineering Intelligence Platform for one contract manufacturer, but the real prize is that this exact pain point — ECN workflow chaos, BOM fragmentation, 13-minute supplier queries — exists at every contract electronics manufacturer globally. Scanfil APAC is your first customer and your proof-of-concept simultaneously.</p>
+      <p>The ERP adapter pattern is the tell. Someone on this team already intuited that the architecture shouldn't be Movex-specific. That's not just a technical hedge — that's the foundation of a multi-tenant SaaS product. The 24-week programme builds the thing; the 25th week is when you ask whether this gets licensed to the next CEM.</p>
+      <p>ISO 13485 compliance is a moat, not a burden. Most engineering software vendors paper over medical device validation requirements. OSKAR will have IQ/OQ/PQ baked in from day one. That's a genuine differentiator that takes competitors years to retrofit.</p>
+      <p>The AI agent integration via MAS v2.0 is where the compounding happens. Supplier intelligence that learns across ECN cycles, change-impact prediction before an engineer submits, automated regulatory pre-checks — none of that exists in the legacy tools. Once you have six months of ECN data flowing through OSKAR, the intelligence layer becomes the product.</p>
+    </div>
+  </details>
+
+  <details class="collapsible">
+    <summary><span class="advisor-tag tag-outsider">The Outsider</span> &nbsp; Jargon-dense document; two simultaneous replacements in a regulated env is alarming</summary>
+    <div class="collapsible-body">
+      <p>The proposal is written entirely in the language of its authors. Every assumption is buried in jargon that only makes sense if you already believe the conclusion. "Engineering Intelligence Platform." "MAS v2.0 AI agents." "ERP adapter pattern." An outsider reads this and asks: what does any of this actually do for the person on the shop floor who needs to change a BOM today? That question is never answered directly.</p>
+      <p>Here is what stands out as genuinely alarming from zero context: you are replacing two working production systems simultaneously. For a team of 7–8 engineers. Over 24 weeks. In a regulated environment where the cost of a failed change isn't inconvenience — it's an ISO 13485 audit finding or a medical device non-conformance.</p>
+      <p>The &lt;90 second performance target reads like a vanity metric. Is 13 minutes actually a problem users complain about? Or is it a number that sounds bad in a pitch deck?</p>
+      <p>"Draft for Management Review" with 24-week commitment already baked in is a red flag. Scope has solidified before approval. That means the review is ceremonial.</p>
+      <p>The hardest question nobody is asking: what happens in week 14 when the old systems are half-migrated and a customer requires an urgent engineering change?</p>
+    </div>
+  </details>
+
+  <details class="collapsible">
+    <summary><span class="advisor-tag tag-executor">The Executor</span> &nbsp; Executable in principle — but sequencing is wrong and shadow mode is missing</summary>
+    <div class="collapsible-body">
+      <p>The strategy passes the Monday morning test because you can decompose it immediately: Week 1 is read-only API adapters against Movex. No writes, no risk, no disruption to live ECN. Engineers can start that tomorrow.</p>
+      <p>But here's what actually matters for execution: you cannot run a 24-week big-bang replacement. The only executable path is feature-parity shadow mode first — OSKAR receives all the same inputs, produces outputs, you compare them against legacy for 4–6 weeks before anyone cuts over. If you don't budget this into the 24 weeks explicitly, the timeline is fiction.</p>
+      <p>Python/FastAPI for 7 engineers who currently maintain Java and PHP — that's a real skill gap. Week 1 also needs to be: who can write production Python today, who needs 2 weeks of ramp?</p>
+      <p>ISO 13485 IQ/OQ/PQ is not a Phase 4 activity. It must be designed in from the first sprint or you'll rewrite half your test harnesses at week 20. Get your validation protocol drafted before a single line of application code is written.</p>
+      <p><strong>Concrete first three actions:</strong> (1) Audit current Python capability across the 7 engineers — this week. (2) Draft the IQ/OQ/PQ validation protocol outline — before any development starts. (3) Build read-only Movex adapter with contract tests — Week 1.</p>
+    </div>
+  </details>
+
+  <!-- Peer Review Highlights (collapsible) -->
+  <div class="section-header" style="margin-top: 24px;">Peer Review Highlights</div>
+
+  <details class="collapsible">
+    <summary>Peer Review Round — Key Findings</summary>
+    <div class="collapsible-body">
+
+      <p><strong>Strongest response (unanimous — 5/5 reviewers): The Contrarian (Response D)</strong></p>
+      <p>All five peer reviewers independently selected the Contrarian as the strongest response. It identified four distinct failure modes — timeline, IQ/OQ/PQ ownership, ERP adapter scope creep, and in-flight ECN migration — each with a specific mechanism of failure, not just a flag. The question "who owns validation?" was called the sharpest single question in the council.</p>
+
+      <p style="margin-top: 16px;"><strong>Biggest blind spot (unanimous — 5/5 reviewers): The Expansionist (Response E)</strong></p>
+      <p>All five reviewers identified the Expansionist's SaaS pivot framing as the biggest blind spot. Specific critiques: the team has no product management, no sales motion, no multi-tenant security posture; compliance is a cost centre at this stage, not a competitive moat; Scanfil APAC's competitive advantage is manufacturing execution, not software; introducing multi-tenancy ambitions before v1 ships is how you get neither.</p>
+
+      <p style="margin-top: 16px;"><strong>Unanimous blind spot across all five advisors (caught by all five reviewers): Data migration</strong></p>
+      <p>Reviewers 1, 2, 4: "Data migration was not mentioned once." Reviewers 3, 5: "Historical data is the actual system of record." Years of ECN history, validated BOMs, and change orders in Stargile and PLMServer must be migrated with full audit trail integrity under ISO 13485. This is not an ETL job. It requires a validated migration workstream. Its absence from the advisory round is a critical gap.</p>
+
+      <p style="margin-top: 16px;"><strong>Second unanimous blind spot (caught by reviewers 3 and 5): Human change management</strong></p>
+      <p>Engineers keeping shadow spreadsheets during cutover creates dual-system operation — an ISO 13485 non-conformance. A technically successful migration that engineers route around is worse than the 13-minute query. Small-team platform replacements historically fail on adoption, not technology.</p>
+    </div>
+  </details>
+
+  <!-- Footer -->
+  <div class="footer">
+    <p>Council Report &nbsp;·&nbsp; Generated April 2, 2026 &nbsp;·&nbsp; OSKAR Platform Strategy v2.0</p>
+    <p style="margin-top:4px;">LLM Council methodology adapted from Andrej Karpathy &nbsp;·&nbsp; 5 advisors · 5 peer reviewers · 1 chairman</p>
+  </div>
+
+</div>
+</body>
+</html>
