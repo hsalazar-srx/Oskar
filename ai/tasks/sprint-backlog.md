@@ -1,7 +1,7 @@
 # OSKAR — Sprint Backlog
 # Source of truth for all work status.
 # oskar-state.md (gitignored) is for next-session notes only — not for tracking status.
-# Last synced: 2026-04-21
+# Last synced: 2026-05-01
 
 ---
 
@@ -126,19 +126,26 @@
 ## Sprint 2 — ECN Workflow
 
 **Pre-conditions:**
-- [ ] MMS025MI.AddAlias added to movex-rest-api (@developer-dotnet)
+- [x] ~~MMS025MI.AddAlias added to movex-rest-api~~ ✅ 2026-05-01 — MMS025MI.json confirmed present; generic routing exposes `POST /api/MMS025MI/AddAlias` automatically. No additional dotnet work needed.
 - [ ] MPDDOC drawing creation added to movex-rest-api (@developer-dotnet)
 - [ ] Sprint 1 complete
+
+**Sprint 2 pre-gate design decisions (completed before code):**
+- ✅ **ADR-009** (2026-05-01): DC single gate — SUBMITTED+DC_REVIEW removed; DC_APPROVED (25) added before Movex write; IMPLEMENTED→CLOSED automatic. `decisions/ADR-009-dc-single-gate-role-customisation.md`
+- ✅ **Migration 0006** (2026-05-01): `ecn_items.item_group VARCHAR(3)` + `ecn_items.customer_alias VARCHAR(30)` promoted from JSONB; `ecn_instances` CHECK constraint updated for ADR-009.
+- ✅ **Risk R-19** (2026-05-01): BOM-level IP inference via DigiKey/Octopart API query patterns. Scanfil management approval gate required before Stage 3 BOM tools. `ai/memory/09-known-risks-and-pitfalls.md`.
 
 **Sprint 2 scope (all ⏳):**
 - **Optimistic locking (ADR-008):** `If-Unmodified-Since` check in `ECNService.update_ecn` + `transition_ecn`; 428 if header absent, 409 if stale; OQ-40 through OQ-45 ✅ 2026-04-24
 - **Transactional Outbox:** `src/tasks/celery_app.py` + `src/tasks/movex_outbox.py`; retry 30s → 5min → 30min; DC alert attempt 3; ABANDONED + EM alert attempt 10; `advance_ecn_to_implemented` task; 23 tests ✅ 2026-04-24
 - ECN write gate: DB-layer `oskar_worker` REVOKE INSERT on `movex_outbox` + RLS on `ecn_instances` ✅ 2026-04-24 (migration 0005 — HMAC token approach superseded)
+- **Workflow machine update (ADR-009):** remove SUBMITTED/DC_REVIEW from ECNStatus; add DC_APPROVED=25; update _TRANSITIONS (remove accept/pass_to_engineering; add dc_approve + auto_close); update all guard conditions and tests
+- **Per-ECN role customisation (ADR-009):** `POST /api/v1/ecn/{id}/role-assignments`; DC-authority guard; supersede-and-insert pattern; transition history record
 - Rejection flows: restart vs proceed
-- Drawing number workflow: DC confirmation at DC_REVIEW gate
-- MPN alias: automatic `MMS025MI.AddAlias` at IMPLEMENTED
+- Drawing number workflow: DC confirmation at DC_APPROVED gate (replaces DC_REVIEW gate)
+- MPN alias: automatic `MMS025MI.AddAlias` at IMPLEMENTED (uses `ecn_items.customer_alias` + `ecn_items.item_group` as ALWQ)
 - Parallel approval block: Management Review (EM + PM + QM + SC + FN simultaneous)
-- Overdue escalation: 48h → role + manager; 96h → DC added
+- Overdue escalation: 48h → role + manager; 96h → EM added (DC escalation now triggers at DC_APPROVED, not SUBMITTED)
 - DC recovery UI: Movex Write Status Panel
 - Effectivity date fields on ECNItems
 - BOM concurrency detection before Movex write
@@ -173,7 +180,7 @@
 | LDAPS confirmation | Manal | S1-9 live test | Expected ~2026-04-24 |
 | Harbor hostname (final) | Manal | `scripts/push-image.sh` | Overdue (~2026-04-17) |
 | Linux VM provisioned | Manal | Docker deployment | Overdue (~2026-04-17) |
-| movex-rest-api: MMS025MI.AddAlias | @developer-dotnet | Sprint 2 | |
+| ~~movex-rest-api: MMS025MI.AddAlias~~ | ✅ Resolved 2026-05-01 | — | MMS025MI.json present; generic routing sufficient. No dotnet work needed. |
 | movex-rest-api: MPDDOC drawing creation | @developer-dotnet | Sprint 2 design | |
 | DBCHK_OpenECN disable at go-live | Infrastructure | G-6 | |
 | MPDDOC — MI program or direct DB2? | @developer-dotnet | Sprint 2 design | |

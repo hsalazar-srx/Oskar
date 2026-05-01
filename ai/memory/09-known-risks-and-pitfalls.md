@@ -3,8 +3,8 @@
 > **PROVIDER-AGNOSTIC — Non-Negotiable #12**
 > No tool-specific syntax. Readable by any LLM tool or none.
 
-**Version:** 1.0
-**Date:** 2026-04-13
+**Version:** 1.2
+**Date:** 2026-05-01
 **Phase:** Phase 1 Track D deliverable
 **Sources:** `context/OSKAR_Integrated_Plan_v5.1.md` §12; `ai/memory/05-stargile-ecn-reference.md` §5 (pain points); expert reviews 2026-04-10
 
@@ -29,10 +29,11 @@
 
 | R-13 | **No secrets rotation policy** | Medium | Medium | Active | PRE-11 eliminates plaintext secrets in git. Rotation policy deferred to Phase 2. **OpenBao (Linux Foundation Vault fork) evaluated 2026-04-15 — confirmed feasible on-prem (single Docker container, zero app code change, integrated Raft storage). Decision: implement in Phase 2 post-go-live as ADR-007, superseding PRE-11. Unseal key custody to be owned by Devian. Accepted risk for v1 — document in IQ sign-off.** |
 | R-14 | **Single on-prem Linux VM — no redundancy** | Medium | High | Active | Network/VM outage = total OSKAR outage. Shopfloor engineers lose ECN visibility. See §8 (manual fallback). Define standby VM procedure in Phase 2. |
-| R-15 | **WebSocket / real-time push not yet implemented** | Medium | Medium | Active | Redis DB2 stream is wired producer-side. Frontend has no SSE or WebSocket consumer yet. Sprint 2 scope — define before UI build starts. |
+| R-15 | **WebSocket / real-time push** | — | — | **Resolved — Sprint 2 (2026-05-01)** | SSE endpoint `GET /api/v1/ecn/{id}/stream` implemented via PostgreSQL LISTEN/NOTIFY (migration 0007 trigger `trg_ecn_instances_notify`). No Redis, no WebSocket. Frontend polling (15–30s) retained as automatic fallback on SSE disconnect. Raw `asyncpg.connect()` used directly (SQLAlchemy AsyncSession incompatible with LISTEN). Semaphore cap: 20 concurrent SSE connections. |
 | R-16 | **SMS / Teams notification channel not specified** | Low | Low | Deferred | Email-only currently (PRE-9). SMS and Teams are stubs. No action until email is live; escalate at Sprint 3 planning. |
 | R-17 | **DBCHK_OpenECN SQL Server job not decommissioned at go-live** | Medium | Medium | Active | Karen's open ECN email job on DBSRV must be disabled on OSKAR go-live day. Add to go-live checklist. Parallel operation during cutover is acceptable; dual-running after go-live creates confusion. Confirm SQL Server Agent access with Infrastructure. |
 | R-18 | **DBSRV replicated tables become stale before OSKAR go-live** | Low | Low | Active | `SRX_Apps.dbo.ZECNHEAD` is replicated from Stargile/ComActivity. If replication breaks before OSKAR is live, Karen loses her daily digest. OSKAR has no dependency on this path — risk is operational continuity of the existing job only. |
+| R-19 | **BOM-level IP inference via DigiKey / Octopart API query patterns** | Medium | Medium | **Active — Scanfil management approval gate required before Stage 3 BOM tools proceed** | Individual MPN lookups to external supplier APIs (DigiKey, Octopart) are low-risk — MPNs are public. However, when OSKAR systematically queries for all MPNs on a product during ECN processing, the **aggregate query pattern** reveals the BOM structure: which components are used together, at what quantities, for what product families. External API providers log queries for analytics and may retain them. A sophisticated third party observing API traffic (e.g. a supplier with access to DigiKey analytics) could infer Scanfil's assembly BOMs — a competitively sensitive asset. **Mitigation:** (1) No BOM-level external API queries until Karen/management explicitly approves the data-sharing boundary and reviews provider terms of service. (2) Only MPNs should be sent — never internal Movex item numbers (MITMAS.MMITNO) or BOM structure data. (3) Queries should be cached locally (Redis or PostgreSQL) to minimise query frequency and reduce the observable pattern. (4) Add as a Phase 3 design review gate before DigiKey/Octopart integration is activated. |
 
 ### Resolved Risks (archived)
 

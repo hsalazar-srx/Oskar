@@ -3,8 +3,8 @@
 > **PROVIDER-AGNOSTIC — Non-Negotiable #12**
 > No tool-specific syntax. Readable by any LLM tool or none.
 
-**Version:** 1.2
-**Date:** 2026-04-17
+**Version:** 1.4
+**Date:** 2026-05-01
 **Phase:** Sprint 1 — active implementation
 **Status:** Authoritative — migrations applied via `alembic upgrade head`
 **Reviewed by:** architect + security + manufacturing domain agents (2026-04-15)
@@ -32,6 +32,7 @@
 6. **Movex identifiers stored as VARCHAR.** `item_number`, `ecn_number`, `supplier_number` — never FK into a Movex table.
 7. **`facility` is first-class.** Present on `ecn_instances`, `system_role_users`, `ecn_role_assignments`, and `ecn_step_conditions`. Default `'L'` (Melbourne). Adding a new plant requires only INSERTs — zero schema migration.
 8. **`extra_data JSONB` safety valve on `ecn_instances`.** Any field discovered during POC/UAT goes here first; promoted to a proper column in the next sprint migration.
+9. **JSONB fields are holding areas, not permanent homes (ADR-010).** Any JSONB field that is queried, filtered, or displayed in the UI must be promoted to a typed column. `extra_data JSONB` and `questionnaire_data JSONB` are reserved for ZQ01–ZQ18 pending Branko validation. `agent_provenance JSONB` on `ecn_transition_history` is the sole sanctioned AI metadata JSONB — contents are opaque audit metadata, not queryable. `payload` and `result` on `agent_actions` vary by action type and remain JSONB.
 
 ---
 
@@ -48,13 +49,16 @@ A `facilities` lookup table is deferred to Phase 2. For Sprint 1, `facility` is 
 
 ## 3. Status Codes
 
-Defined as `ECNStatus` IntEnum in `src/workflow/machine.py`. 11 integer values; ARCHIVED is a flag.
+Defined as `ECNStatus` IntEnum in `src/workflow/machine.py`. 10 active integer values; ARCHIVED is a flag.
+
+> **ADR-009 (2026-05-01):** Status set reduced from 12 to 10. SUBMITTED (10) and DC_REVIEW (20)
+> removed. DC_APPROVED (25) added between MANAGEMENT_REVIEW and APPROVED.
+> Migration 0006 updates the `ecn_instances` CHECK constraint. IMPLEMENTED → CLOSED is now automatic.
 
 | Integer | Name | Terminal? | `ECNStatus` member |
 |---------|------|----------|--------------------|
 | 0 | DRAFT | No | `ECNStatus.DRAFT` |
-| 10 | SUBMITTED | No | `ECNStatus.SUBMITTED` |
-| 20 | DC_REVIEW | No | `ECNStatus.DC_REVIEW` |
+| 25 | DC_APPROVED | No | `ECNStatus.DC_APPROVED` |
 | 30 | ENGINEERING_REVIEW | No | `ECNStatus.ENGINEERING_REVIEW` |
 | 40 | MANAGEMENT_REVIEW | No | `ECNStatus.MANAGEMENT_REVIEW` |
 | 50 | APPROVED | No | `ECNStatus.APPROVED` |
@@ -65,7 +69,7 @@ Defined as `ECNStatus` IntEnum in `src/workflow/machine.py`. 11 integer values; 
 | 90 | ON_HOLD | No | `ECNStatus.ON_HOLD` |
 | — | ARCHIVED | Flag only | `is_archived=TRUE` on ecn_instances |
 
-**ARCHIVED is not a status.** It is the `is_archived=TRUE` flag, set only on CLOSED (70) records. No `ECNWorkflowMachine` transition; set directly by Admin.
+**ARCHIVED is not a status.** It is the `is_archived=TRUE` flag, set only on CLOSED (70) records. No `ECNWorkflowMachine` transition; set directly by DC.
 **Do not renumber these.** Status integers are baked into every existing row once written and baked into the `ecn_instances` CHECK constraint.
 
 ---
@@ -87,6 +91,8 @@ Tables must be created in this order to satisfy FK constraints:
 11. `system_role_users`
 12. `ecn_step_conditions`
 13. `ecn_training_acknowledgements`
+14. `ai_suggestions` ← requires ecn_instances (FK) and ecn_items (FK)
+15. `agent_actions` ← requires ecn_instances (FK)
 
 ---
 
@@ -94,7 +100,7 @@ Tables must be created in this order to satisfy FK constraints:
 
 > Generated from the authoritative schema below. FK relationships are exact.
 > `updated_at` trigger columns omitted from diagram for readability; present on `ecn_instances`, `ecn_items`, `movex_outbox`.
-> Version: 1.1 — 2026-04-17
+> Version: 1.4 — 2026-05-01 — ai_suggestions, agent_actions tables added; ecn_mpns extended (migration 0007).
 
 ```mermaid
 ---
@@ -241,6 +247,7 @@ erDiagram
         BOOLEAN     drawing_created
         VARCHAR3    procurement_group
         VARCHAR5    product_group
+        VARCHAR3    item_group
         VARCHAR3    unit_of_measure
         VARCHAR4    revision_number
         VARCHAR15   item_template
@@ -254,6 +261,7 @@ erDiagram
         VARCHAR3    business_area
         DECIMAL176  wapc
         BOOLEAN     alias_written
+        VARCHAR30   customer_alias
         VARCHAR10   effectivity_type
         DATE        effectivity_from
         JSONB       questionnaire_data
@@ -262,12 +270,20 @@ erDiagram
     }
 
     ecn_mpns {
-        UUID        id            PK
-        UUID        ecn_item_id   FK
+        UUID        id              PK
+        UUID        ecn_item_id     FK
         VARCHAR30   mpn
         VARCHAR30   manufacturer
         BOOLEAN     is_default
         BOOLEAN     alias_written
+        SMALLINT    msl_level
+        VARCHAR20   lifecycle
+        DATE        eol_date
+        SMALLINT    lead_time_weeks
+        VARCHAR50   packaging_type
+        BOOLEAN     do_not_buy
+        TIMESTAMPTZ supplier_data_at
+        VARCHAR100  alt_mpn
         TIMESTAMPTZ created_at
     }
 
@@ -324,6 +340,39 @@ erDiagram
         TIMESTAMPTZ created_at
     }
 
+    ai_suggestions {
+        UUID        id              PK
+        UUID        ecn_id          FK
+        UUID        item_id         FK
+        VARCHAR50   suggestion_type
+        VARCHAR100  provider
+        CHAR64      prompt_hash
+        TEXT        suggestion
+        DECIMAL43   confidence
+        TIMESTAMPTZ created_at
+        VARCHAR50   accepted_by
+        TIMESTAMPTZ accepted_at
+        TIMESTAMPTZ rejected_at
+    }
+
+    agent_actions {
+        UUID        id              PK
+        UUID        ecn_id          FK
+        VARCHAR100  agent_id
+        VARCHAR100  action_type
+        TEXT        description
+        JSONB       payload
+        VARCHAR20   status
+        VARCHAR20   authority_level
+        BOOLEAN     requires_human
+        VARCHAR100  proposed_by
+        VARCHAR50   reviewed_by
+        TIMESTAMPTZ reviewed_at
+        TIMESTAMPTZ executed_at
+        JSONB       result
+        TIMESTAMPTZ created_at
+    }
+
     %% ── Relationships ───────────────────────────────────────────────────
     %%   Left side = parent (one), right side = child (many)
 
@@ -335,7 +384,10 @@ erDiagram
     ecn_instances           ||--o{ ecn_movex_errors             : "has MI errors"
     ecn_instances           ||--o{ ecn_items                    : "has line items"
     ecn_instances           ||--o{ ecn_training_acknowledgements : "has training acks"
+    ecn_instances           ||--o{ ai_suggestions               : "has AI suggestions"
+    ecn_instances           ||--o{ agent_actions                : "has agent actions"
 
+    ecn_items               |o--o{ ai_suggestions               : "item AI suggestions (nullable)"
     ecn_items               ||--o{ ecn_mpns                     : "has MPN aliases"
     ecn_items               ||--o{ ecn_bom_changes              : "has BOM changes"
     ecn_items               |o--o{ movex_outbox                 : "targeted by outbox (nullable)"

@@ -6,6 +6,9 @@
 > Diagrams use Mermaid — renders in VS Code (Markdown Preview), GitHub, and Obsidian
 > (requires Mermaid plugin). Run `Ctrl+Shift+V` in VS Code to preview.
 
+**Version:** 2.0 — 2026-05-01
+**Changes:** §7 updated (SSE implemented); §10 updated (SSE row); §17–20 added (AIProvider, Agent Action Outbox, SSE flow, extended platform diagram)
+
 ---
 
 ## 1. What OSKAR Is
@@ -276,9 +279,9 @@ sequenceDiagram
 ## 7. Event Notification (ADR-007 — Redis Eliminated)
 
 > **ADR-007** (2026-04-17) removed Redis. The former Redis Streams design (F-6) is superseded.
-> Frontend uses HTTP polling; notifications use Celery + direct SMTP. If a real-time push
-> requirement ever emerges, PostgreSQL `LISTEN/NOTIFY` + FastAPI SSE is the upgrade path —
-> no new infrastructure needed. See ADR-007 for the trigger function template.
+> SSE endpoint `GET /api/v1/ecn/{id}/stream` implemented in Sprint 2 via PostgreSQL
+> LISTEN/NOTIFY (migration 0007 trigger `trg_ecn_instances_notify`). Frontend polling
+> (15–30s) retained as automatic fallback on SSE disconnect. See §19 for full SSE sequence.
 
 ```mermaid
 ---
@@ -292,6 +295,7 @@ graph LR
     ecn_svc["ECN Service<br/>status transition"]
     bom_svc["BOM Service"]
     sup_svc["Supplier Worker<br/>oskar-worker (Celery)"]
+    sse_ep["SSE endpoint<br/>GET /ecn/{id}/stream<br/>Sprint 2"]
   end
 
   subgraph Notify["Notification — Celery tasks"]
@@ -299,20 +303,23 @@ graph LR
   end
 
   subgraph FE["OSKAR Frontend"]
-    poll["HTTP polling<br/>GET /api/v1/ecn/{id}<br/>every 15–30 s"]
+    poll["HTTP polling<br/>GET /api/v1/ecn/{id}<br/>every 15–30 s (fallback)"]
+    sse_client["SSE listener<br/>Sprint 2"]
   end
 
-  subgraph Future["Future — if live-push required"]
-    ln["PostgreSQL LISTEN/NOTIFY<br/>+ FastAPI SSE endpoint<br/>(no new infrastructure)"]
+  subgraph PG["PostgreSQL"]
+    trigger["trg_ecn_instances_notify<br/>AFTER UPDATE → pg_notify"]
   end
 
   ecn_svc -->|"dispatch Celery task\n(after DB commit)"| smtp
   bom_svc -->|"dispatch Celery task"| smtp
   sup_svc -->|"dispatch Celery task"| smtp
 
-  ecn_svc -.->|"future"| ln
-  poll -->|"reads current status"| ecn_svc
+  ecn_svc -->|"UPDATE ecn_instances"| trigger
+  trigger -->|"LISTEN ecn_{id}"| sse_ep
+  sse_ep -.->|"text/event-stream"| sse_client
 
+  poll -->|"reads current status"| ecn_svc
   smtp -->|"email to approvers\n/ originator"| ext["Approvers / Originator<br/>email inbox"]
 ```
 
@@ -384,11 +391,9 @@ Redis has been removed from the OSKAR stack. All three former Redis jobs are ser
 |------------------|-------------|--------------------|
 | Celery broker (DB0) | `celery[sqlalchemy]` — PostgreSQL transport | Tens of tasks/day; PG broker adequate at this volume |
 | JTI blocklist + refresh tokens (DB1) | `jti_blocklist` + `refresh_tokens` tables | 50-user scale; UUID PK lookup sub-ms |
-| Event stream (DB2) | HTTP polling on `GET /api/v1/ecn/{id}` | Human-paced workflow; 15–30s poll invisible to users |
+| Event stream (DB2) | HTTP polling (fallback) + **SSE via pg_notify** (`GET /api/v1/ecn/{id}/stream`, Sprint 2) | **SSE implemented** — migration 0007 trigger fires AFTER UPDATE on ecn_instances |
 
 **Docker Compose stack (production):** `oskar-db` · `oskar-app` · `oskar-worker` · `oskar-frontend` — no `oskar-redis`.
-
-**Future live-push path:** If a real-time dashboard is ever required, PostgreSQL `LISTEN/NOTIFY` + FastAPI SSE is the upgrade path. No new infrastructure needed. See ADR-007 for the trigger function template.
 
 ---
 
@@ -889,3 +894,261 @@ Architecture-relevant summary:
 3. Immutable SHA-256 audit chain — every engineering event
 4. `/api/v1/` prefix from Sprint 1 Day 1
 5. `ai/` context layer is LLM-agnostic — no tool syntax inside `ai/` files
+
+---
+
+## 17. AIProvider Abstraction (ADR-010)
+
+`AIProvider` is a `typing.Protocol` in `src/adapters/ai/base.py`. Mirrors `IdentityProvider`,
+`ERPAdapter`, and `SupplierAdapter` — swap providers via `AI_PROVIDER_CLASS` env var, no
+caller code changes.
+
+| Class | Stage | Trigger |
+|-------|-------|---------|
+| `NoOpAIProvider` | **1 — Active** | Default (no env var needed) |
+| `OllamaProvider` | 2 | AI Lab provisioned on-prem |
+| `AnthropicProvider` | 2 | Data boundary approved by Karen/Scanfil Group |
+| `AzureOpenAIProvider` | 2 | Azure subscription confirmed with Maarit |
+
+```mermaid
+---
+config:
+  theme: light
+  layout: elk
+  look: classic
+---
+classDiagram
+  class AIProvider {
+    <<Protocol>>
+    +suggest_description(raw, max_len) AISuggestion
+    +check_mpn_status(mpns) list~MPNStatus~
+    +draft_ecn_title(description) AISuggestion
+    +detect_bom_risks(items) list~AISuggestion~
+  }
+  class NoOpAIProvider {
+    +suggest_description() AISuggestion
+    +check_mpn_status() list~MPNStatus~
+    model = "noop"
+    confidence = 0.0
+  }
+  class OllamaProvider {
+    <<Stage 2 — AI Lab>>
+    +base_url: str
+    +model: str
+  }
+  class AnthropicProvider {
+    <<Stage 2 — approved cloud>>
+    +api_key: str
+    +model: str
+  }
+  class AISuggestion {
+    <<frozen dataclass>>
+    +suggestion_type: str
+    +content: str
+    +confidence: float
+    +model: str
+    +prompt_hash: str
+  }
+  class MPNStatus {
+    <<frozen dataclass>>
+    +mpn: str
+    +lifecycle: str
+    +eol_date: str
+    +suggested_alternative: str
+  }
+  AIProvider <|.. NoOpAIProvider : implements
+  AIProvider <|.. OllamaProvider : implements
+  AIProvider <|.. AnthropicProvider : implements
+  AIProvider ..> AISuggestion : returns
+  AIProvider ..> MPNStatus : returns
+```
+
+**Prompt injection defence:** All external text (BOM descriptions, MPN fields from customer
+uploads) must be passed through `sanitize_for_prompt()` before inclusion in any AI prompt.
+Mandatory for all Stage 2 provider implementations. See ADR-010 for threat model and
+defence layers.
+
+---
+
+## 18. Agent Action Outbox
+
+`agent_actions` extends the Transactional Outbox pattern (ADR-002) for AI-proposed write
+actions. `requires_human BOOLEAN NOT NULL DEFAULT TRUE` enforces Non-Negotiable #2 at the
+schema level — no AI action can bypass human review.
+
+```mermaid
+---
+config:
+  theme: light
+  layout: elk
+  look: classic
+---
+stateDiagram-v2
+  note right of pending_approval
+    Agent proposes action.
+    Visible in approval UI (Stage 2).
+    Human receives notification.
+  end note
+
+  [*] --> pending_approval : Agent proposes\n(authority_level = approval_required)
+  [*] --> executing : Agent proposes\n(authority_level = autonomous)
+
+  pending_approval --> approved : Engineer approves\n[reviewed_by set]
+  pending_approval --> rejected : Engineer rejects\n[reviewed_by set]
+
+  approved --> executing : Celery picks up
+  executing --> completed : Action succeeds\n[result JSONB written]
+  executing --> failed : Action fails\n[result JSONB with error]
+
+  rejected --> [*]
+  completed --> [*]
+  failed --> [*]
+
+  note right of executing
+    Stage 1: no Celery task reads agent_actions.
+    Table exists — state machine design is locked in.
+    Stage 2 adds oskar-agent Celery worker.
+  end note
+```
+
+| | `movex_outbox` | `agent_actions` |
+|---|---|---|
+| Who creates | FastAPI (after human approval) | AI agent / MCP tool call |
+| Who executes | `oskar-worker` Celery | `oskar-agent` Celery (Stage 2) |
+| Human gate | At MANAGEMENT_REVIEW / DC_APPROVED | `pending_approval` state |
+| Non-Negotiable #2 | Enforced | Enforced (`requires_human=TRUE`) |
+| Audit chain | `ecn_transition_history` | `agent_actions.result JSONB` |
+
+---
+
+## 19. SSE Event Flow
+
+`GET /api/v1/ecn/{ecn_id}/stream` — implemented Sprint 2. Uses raw `asyncpg.connect()`
+(SQLAlchemy `AsyncSession` is incompatible with `LISTEN/NOTIFY`). Semaphore cap: 20
+concurrent connections. Keepalive ping every 25s (within IIS proxy idle timeout).
+
+```mermaid
+---
+config:
+  theme: light
+  layout: elk
+  look: classic
+---
+sequenceDiagram
+  participant FE as OSKAR Frontend
+  participant API as oskar-app (FastAPI)
+  participant PG as PostgreSQL
+  participant Worker as oskar-worker (Celery)
+
+  FE->>API: GET /api/v1/ecn/{id}/stream\n[Authorization: Bearer JWT]
+  API->>API: Validate JWT → get_current_user()
+  API->>PG: SELECT status, ecn_number, updated_at WHERE id = $1
+  PG-->>API: current row
+  API-->>FE: data: {"type":"ecn_status","status":25,...}\n\n (initial event)
+  API->>PG: LISTEN ecn_{id}
+
+  Note over FE,Worker: Engineer approves a step (separate request)
+  FE->>API: PATCH /api/v1/ecn/{id}/status {trigger: "approve_role"}
+  API->>PG: BEGIN\nUPDATE ecn_instances SET status=30\nINSERT movex_outbox\nINSERT ecn_transition_history\nCOMMIT
+  PG->>PG: trg_ecn_instances_notify fires\npg_notify('ecn_{id}', payload)
+  PG-->>API: notification received (SSE connection)
+  API-->>FE: data: {"type":"ecn_status","status":30,...}\n\n
+
+  Note over API,FE: Every 25s with no changes
+  API-->>FE: data: {"ping":true}\n\n (keepalive)
+
+  Note over FE,API: Client disconnects (browser tab closed)
+  API->>PG: UNLISTEN ecn_{id}
+  API->>PG: close connection
+```
+
+---
+
+## 20. Extended Platform Architecture — Future State (Stage 2+)
+
+Orientation diagram for Stage 2 developers. Blue = implemented (Stage 1). Green = Sprint 2.
+Grey = Stage 2. Purple = Stage 3.
+
+```mermaid
+---
+config:
+  theme: light
+  layout: elk
+  look: classic
+---
+graph TB
+  classDef existing fill:#1168bd,color:#fff,stroke:#0b4884
+  classDef sprint2  fill:#2d6a4f,color:#fff,stroke:#1b4332
+  classDef stage2   fill:#5d6d7e,color:#fff,stroke:#424949
+  classDef stage3   fill:#6c3483,color:#fff,stroke:#4a235a
+  classDef external fill:#666,color:#fff,stroke:#444
+
+  subgraph Clients["AI Clients (Stage 2+)"]
+    mcp_client["Claude Desktop / Cursor\n(MCP client)"]:::stage2
+    group_agent["Scanfil Group Agent\n(A2A — Stage 3)"]:::stage3
+    i3x_agent["Siemens i3x\n(A2A — Stage 3)"]:::stage3
+  end
+
+  subgraph MCP["oskar-mcp container (Stage 2)"]
+    mcp_srv["MCP Server\nNo DB — REST only\nservice-account JWT"]:::stage2
+  end
+
+  subgraph Frontend["OSKAR Frontend (React/TS)"]
+    fe_ecn["ECN forms"]:::existing
+    fe_sse["SSE listener"]:::sprint2
+    fe_actions["Agent Actions\nApproval UI (Stage 2)"]:::stage2
+  end
+
+  subgraph API["oskar-app (FastAPI /api/v1/)"]
+    r_ecn["/ecn/ — existing"]:::existing
+    r_auth["/auth/ — existing"]:::existing
+    r_sse["/ecn/{id}/stream — Sprint 2"]:::sprint2
+    r_ai["/ai/ — Stage 2"]:::stage2
+    r_events["/events/ingest — Stage 2"]:::stage2
+    r_hooks["/webhooks/ — Stage 2"]:::stage2
+    r_actions["/agent-actions/ — Stage 2"]:::stage2
+  end
+
+  subgraph Adapters["Adapter Layer"]
+    erp["ERPAdapter\nMovexRestAdapter · IFSAdapter stub"]:::existing
+    sup["SupplierAdapter\nDigiKey · 5 stubs"]:::existing
+    ai["AIProvider\nNoOpAIProvider (Stage 1)\nOllama · Anthropic (Stage 2)"]:::sprint2
+  end
+
+  subgraph Workers["oskar-worker (Celery)"]
+    w_ecn["ecn_tasks"]:::existing
+    w_sup["supplier_tasks"]:::existing
+    w_ai["ai_tasks — Stage 2"]:::stage2
+  end
+
+  subgraph DB["PostgreSQL (oskar-db)"]
+    db_core["13 core ECN tables"]:::existing
+    db_auth["Auth tables"]:::existing
+    db_ai["ai_suggestions\nagent_actions\n(schema Sprint 2)"]:::sprint2
+  end
+
+  subgraph External["External Systems"]
+    movex["Movex / M3"]:::external
+    digikey["DigiKey"]:::external
+    ailab["AI Lab · Ollama (Stage 2)"]:::stage2
+    i3x_sys["Siemens i3x (Stage 3)"]:::stage3
+  end
+
+  mcp_client -->|MCP protocol| mcp_srv
+  mcp_srv -->|REST| r_ecn & r_ai & r_actions
+
+  fe_ecn --> r_ecn
+  fe_sse -.->|SSE| r_sse
+  fe_actions --> r_actions
+
+  r_ecn --> erp & db_core
+  r_sse --> db_core
+  r_ai --> ai
+  r_actions --> db_ai
+
+  w_ai --> ai & db_ai
+
+  ai -.-> ailab
+  erp --> movex
+  sup --> digikey
+```

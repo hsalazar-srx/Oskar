@@ -3,8 +3,8 @@
 > **PROVIDER-AGNOSTIC — Non-Negotiable #12**
 > No tool-specific syntax. Readable by any LLM tool or none.
 
-**Version:** 1.0
-**Date:** 2026-04-13
+**Version:** 1.1
+**Date:** 2026-05-01
 **Phase:** Phase 1 Track B deliverable
 **Status:** Draft — pending Branko/Nick UAT validation (post-POC)
 
@@ -21,26 +21,31 @@
 
 ---
 
-## 1. ECN Status Machine — 12 Statuses
+## 1. ECN Status Machine — 10 Statuses
+
+> **ADR-009 (2026-05-01):** DC single gate. SUBMITTED (10) and DC_REVIEW (20) removed.
+> DC_APPROVED (25) added between MANAGEMENT_REVIEW and APPROVED.
+> IMPLEMENTED → CLOSED is now automatic (Celery). See `decisions/ADR-009`.
 
 ### Status Table
 
 | Code | Name | Description | Entry condition | Exit condition |
 |------|------|-------------|----------------|---------------|
 | 0 | DRAFT | Being authored by originator | ECN created | Originator submits |
-| 10 | SUBMITTED | Submitted; awaiting DC completeness check | Originator submits | DC accepts or rejects |
-| 20 | DC_REVIEW | DC performing document control completeness check | DC accepts | DC passes to SE or rejects |
-| 30 | ENGINEERING_REVIEW | SE/CE technical review in progress | DC passes | SE/CE approves or rejects |
+| 30 | ENGINEERING_REVIEW | SE/CE technical review in progress | Originator submits | SE/CE approves or rejects |
 | 40 | MANAGEMENT_REVIEW | Parallel approval block active (EM + QM always; PM/SC/FN conditional) | SE/CE approves | All required approvers complete |
-| 50 | APPROVED | All human approvals complete; Movex writes queued in outbox | All parallel approvals done | Celery confirms all MI calls succeeded |
-| 60 | IMPLEMENTED | All Movex writes confirmed by Celery | Outbox fully processed | DC completes post-implementation check |
-| 65 | REJECTED | Rejected at any stage; routed back to originator with mandatory reason | Any approver rejects | Originator resubmits (→ SUBMITTED) or withdraws (→ CANCELLED) |
-| 70 | CLOSED | Post-implementation sign-off complete; ISO 13485 gate | DC post-implementation check passed | — terminal |
+| 25 | DC_APPROVED | DC final sign-off before Movex write | All parallel approvals done | DC approves or rejects |
+| 50 | APPROVED | All human approvals complete; Movex writes queued in outbox | DC approves | Celery confirms all MI calls succeeded |
+| 60 | IMPLEMENTED | All Movex writes confirmed by Celery | Outbox fully processed | System auto-advances to CLOSED |
+| 70 | CLOSED | Post-implementation complete; ISO 13485 gate | Movex writes confirmed | — terminal |
+| 65 | REJECTED | Rejected at any stage; routed back to originator with mandatory reason | Any approver rejects | Originator resubmits (→ ENGINEERING_REVIEW) or withdraws (→ CANCELLED) |
 | 80 | CANCELLED | Withdrawn before approval; no Movex writes made | Originator withdraws | — terminal |
-| 90 | ON_HOLD | Suspended pending external input | Authorised user places on hold | Authorised user resumes; prior status restored |
+| 90 | ON_HOLD | Suspended pending external input | DC places on hold | DC resumes; prior status restored |
 | — | ARCHIVED | Logical flag (`is_archived=TRUE`); not a status | CLOSED records only | — irreversible flag, not a status transition |
 
-**ARCHIVED is a flag, not a status.** Set by DC/Admin on CLOSED records only. No state machine transition involved.
+**ARCHIVED is a flag, not a status.** Set by DC on CLOSED records only. No state machine transition involved.
+
+**Tombstoned integers:** 10 (SUBMITTED) and 20 (DC_REVIEW) are removed from the valid set and must never be reused.
 
 ### Stargile → OSKAR Status Mapping
 
@@ -48,15 +53,11 @@
 |--------------|--------------|-----------------|-------------------|
 | 5 | PRELIMINARY | DRAFT (0) | No separate preliminary step needed |
 | 10 | INITIATION | DRAFT (0) | Originator fills header in DRAFT |
-| 15 | PRELIMINARY_REVIEW_PENDING | SUBMITTED (10) | DC completeness queue |
-| 20 | PRE_APPROVAL_PENDING | DC_REVIEW (20) | DC acts |
-| 25 | DC_CHECK_PENDING | DC_REVIEW (20) | Collapsed — single DC_REVIEW status |
-| 30 | APPROVAL_PENDING | MANAGEMENT_REVIEW (40) | Parallel block |
-| 35 | DC_APPROVAL_PENDING | DC_REVIEW (20) / ENGINEERING_REVIEW (30) | Sequential DC→SE gate |
-| 50 | MOVEX_UPDATED_PENDING | APPROVED (50) | Human approvals done; outbox queued — Movex write state is infrastructure, not user-visible status |
-| 55 | COST_REVIEW_PENDING | MANAGEMENT_REVIEW (40) — SC/FN roles | Cost review is parallel not sequential |
-| 60 | ACTION_NOTIFICATION_PENDING | IMPLEMENTED (60) | Collapsed — notifications fire on status transition |
-| 65 | FINAL_APPROVAL_PENDING | MANAGEMENT_REVIEW (40) | CE endorsement within parallel block |
+| 15, 20, 25 | Review pending statuses | (removed) | Folded into ENGINEERING_REVIEW entry — no separate DC gate at submission |
+| 30, 55, 65 | APPROVAL_PENDING, COST_REVIEW, FINAL_APPROVAL | MANAGEMENT_REVIEW (40) | Parallel block covers all |
+| **35** | **DC_APPROVAL_PENDING** | **DC_APPROVED (25)** | Single DC gate immediately before Movex write — exact Stargile alignment |
+| **50** | **MOVEX_UPDATED_PENDING** | **APPROVED (50)** | Human approvals done; outbox queued |
+| 60 | ACTION_NOTIFICATION_PENDING | (removed) | Notifications fire on transition — not a status |
 | 90 | ECN_COMPLETE | CLOSED (70) | |
 | 99 | ECN_CANCELLED | CANCELLED (80) | |
 
@@ -64,26 +65,26 @@
 
 ## 2. State Transition Table
 
+> **ADR-009 (2026-05-01):** accept and pass_to_engineering triggers removed; dc_approve and auto_close added.
+
 | From | Action | To | Guard conditions | Who triggers |
 |------|--------|----|-----------------|-------------|
-| DRAFT | submit | SUBMITTED | All mandatory header fields populated; ≥1 ECN item defined; `effectivity_type` set on all items | Originator |
-| SUBMITTED | accept | DC_REVIEW | — | DC assigned to this ECN |
-| SUBMITTED | reject | REJECTED | Rejection reason mandatory | DC assigned to this ECN |
-| DC_REVIEW | pass_to_engineering | ENGINEERING_REVIEW | — | DC assigned to this ECN |
-| DC_REVIEW | reject | REJECTED | Rejection reason mandatory | DC assigned to this ECN |
+| DRAFT | submit | ENGINEERING_REVIEW | All mandatory header fields populated; ≥1 ECN item defined; `effectivity_type` set on all items | Originator |
 | ENGINEERING_REVIEW | approve | MANAGEMENT_REVIEW | — | SE or CE assigned to this ECN |
 | ENGINEERING_REVIEW | reject | REJECTED | Rejection reason mandatory | SE or CE assigned to this ECN |
 | MANAGEMENT_REVIEW | approve (per role) | — partial, parallel block | Role must be required for this ECN per `ecn_step_conditions` | Assigned role member |
-| MANAGEMENT_REVIEW | all required approved | APPROVED | All required non-skipped roles approved; no outstanding rejections | System — automatic on last approval |
+| MANAGEMENT_REVIEW | all required approved | DC_APPROVED | All required non-skipped roles approved; no outstanding rejections | System — automatic on last approval |
 | MANAGEMENT_REVIEW | reject (any role) | REJECTED | Rejection reason mandatory | Any required role member |
+| DC_APPROVED | dc_approve | APPROVED | Customer approval gate if `requires_customer_approval=TRUE` and `customer_approved_at IS NULL` | DC assigned to this ECN |
+| DC_APPROVED | reject | REJECTED | Rejection reason mandatory | DC assigned to this ECN |
 | APPROVED | movex_write_complete | IMPLEMENTED | All `movex_outbox` entries for this ECN in `completed` state | System — Celery worker |
 | APPROVED | movex_write_failed | APPROVED (stays) | ≥1 outbox entry in `failed` after 3 retries; DC alerted | System — Celery worker |
-| IMPLEMENTED | close | CLOSED | Post-implementation verification checklist complete | DC assigned to this ECN |
-| REJECTED | resubmit | SUBMITTED | Originator acknowledged rejection reason | Originator |
+| IMPLEMENTED | auto_close | CLOSED | — automatic, no human action required | System — Celery worker |
+| REJECTED | resubmit | ENGINEERING_REVIEW | Originator acknowledged rejection reason | Originator |
 | REJECTED | withdraw | CANCELLED | — | Originator |
-| ANY (not CLOSED/CANCELLED) | place_on_hold | ON_HOLD | Reason + expected resume date mandatory | DC or Admin |
-| ON_HOLD | resume | (prior status) | Prior status stored in `ecn_instances.pre_hold_status` | DC or Admin |
-| DRAFT or SUBMITTED | cancel | CANCELLED | No Movex writes made for this ECN | Originator or Admin |
+| ANY (not CLOSED/CANCELLED) | place_on_hold | ON_HOLD | Reason + expected resume date mandatory | DC |
+| ON_HOLD | resume | (prior status) | Prior status stored in `ecn_instances.pre_hold_status` | DC |
+| DRAFT | cancel | CANCELLED | No Movex writes made for this ECN | Originator |
 
 **Self-approval prohibition:** The originator cannot approve any stage of their own ECN regardless of role. Enforced at the application layer on every approval endpoint — not only in the state machine guard.
 
@@ -91,21 +92,23 @@
 
 ## 3. Approval Chain
 
+> **ADR-009 (2026-05-01):** DC acts once — at DC_APPROVED, immediately before Movex write.
+
 ```
 DRAFT
-  └─► [Originator: submit] ──► SUBMITTED
-                                  └─► [DC: completeness check] ──► DC_REVIEW
-                                                                       └─► [SE/CE: technical review] ──► ENGINEERING_REVIEW
-                                                                                                          └─► [Parallel block — all required simultaneously]
-                                                                                                                EM  (always required)
-                                                                                                                QM  (always required — ISO 13485)
-                                                                                                                PM  (if routing_changes=TRUE or operation_changes=TRUE)
-                                                                                                                SC  (if new_parts=TRUE or lead_time_changes=TRUE)
-                                                                                                                FN  (if wapc_delta_pct > configured threshold)
-                                                                                                              ──► MANAGEMENT_REVIEW
-                                                                                                                    └─► [All required approved] ──► APPROVED
-                                                                                                                                                      └─► [Celery: Movex outbox] ──► IMPLEMENTED
-                                                                                                                                                                                       └─► [DC: post-impl check] ──► CLOSED
+  └─► [Originator: submit] ──► ENGINEERING_REVIEW
+                                  └─► [SE/CE: technical review]
+                                        └─► [Parallel block — all required simultaneously]
+                                              EM  (always required)
+                                              QM  (always required — ISO 13485)
+                                              PM  (if routing_changes=TRUE or operation_changes=TRUE)
+                                              SC  (if new_parts=TRUE or lead_time_changes=TRUE)
+                                              FN  (if wapc_delta_pct > configured threshold)
+                                            ──► MANAGEMENT_REVIEW
+                                                  └─► [All required approved — system auto-advances] ──► DC_APPROVED
+                                                                                                           └─► [DC: final sign-off before Movex write] ──► APPROVED
+                                                                                                                                                            └─► [Celery: Movex outbox] ──► IMPLEMENTED
+                                                                                                                                                                                            └─► [Celery: auto-close] ──► CLOSED
 ```
 
 ### Parallel Block Rules
@@ -193,6 +196,8 @@ OSKAR `ecn_items` table is the equivalent of Stargile `ZECNITMN` + `ECNItem.java
 | `drawing_created` | BOOLEAN | No | System | TRUE when MPDDOC entry confirmed |
 | `procurement_group` | VARCHAR(3) | Yes | Originator | MITMAS.MMPRGP |
 | `product_group` | VARCHAR(5) | Yes | Originator | MITMAS.MMITCL |
+| `item_group` | VARCHAR(3) | Yes | Originator | 3-char item group code. Used as ALWQ qualifier in MMS025MI.AddAlias. Distinct from product_group. Added migration 0006. |
+| `customer_alias` | VARCHAR(30) | Yes | Originator | Customer-assigned alias / MPN for this item. Maps to MITPOP.POPN (MMS025MI.AddAlias). Promoted from questionnaire_data JSONB, migration 0006. |
 | `unit_of_measure` | VARCHAR(3) | Yes | Originator | MITMAS.MMUNMS |
 | `revision_number` | VARCHAR(4) | Yes | Originator | MITMAS.MMECVE |
 | `item_template` | VARCHAR(15) | Yes | Originator | MITMAS.MMATPL |
@@ -238,16 +243,15 @@ Workflow Sprint 2+. Fields reserved now to avoid a migration later.
 | Event | Recipients | Escalation |
 |-------|-----------|-----------|
 | ECN created | Originator (confirmation) | — |
-| DRAFT → SUBMITTED | DC assigned | 48h: DC + manager; 96h: EM added |
-| SUBMITTED → DC_REVIEW | DC (confirmation) | — |
-| DC_REVIEW → ENGINEERING_REVIEW | SE/CE assigned | 48h: SE/CE + EM |
+| DRAFT → ENGINEERING_REVIEW | SE/CE assigned | 48h: SE/CE + EM |
 | ENGINEERING_REVIEW → MANAGEMENT_REVIEW | All required parallel role members simultaneously | 48h: assignee + manager; 96h: DC added |
 | Each parallel approval received | DC (progress update) | — |
-| MANAGEMENT_REVIEW → APPROVED | DC, Originator | — |
+| MANAGEMENT_REVIEW → DC_APPROVED | DC assigned | 48h: DC + manager; 96h: EM added |
+| DC_APPROVED → APPROVED | DC, Originator | — |
 | APPROVED → IMPLEMENTED | DC, Originator, all approvers | — |
-| IMPLEMENTED → CLOSED | Originator, all approvers, observer roles RD/TE/MQ | — |
+| IMPLEMENTED → CLOSED | Originator, all approvers, observer roles RD/TE/MQ | — (automatic — no DC action) |
 | Any → REJECTED | Originator + all prior approvers | — |
-| Any → ON_HOLD | Originator, DC, all pending approvers | — |
+| Any → ON_HOLD | Originator, all pending approvers | — |
 | Movex write failure (outbox attempt 3) | DC | Attempt 10 — ABANDONED: EM added |
 
 ### Email Mechanics

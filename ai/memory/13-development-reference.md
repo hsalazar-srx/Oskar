@@ -106,7 +106,61 @@ class DigiKeyAdapter(SupplierAdapter):
         self.circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60)
 ```
 
-### 4. Settings Hierarchy
+### 4. New Adapter / Provider Pattern (ADR-010)
+
+When adding any new external capability (AI provider, IoT broker, supplier, identity provider):
+
+1. Define a `Protocol` (or `ABC`) in `src/adapters/<category>/base.py`
+2. Create a `NoOp<Name>Provider` that returns safe defaults, never raises, never calls external services
+3. Create a `factory.py` with a `get_<name>()` function reading an env var
+4. Wire the `NoOp` as default — platform works without the real provider
+5. Tests assert `isinstance(NoOpProvider(), Protocol)` is `True`
+6. Real implementations added in later sprints without touching caller code
+
+```python
+# src/adapters/<category>/base.py
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class MyProvider(Protocol):
+    def do_thing(self, arg: str) -> MyResult: ...
+
+# src/adapters/<category>/noop.py
+class NoOpMyProvider:
+    def do_thing(self, arg: str) -> MyResult:
+        return MyResult(...)  # safe default, never raises
+
+# src/adapters/<category>/factory.py
+def get_my_provider() -> MyProvider:
+    cls_name = os.getenv("MY_PROVIDER_CLASS", "NoOpMyProvider")
+    if cls_name == "NoOpMyProvider":
+        return NoOpMyProvider()
+    raise ValueError(f"Unknown MY_PROVIDER_CLASS: {cls_name!r}")
+```
+
+See: `src/adapters/ai/` (AIProvider), `src/adapters/erp/` (ERPAdapter), `src/auth/providers.py` (IdentityProvider).
+
+**Prompt injection note (ADR-010):** If the provider processes external text data (BOM descriptions,
+MPN fields, customer-supplied strings), call `sanitize_for_prompt(text)` from `src/adapters/ai/base.py`
+before building any AI prompt. This is mandatory — not optional.
+
+### 5. JSONB vs Proper Column Rule (ADR-010)
+
+Any JSONB field value that is:
+- (a) filtered in a `WHERE` clause,
+- (b) displayed in a list or detail view, or
+- (c) consumed by the AI layer
+
+→ **must be promoted to a typed column** in the next migration sprint.
+File a task in the sprint backlog when the promotion criterion is met.
+
+Sanctioned JSONB fields (remain as JSONB — see ADR-010 for rationale):
+- `questionnaire_data` on `ecn_items` — ZQ01–ZQ18, pending Branko validation
+- `extra_data` on `ecn_instances` — POC/UAT catch-all
+- `agent_provenance` on `ecn_transition_history` — opaque AI audit metadata
+- `payload` / `result` on `agent_actions` — vary by action type
+
+### 6. Settings Hierarchy
 
 ```python
 # Uses skill: architecture/configuration-management v1.0
