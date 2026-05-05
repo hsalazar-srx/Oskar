@@ -20,7 +20,7 @@ Expected: both VM and Harbor ready by 2026-04-17.
 ## Pending Action
 
 Update `scripts/push-image.sh` REGISTRY variable to the Harbor hostname once Manal
-provides it (e.g. `oskar-vm.srxglobal.local:5000` or a named vhost).
+provides it (e.g. `apac-plm-ops.srxglobal.local:5000` or a named vhost).
 
 ## Consequences
 

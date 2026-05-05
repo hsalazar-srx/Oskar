@@ -24,10 +24,9 @@ Sources:
 
 from __future__ import annotations
 
-import os
 import uuid
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 import sqlalchemy as sa
@@ -110,6 +109,14 @@ class RoleAssignment:
     role_id: str
     username: str | None
     is_auto_assigned: bool
+
+
+@dataclass
+class RoleAssignmentResult:
+    """Returned by ECNService.assign_role()"""
+    ecn_id: str
+    role_assignments: list[RoleAssignment]
+    superseded_username: str | None  # Previous holder of this role, if any
 
 
 @dataclass
@@ -203,6 +210,10 @@ class ECNValidationError(Exception):
 
 class ECNTransitionError(Exception):
     """Wraps GuardFailed / InvalidTransition for the router layer."""
+
+
+class ECNForbidden(Exception):
+    """Actor lacks authority for the requested operation (e.g. non-DC calling assign_role)."""
 
 
 class ECNPreconditionRequired(Exception):
@@ -1076,3 +1087,135 @@ class ECNService:
             )
 
         return summaries
+
+    # ── Role assignment ───────────────────────────────────────────────────────
+
+    async def assign_role(
+        self,
+        ecn_id: str,
+        role_id: str,
+        username: str,
+        actor_username: str,
+        actor_role: str,
+        notes: str | None = None,
+    ) -> RoleAssignmentResult:
+        """Reassign a role on an ECN (DC authority only).
+
+        Guards:
+        - actor_role must be 'DC'
+        - role_id must be in VALID_ROLE_IDS
+        - OR role cannot be reassigned (originator is fixed)
+        - ECN must not be in a terminal status (CLOSED=70, CANCELLED=80)
+
+        Uses supersede-and-insert: the existing active row for (ecn_id, role_id)
+        has superseded_at set to now(), then a new active row is inserted.
+        A transition_history row (action='role_assigned') is written for audit.
+        """
+        if actor_role != "DC":
+            raise ECNForbidden("Only the Document Controller (DC) may reassign roles.")
+
+        if role_id not in VALID_ROLE_IDS:
+            raise ECNValidationError(
+                f"Unknown role_id '{role_id}'. Valid: {sorted(VALID_ROLE_IDS)}"
+            )
+        if role_id == "OR":
+            raise ECNValidationError(
+                "Originator (OR) role cannot be reassigned. "
+                "The originator is fixed at ECN creation."
+            )
+
+        row = await _load_ecn_row(self._session, ecn_id)
+        if row is None:
+            raise ECNNotFound(ecn_id)
+
+        current_status = int(row["status"])
+        _TERMINAL = {ECNStatus.CLOSED, ECNStatus.CANCELLED}
+        if ECNStatus(current_status) in _TERMINAL:
+            raise ECNValidationError(
+                f"Cannot reassign roles on a terminal ECN "
+                f"(status: {ECNStatus(current_status).name})."
+            )
+
+        # Find existing active holder of this role, if any
+        prev_row = await self._session.execute(
+            sa.text(
+                "SELECT username FROM ecn_role_assignments "
+                "WHERE ecn_id = :ecn_id AND role_id = :role_id "
+                "AND superseded_at IS NULL"
+            ),
+            {"ecn_id": ecn_id, "role_id": role_id},
+        )
+        prev = prev_row.first()
+        superseded_username: str | None = prev[0] if prev else None
+
+        now = datetime.now(timezone.utc)
+
+        if superseded_username is not None:
+            await self._session.execute(
+                sa.text(
+                    "UPDATE ecn_role_assignments "
+                    "SET superseded_at = :now "
+                    "WHERE ecn_id = :ecn_id AND role_id = :role_id "
+                    "AND superseded_at IS NULL"
+                ),
+                {"now": now, "ecn_id": ecn_id, "role_id": role_id},
+            )
+
+        facility = str(row["facility"])
+        await self._session.execute(
+            sa.text(
+                "INSERT INTO ecn_role_assignments "
+                "(id, ecn_id, facility, role_id, username, is_auto_assigned, "
+                " assigned_by, assigned_at, notes) "
+                "VALUES (:id, :ecn_id, :facility, :role_id, :username, FALSE, "
+                "        :assigned_by, :now, :notes)"
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "ecn_id": ecn_id,
+                "facility": facility,
+                "role_id": role_id,
+                "username": username,
+                "assigned_by": actor_username,
+                "now": now,
+                "notes": notes,
+            },
+        )
+
+        # Audit trail — role_assigned action in transition history
+        sha256_prev = await _get_last_transition_hash(self._session, ecn_id)
+        ecn_model = _row_to_ecn_model(row)
+        ctx = TransitionContext(
+            actor_username=actor_username,
+            actor_role=actor_role,
+            notes=notes or (
+                f"Role {role_id} reassigned from {superseded_username!r} "
+                f"to {username!r}"
+                if superseded_username else
+                f"Role {role_id} assigned to {username!r}"
+            ),
+        )
+        machine = ECNWorkflowMachine(ecn_model, ctx)
+        machine.set_sha256_prev(sha256_prev)
+        await _write_transition_history(
+            self._session, machine, ecn_id,
+            from_status=current_status,
+            to_status=current_status,
+            action="role_assigned",
+        )
+
+        log.info(
+            "ecn.role_assigned",
+            ecn_id=ecn_id,
+            role_id=role_id,
+            username=username,
+            superseded=superseded_username,
+            actor=actor_username,
+        )
+
+        role_assignments = await _get_role_assignments(self._session, ecn_id)
+        return RoleAssignmentResult(
+            ecn_id=ecn_id,
+            role_assignments=role_assignments,
+            superseded_username=superseded_username,
+        )

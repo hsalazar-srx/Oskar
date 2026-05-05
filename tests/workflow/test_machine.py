@@ -1,15 +1,14 @@
 """
-Tests for ECNWorkflowMachine
+Tests for ECNWorkflowMachine — ADR-009 (DC single gate, auto_close)
 
-Coverage targets:
-  - Happy-path traversal (DRAFT → SUBMITTED → DC_REVIEW → ENGINEERING_REVIEW
-    → MANAGEMENT_REVIEW → APPROVED → IMPLEMENTED → CLOSED)
-  - Guard failures (wrong actor, missing fields, self-approval)
-  - ON_HOLD / resume round-trip
-  - Rejection → resubmit
-  - Cancellation
-  - SHA-256 chain: hash changes between transitions; prev chaining works
-  - Terminal state enforcement
+Status set (10 statuses, ADR-009):
+  DRAFT(0) → ENGINEERING_REVIEW(30) → MANAGEMENT_REVIEW(40)
+  → DC_APPROVED(25) → APPROVED(50) → IMPLEMENTED(60) → CLOSED(70)
+  REJECTED(65), CANCELLED(80), ON_HOLD(90)
+
+SUBMITTED(10) and DC_REVIEW(20) are removed.
+IMPLEMENTED → CLOSED is now automatic (auto_close, no DC action).
+DC acts once: DC_APPROVED gate before Movex write.
 
 Run with: pytest tests/workflow/ -v
 """
@@ -44,6 +43,7 @@ def _ecn(status: ECNStatus = ECNStatus.DRAFT, **overrides) -> ECNModel:
         originator_username="jsmith",
         revision_number=1,
         item_count=2,
+        title="Replace capacitor C12 with higher-voltage rating",
     )
     defaults.update(overrides)
     return ECNModel(**defaults)
@@ -60,29 +60,16 @@ def _machine(ecn: ECNModel, ctx: TransitionContext, **kwargs) -> ECNWorkflowMach
 
 
 # ---------------------------------------------------------------------------
-# Happy-path traversal
+# Happy-path traversal (ADR-009 flow)
 # ---------------------------------------------------------------------------
 
 class TestHappyPath:
-    def test_draft_to_submitted(self):
+    def test_draft_to_engineering_review(self):
+        """submit now goes directly to ENGINEERING_REVIEW — no SUBMITTED queue."""
         ecn = _ecn(ECNStatus.DRAFT)
         ctx = _ctx(actor_username="jsmith", actor_role="OR")
         m = _machine(ecn, ctx)
         m.submit()
-        assert ecn.status == ECNStatus.SUBMITTED
-
-    def test_submitted_to_dc_review(self):
-        ecn = _ecn(ECNStatus.SUBMITTED)
-        ctx = _ctx(actor_username="dcuser", actor_role="DC")
-        m = _machine(ecn, ctx)
-        m.accept()
-        assert ecn.status == ECNStatus.DC_REVIEW
-
-    def test_dc_review_to_engineering_review(self):
-        ecn = _ecn(ECNStatus.DC_REVIEW)
-        ctx = _ctx(actor_username="dcuser", actor_role="DC")
-        m = _machine(ecn, ctx)
-        m.pass_to_engineering()
         assert ecn.status == ECNStatus.ENGINEERING_REVIEW
 
     def test_engineering_review_to_management_review_by_se(self):
@@ -104,9 +91,10 @@ class TestHappyPath:
         ctx = _ctx(actor_username="manager1", actor_role="EM")
         m = _machine(ecn, ctx)
         m.approve_role()
-        assert ecn.status == ECNStatus.MANAGEMENT_REVIEW  # stays until block complete
+        assert ecn.status == ECNStatus.MANAGEMENT_REVIEW
 
-    def test_complete_management_review_advances_to_approved(self):
+    def test_complete_management_review_advances_to_dc_approved(self):
+        """All parallel approvals done → DC_APPROVED (ADR-009), not APPROVED directly."""
         ecn = _ecn(ECNStatus.MANAGEMENT_REVIEW)
         ctx = _ctx(actor_username="manager1", actor_role="EM")
 
@@ -115,6 +103,26 @@ class TestHappyPath:
 
         m = _machine(ecn, ctx, all_required_approved_fn=_all_approved)
         m.complete_management_review()
+        assert ecn.status == ECNStatus.DC_APPROVED
+
+    def test_dc_approved_to_approved(self):
+        """DC approves at DC_APPROVED gate → APPROVED (Movex write authorised)."""
+        ecn = _ecn(ECNStatus.DC_APPROVED)
+        ctx = _ctx(actor_username="dcuser", actor_role="DC")
+        m = _machine(ecn, ctx)
+        m.dc_approve()
+        assert ecn.status == ECNStatus.APPROVED
+
+    def test_dc_approve_passes_when_customer_approved_at_set(self):
+        """Customer approval gate (ISO 13485 §7.3.9) passes when customer_approved_at is set."""
+        ecn = _ecn(
+            ECNStatus.DC_APPROVED,
+            requires_customer_approval=True,
+            customer_approved_at=datetime(2026, 4, 16, tzinfo=timezone.utc),
+        )
+        ctx = _ctx(actor_username="dcuser", actor_role="DC")
+        m = _machine(ecn, ctx)
+        m.dc_approve()
         assert ecn.status == ECNStatus.APPROVED
 
     def test_movex_write_complete_advances_to_implemented(self):
@@ -124,33 +132,12 @@ class TestHappyPath:
         m.movex_write_complete()
         assert ecn.status == ECNStatus.IMPLEMENTED
 
-    def test_close_advances_to_closed(self):
+    def test_auto_close_advances_to_closed(self):
+        """IMPLEMENTED → CLOSED is now automatic (Celery-triggered, no DC action required)."""
         ecn = _ecn(ECNStatus.IMPLEMENTED)
-        ctx = _ctx(actor_username="dcuser", actor_role="DC")
+        ctx = _ctx(actor_username="system", actor_role=None)
         m = _machine(ecn, ctx)
-        m.close()
-        assert ecn.status == ECNStatus.CLOSED
-
-    def test_close_requires_customer_approval_when_flagged(self):
-        ecn = _ecn(
-            ECNStatus.IMPLEMENTED,
-            requires_customer_approval=True,
-            customer_approved_at=None,
-        )
-        ctx = _ctx(actor_username="dcuser", actor_role="DC")
-        m = _machine(ecn, ctx)
-        with pytest.raises(GuardFailed, match="Customer approval"):
-            m.close()
-
-    def test_close_passes_when_customer_approved_at_set(self):
-        ecn = _ecn(
-            ECNStatus.IMPLEMENTED,
-            requires_customer_approval=True,
-            customer_approved_at=datetime(2026, 4, 16, tzinfo=timezone.utc),
-        )
-        ctx = _ctx(actor_username="dcuser", actor_role="DC")
-        m = _machine(ecn, ctx)
-        m.close()
+        m.auto_close()
         assert ecn.status == ECNStatus.CLOSED
 
 
@@ -170,12 +157,10 @@ class TestGuards:
         ecn = _ecn(ECNStatus.DRAFT, item_count=0)
         ctx = _ctx(actor_username="jsmith")
         m = _machine(ecn, ctx)
-        with pytest.raises(GuardFailed, match="at least one"):
+        with pytest.raises(GuardFailed, match="[Aa]t least one"):
             m.submit()
 
     def test_submit_blocked_if_no_title(self):
-        ecn = _ecn(ECNStatus.DRAFT, title="")  # type: ignore[call-arg]
-        # ECNModel has title via **overrides — need to pass directly
         ecn2 = ECNModel(
             id="x", ecn_number="ECN-X", facility="L", status=0,
             pre_hold_status=None, originator_username="jsmith",
@@ -186,15 +171,36 @@ class TestGuards:
         with pytest.raises(GuardFailed, match="title"):
             m.submit()
 
-    def test_accept_blocked_if_not_dc(self):
-        ecn = _ecn(ECNStatus.SUBMITTED)
+    def test_dc_approve_blocked_if_not_dc(self):
+        """dc_approve is DC-only."""
+        ecn = _ecn(ECNStatus.DC_APPROVED)
         ctx = _ctx(actor_username="engineer1", actor_role="SE")
         m = _machine(ecn, ctx)
         with pytest.raises(GuardFailed, match="Document Controller"):
-            m.accept()
+            m.dc_approve()
+
+    def test_dc_approve_blocked_when_customer_approval_required(self):
+        """ISO 13485 §7.3.9 gate: requires_customer_approval=True but no customer_approved_at."""
+        ecn = _ecn(
+            ECNStatus.DC_APPROVED,
+            requires_customer_approval=True,
+            customer_approved_at=None,
+        )
+        ctx = _ctx(actor_username="dcuser", actor_role="DC")
+        m = _machine(ecn, ctx)
+        with pytest.raises(GuardFailed, match="Customer approval"):
+            m.dc_approve()
 
     def test_reject_requires_reason(self):
-        ecn = _ecn(ECNStatus.DC_REVIEW)
+        ecn = _ecn(ECNStatus.ENGINEERING_REVIEW)
+        ctx = _ctx(actor_username="engineer1", actor_role="SE", rejection_reason="")
+        m = _machine(ecn, ctx)
+        with pytest.raises(GuardFailed, match="rejection reason"):
+            m.reject()
+
+    def test_reject_from_dc_approved_requires_reason(self):
+        """DC can reject at DC_APPROVED gate — reason is still mandatory."""
+        ecn = _ecn(ECNStatus.DC_APPROVED)
         ctx = _ctx(actor_username="dcuser", actor_role="DC", rejection_reason="")
         m = _machine(ecn, ctx)
         with pytest.raises(GuardFailed, match="rejection reason"):
@@ -221,12 +227,32 @@ class TestGuards:
         m.cancel()
         assert ecn.status == ECNStatus.CANCELLED
 
-    def test_invalid_trigger_raises(self):
+    @pytest.mark.asyncio
+    async def test_invalid_trigger_raises(self):
+        """dc_approve is not valid from DRAFT — must raise InvalidTransition."""
+        ecn = _ecn(ECNStatus.DRAFT)
+        ctx = _ctx(actor_username="dcuser", actor_role="DC")
+        m = _machine(ecn, ctx)
+        with pytest.raises(InvalidTransition):
+            await m.trigger("dc_approve")
+
+    @pytest.mark.asyncio
+    async def test_unknown_trigger_raises_invalid_transition(self):
+        """A removed trigger (accept) must raise InvalidTransition, not AttributeError."""
         ecn = _ecn(ECNStatus.DRAFT)
         ctx = _ctx(actor_username="jsmith")
         m = _machine(ecn, ctx)
         with pytest.raises(InvalidTransition):
-            m.trigger("accept")  # accept is not valid from DRAFT
+            await m.trigger("accept")  # removed trigger
+
+    @pytest.mark.asyncio
+    async def test_unknown_trigger_raises_invalid_transition_pass(self):
+        """pass_to_engineering was removed in ADR-009."""
+        ecn = _ecn(ECNStatus.ENGINEERING_REVIEW)
+        ctx = _ctx(actor_username="dcuser", actor_role="DC")
+        m = _machine(ecn, ctx)
+        with pytest.raises(InvalidTransition):
+            await m.trigger("pass_to_engineering")
 
 
 # ---------------------------------------------------------------------------
@@ -247,15 +273,28 @@ class TestOnHold:
         assert ecn.status == ECNStatus.ON_HOLD
         assert ecn.pre_hold_status == ECNStatus.ENGINEERING_REVIEW
 
-        # Resume
         ctx2 = _ctx(actor_username="dcuser", actor_role="DC")
         m2 = _machine(ecn, ctx2)
         m2.resume()
         assert ecn.status == ECNStatus.ENGINEERING_REVIEW
         assert ecn.pre_hold_status is None
 
+    def test_place_on_hold_from_dc_approved(self):
+        """DC_APPROVED is a valid source for place_on_hold."""
+        ecn = _ecn(ECNStatus.DC_APPROVED)
+        ctx = _ctx(
+            actor_username="dcuser",
+            actor_role="DC",
+            hold_reason="Waiting on customer",
+            expected_resume_date="2026-05-10",
+        )
+        m = _machine(ecn, ctx)
+        m.place_on_hold()
+        assert ecn.status == ECNStatus.ON_HOLD
+        assert ecn.pre_hold_status == ECNStatus.DC_APPROVED
+
     def test_place_on_hold_requires_reason(self):
-        ecn = _ecn(ECNStatus.DC_REVIEW)
+        ecn = _ecn(ECNStatus.ENGINEERING_REVIEW)
         ctx = _ctx(
             actor_username="dcuser",
             actor_role="DC",
@@ -267,7 +306,7 @@ class TestOnHold:
             m.place_on_hold()
 
     def test_place_on_hold_requires_resume_date(self):
-        ecn = _ecn(ECNStatus.DC_REVIEW)
+        ecn = _ecn(ECNStatus.ENGINEERING_REVIEW)
         ctx = _ctx(
             actor_username="dcuser",
             actor_role="DC",
@@ -279,7 +318,7 @@ class TestOnHold:
             m.place_on_hold()
 
     def test_non_dc_cannot_place_on_hold(self):
-        ecn = _ecn(ECNStatus.DC_REVIEW)
+        ecn = _ecn(ECNStatus.ENGINEERING_REVIEW)
         ctx = _ctx(
             actor_username="engineer1",
             actor_role="SE",
@@ -296,9 +335,10 @@ class TestOnHold:
 # ---------------------------------------------------------------------------
 
 class TestRejection:
-    def test_reject_and_resubmit(self):
-        ecn = _ecn(ECNStatus.DC_REVIEW)
-        ctx = _ctx(actor_username="dcuser", actor_role="DC", rejection_reason="Incomplete docs")
+    def test_reject_from_engineering_review_and_resubmit(self):
+        """Reject at ENGINEERING_REVIEW; resubmit now goes back to ENGINEERING_REVIEW (ADR-009)."""
+        ecn = _ecn(ECNStatus.ENGINEERING_REVIEW)
+        ctx = _ctx(actor_username="engineer1", actor_role="SE", rejection_reason="Incomplete docs")
         m = _machine(ecn, ctx)
         m.reject()
         assert ecn.status == ECNStatus.REJECTED
@@ -306,7 +346,20 @@ class TestRejection:
         ctx2 = _ctx(actor_username="jsmith", actor_role="OR")
         m2 = _machine(ecn, ctx2)
         m2.resubmit()
-        assert ecn.status == ECNStatus.SUBMITTED
+        assert ecn.status == ECNStatus.ENGINEERING_REVIEW  # not SUBMITTED (ADR-009)
+
+    def test_reject_from_dc_approved_and_resubmit(self):
+        """DC can reject at DC_APPROVED; originator resubmits back to ENGINEERING_REVIEW."""
+        ecn = _ecn(ECNStatus.DC_APPROVED)
+        ctx = _ctx(actor_username="dcuser", actor_role="DC", rejection_reason="BOM snapshot incomplete")
+        m = _machine(ecn, ctx)
+        m.reject()
+        assert ecn.status == ECNStatus.REJECTED
+
+        ctx2 = _ctx(actor_username="jsmith", actor_role="OR")
+        m2 = _machine(ecn, ctx2)
+        m2.resubmit()
+        assert ecn.status == ECNStatus.ENGINEERING_REVIEW
 
     def test_non_originator_cannot_resubmit(self):
         ecn = _ecn(ECNStatus.REJECTED)
@@ -338,8 +391,9 @@ class TestSHA256Chain:
         m = _machine(ecn, ctx)
         m.set_sha256_prev(None)
         ts = datetime(2026, 4, 16, 10, 0, 0, tzinfo=timezone.utc)
-        h1 = m.compute_transition_hash("uuid-1", None, 10, "submit", ts)
-        h2 = m.compute_transition_hash("uuid-1", None, 10, "submit", ts)
+        # status 30 = ENGINEERING_REVIEW (submit now goes to 30, not 10)
+        h1 = m.compute_transition_hash("uuid-1", None, 30, "submit", ts)
+        h2 = m.compute_transition_hash("uuid-1", None, 30, "submit", ts)
         assert h1 == h2
         assert len(h1) == 64
 
@@ -348,9 +402,9 @@ class TestSHA256Chain:
         ctx = _ctx(actor_username="jsmith")
         m = _machine(ecn, ctx)
         ts = datetime(2026, 4, 16, 10, 0, 0, tzinfo=timezone.utc)
-        h_submit = m.compute_transition_hash("uuid-1", None, 10, "submit", ts)
-        h_accept = m.compute_transition_hash("uuid-1", None, 20, "accept", ts)
-        assert h_submit != h_accept
+        h_submit = m.compute_transition_hash("uuid-1", None, 30, "submit", ts)
+        h_approve = m.compute_transition_hash("uuid-1", None, 40, "approve_engineering", ts)
+        assert h_submit != h_approve
 
     def test_hash_chains_prev(self):
         ecn = _ecn(ECNStatus.DRAFT)
@@ -358,14 +412,12 @@ class TestSHA256Chain:
         m = _machine(ecn, ctx)
         ts = datetime(2026, 4, 16, 10, 0, 0, tzinfo=timezone.utc)
 
-        # First row: no prev
         m.set_sha256_prev(None)
-        h1 = m.compute_transition_hash("uuid-1", None, 10, "submit", ts)
+        h1 = m.compute_transition_hash("uuid-1", None, 30, "submit", ts)
 
-        # Second row: prev = h1
         m.set_sha256_prev(h1)
-        h2 = m.compute_transition_hash("uuid-2", 10, 20, "accept", ts)
-        assert h2 != h1  # different prev → different hash
+        h2 = m.compute_transition_hash("uuid-2", 30, 40, "approve_engineering", ts)
+        assert h2 != h1
 
 
 # ---------------------------------------------------------------------------
@@ -378,23 +430,25 @@ class TestTerminalStates:
         assert ECNStatus(terminal).is_terminal is True
 
     @pytest.mark.parametrize("non_terminal", [
-        ECNStatus.DRAFT, ECNStatus.SUBMITTED, ECNStatus.DC_REVIEW,
-        ECNStatus.ENGINEERING_REVIEW, ECNStatus.MANAGEMENT_REVIEW,
-        ECNStatus.APPROVED, ECNStatus.IMPLEMENTED, ECNStatus.REJECTED, ECNStatus.ON_HOLD,
+        ECNStatus.DRAFT, ECNStatus.DC_APPROVED, ECNStatus.ENGINEERING_REVIEW,
+        ECNStatus.MANAGEMENT_REVIEW, ECNStatus.APPROVED, ECNStatus.IMPLEMENTED,
+        ECNStatus.REJECTED, ECNStatus.ON_HOLD,
     ])
     def test_is_not_terminal(self, non_terminal):
         assert ECNStatus(non_terminal).is_terminal is False
 
-    def test_no_transitions_from_closed(self):
+    @pytest.mark.asyncio
+    async def test_no_transitions_from_closed(self):
         ecn = _ecn(ECNStatus.CLOSED)
-        ctx = _ctx(actor_username="dcuser", actor_role="DC")
+        ctx = _ctx(actor_username="system", actor_role=None)
         m = _machine(ecn, ctx)
         with pytest.raises(InvalidTransition):
-            m.trigger("close")
+            await m.trigger("auto_close")  # auto_close source is IMPLEMENTED only
 
-    def test_no_transitions_from_cancelled(self):
+    @pytest.mark.asyncio
+    async def test_no_transitions_from_cancelled(self):
         ecn = _ecn(ECNStatus.CANCELLED)
         ctx = _ctx(actor_username="jsmith")
         m = _machine(ecn, ctx)
         with pytest.raises(InvalidTransition):
-            m.trigger("submit")
+            await m.trigger("submit")

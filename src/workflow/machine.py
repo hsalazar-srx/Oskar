@@ -25,8 +25,9 @@ It calls the hook callbacks provided via WorkflowContext. The caller
 
 Sources:
   ai/memory/06-ecn-requirements.md §1–3 — status table, transitions, parallel block rules
-  ai/memory/03-oskar-architecture.md §14 — 12-status machine
+  ai/memory/03-oskar-architecture.md §14 — 10-status machine (ADR-009)
   ai/memory/12-data-model.md §3 — status integer codes
+  decisions/ADR-009-dc-single-gate-role-customisation.md — DC single gate rationale
 """
 
 from __future__ import annotations
@@ -48,8 +49,7 @@ from transitions import Machine, MachineError  # type: ignore[import]
 
 class ECNStatus(IntEnum):
     DRAFT               = 0
-    SUBMITTED           = 10
-    DC_REVIEW           = 20
+    DC_APPROVED         = 25   # ADR-009: single DC gate before Movex write
     ENGINEERING_REVIEW  = 30
     MANAGEMENT_REVIEW   = 40
     APPROVED            = 50
@@ -58,6 +58,7 @@ class ECNStatus(IntEnum):
     CLOSED              = 70
     CANCELLED           = 80
     ON_HOLD             = 90
+    # SUBMITTED(10) and DC_REVIEW(20) removed by ADR-009 — integers tombstoned
 
     @property
     def is_terminal(self) -> bool:
@@ -166,8 +167,7 @@ class ECNWorkflowMachine:
     # transitions requires string state names; we prefix with 's' to stay valid identifiers
     _STATE_NAMES: dict[int, str] = {
         ECNStatus.DRAFT:              "DRAFT",
-        ECNStatus.SUBMITTED:          "SUBMITTED",
-        ECNStatus.DC_REVIEW:          "DC_REVIEW",
+        ECNStatus.DC_APPROVED:        "DC_APPROVED",
         ECNStatus.ENGINEERING_REVIEW: "ENGINEERING_REVIEW",
         ECNStatus.MANAGEMENT_REVIEW:  "MANAGEMENT_REVIEW",
         ECNStatus.APPROVED:           "APPROVED",
@@ -184,28 +184,13 @@ class ECNWorkflowMachine:
     # `unless` is used to express negative conditions.
     # ---------------------------------------------------------------------------
     _TRANSITIONS = [
-        # ── Normal workflow ────────────────────────────────────────────────
+        # ── Normal workflow (ADR-009) ──────────────────────────────────────
+        # submit goes directly to ENGINEERING_REVIEW — no SUBMITTED queue step
         {
             "trigger": "submit",
             "source":  "DRAFT",
-            "dest":    "SUBMITTED",
-            "conditions": ["_guard_submit"],
-            "before":  "_before_transition",
-            "after":   "_after_transition",
-        },
-        {
-            "trigger": "accept",
-            "source":  "SUBMITTED",
-            "dest":    "DC_REVIEW",
-            "conditions": ["_guard_is_dc"],
-            "before":  "_before_transition",
-            "after":   "_after_transition",
-        },
-        {
-            "trigger": "pass_to_engineering",
-            "source":  "DC_REVIEW",
             "dest":    "ENGINEERING_REVIEW",
-            "conditions": ["_guard_is_dc"],
+            "conditions": ["_guard_submit"],
             "before":  "_before_transition",
             "after":   "_after_transition",
         },
@@ -218,7 +203,7 @@ class ECNWorkflowMachine:
             "after":   "_after_transition",
         },
         # MANAGEMENT_REVIEW parallel block: approve_role fires per-role.
-        # The auto-advance to APPROVED fires separately via complete_management_review.
+        # complete_management_review auto-advances to DC_APPROVED (ADR-009).
         {
             "trigger": "approve_role",
             "source":  "MANAGEMENT_REVIEW",
@@ -230,8 +215,17 @@ class ECNWorkflowMachine:
         {
             "trigger": "complete_management_review",
             "source":  "MANAGEMENT_REVIEW",
-            "dest":    "APPROVED",
+            "dest":    "DC_APPROVED",         # ADR-009: DC gate before Movex write
             "conditions": ["_guard_all_required_approved"],
+            "before":  "_before_transition",
+            "after":   "_after_transition",
+        },
+        # DC_APPROVED: single DC gate — combines former DC_REVIEW + IMPLEMENTED→CLOSED manual step
+        {
+            "trigger": "dc_approve",
+            "source":  "DC_APPROVED",
+            "dest":    "APPROVED",
+            "conditions": ["_guard_dc_approve"],
             "before":  "_before_transition",
             "after":   "_after_transition",
         },
@@ -243,11 +237,11 @@ class ECNWorkflowMachine:
             "before":  "_before_transition",
             "after":   "_after_transition",
         },
+        # System-triggered (Celery): automatic after outbox fully completes (ADR-009)
         {
-            "trigger": "close",
+            "trigger": "auto_close",
             "source":  "IMPLEMENTED",
             "dest":    "CLOSED",
-            "conditions": ["_guard_is_dc", "_guard_close"],
             "before":  "_before_transition",
             "after":   "_after_transition",
         },
@@ -255,16 +249,17 @@ class ECNWorkflowMachine:
         # ── Rejection paths ────────────────────────────────────────────────
         {
             "trigger": "reject",
-            "source":  ["SUBMITTED", "DC_REVIEW", "ENGINEERING_REVIEW", "MANAGEMENT_REVIEW"],
+            "source":  ["ENGINEERING_REVIEW", "MANAGEMENT_REVIEW", "DC_APPROVED"],
             "dest":    "REJECTED",
             "conditions": ["_guard_rejection_reason"],
             "before":  "_before_transition",
             "after":   "_after_transition",
         },
+        # resubmit goes to ENGINEERING_REVIEW — no SUBMITTED holding state (ADR-009)
         {
             "trigger": "resubmit",
             "source":  "REJECTED",
-            "dest":    "SUBMITTED",
+            "dest":    "ENGINEERING_REVIEW",
             "conditions": ["_guard_is_originator"],
             "before":  "_before_transition",
             "after":   "_after_transition",
@@ -273,7 +268,7 @@ class ECNWorkflowMachine:
         # ── Cancellation ───────────────────────────────────────────────────
         {
             "trigger": "cancel",
-            "source":  ["DRAFT", "SUBMITTED"],
+            "source":  ["DRAFT"],
             "dest":    "CANCELLED",
             "conditions": ["_guard_cancel"],
             "before":  "_before_transition",
@@ -285,8 +280,8 @@ class ECNWorkflowMachine:
         {
             "trigger": "place_on_hold",
             "source":  [
-                "DRAFT", "SUBMITTED", "DC_REVIEW", "ENGINEERING_REVIEW",
-                "MANAGEMENT_REVIEW", "APPROVED", "IMPLEMENTED", "REJECTED",
+                "DRAFT", "ENGINEERING_REVIEW", "MANAGEMENT_REVIEW",
+                "DC_APPROVED", "APPROVED", "IMPLEMENTED", "REJECTED",
             ],
             "dest":    "ON_HOLD",
             "conditions": ["_guard_place_on_hold"],
@@ -296,10 +291,10 @@ class ECNWorkflowMachine:
         {
             "trigger": "resume",
             "source":  "ON_HOLD",
-            "dest":    "=",             # transitions special: return to self.state
+            "dest":    "=",             # transitions special: reflexive (stays in same Machine state)
             "conditions": ["_guard_resume"],
             "before":  "_before_resume",
-            "after":   "_after_transition",
+            "after":   "_after_resume",  # special: must NOT re-read self.state (still ON_HOLD)
         },
     ]
 
@@ -363,7 +358,8 @@ class ECNWorkflowMachine:
                     f"Trigger '{trigger_name}' was blocked by a guard condition. "
                     f"ECN {self.ecn.ecn_number} is in status {ECNStatus(self.ecn.status).name}."
                 )
-        except MachineError as exc:
+        except (MachineError, AttributeError) as exc:
+            # AttributeError: trigger was removed (e.g. accept, pass_to_engineering — ADR-009)
             raise InvalidTransition(str(exc)) from exc
 
     def current_status(self) -> ECNStatus:
@@ -436,22 +432,29 @@ class ECNWorkflowMachine:
 
     def _after_transition(self) -> None:
         """Update ecn.status from the new state name, compute the hash."""
-        # Map string state name back to int status
         name_to_int = {v: k for k, v in self._STATE_NAMES.items()}
         new_status = name_to_int[self.state]
         self._pending_to_status = new_status
         self.ecn.status = new_status
 
-        # For ON_HOLD: save the pre_hold_status
         if new_status == ECNStatus.ON_HOLD:
             self.ecn.pre_hold_status = self._pending_from_status
+
+    def _after_resume(self) -> None:
+        """After resume: ecn.status was already set by _before_resume; do not re-read self.state.
+
+        With dest='=', the Machine does not change its internal state string — self.state
+        remains 'ON_HOLD'. Reading name_to_int[self.state] would overwrite the restored status.
+        Instead, capture the status _before_resume already set on ecn.
+        """
+        self._pending_to_status = self.ecn.status
 
     # ---------------------------------------------------------------------------
     # Guard conditions
     # ---------------------------------------------------------------------------
 
     def _guard_submit(self) -> bool:
-        """DRAFT → SUBMITTED: mandatory header + ≥1 item + effectivity on all items."""
+        """DRAFT → ENGINEERING_REVIEW: mandatory header + ≥1 item (ADR-009)."""
         if self.ctx.actor_username != self.ecn.originator_username:
             raise GuardFailed("Only the originator can submit an ECN.")
         if not self.ecn.title or not self.ecn.title.strip():
@@ -518,15 +521,24 @@ class ECNWorkflowMachine:
         # Caller pre-validates; this guard acts as the final gate.
         return True
 
-    def _guard_close(self) -> bool:
-        """IMPLEMENTED → CLOSED: customer approval gate (ISO 13485 §7.3.9)."""
+    def _guard_dc_approve(self) -> bool:
+        """DC_APPROVED → APPROVED: DC role + customer approval gate (ISO 13485 §7.3.9).
+
+        ADR-009: consolidates former _guard_is_dc + _guard_close into one gate.
+        DC certifies the full change package before the Movex write is authorised.
+        """
+        if self.ctx.actor_role != "DC":
+            raise GuardFailed(
+                f"Only the Document Controller (DC) may approve at DC_APPROVED. "
+                f"Actor role: {self.ctx.actor_role!r}."
+            )
         if (
             self.ecn.requires_customer_approval
             and self.ecn.customer_approved_at is None
         ):
             raise GuardFailed(
                 "Customer approval is required for this ECN (ISO 13485 §7.3.9). "
-                "Set customer_approved_at before closing."
+                "Set customer_approved_at before DC approval."
             )
         return True
 

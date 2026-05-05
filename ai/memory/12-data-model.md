@@ -619,9 +619,11 @@ CREATE TABLE ecn_transition_history (
     ecn_id           UUID        NOT NULL REFERENCES ecn_instances(id) ON DELETE RESTRICT,
     from_status      SMALLINT,             -- NULL for the initial DRAFT creation event
     to_status        SMALLINT    NOT NULL,
-    action           VARCHAR(50) NOT NULL, -- submit | accept | pass_to_engineering | approve |
-                                           -- reject | resubmit | close | cancel | place_on_hold |
-                                           -- resume | movex_write_complete | movex_write_failed
+    action           VARCHAR(50) NOT NULL, -- submit | approve_role | dc_approve | auto_close |
+                                           -- complete_management_review | movex_write_complete |
+                                           -- reject | resubmit | cancel | place_on_hold |
+                                           -- resume | movex_write_failed | role_assigned | create
+                                           -- (accept + pass_to_engineering removed by ADR-009)
     actor_username   VARCHAR(50) NOT NULL, -- 'system' for Celery-triggered transitions
     actor_role       VARCHAR(2),           -- Role at the time of action
     notes            TEXT,
@@ -903,9 +905,9 @@ CREATE TABLE ecn_bom_changes (
     notes                   TEXT,
 
     -- BOM concurrency detection (ai/memory/06 §10)
-    -- Snapshot of the live Movex BOM captured at DC_REVIEW entry.
+    -- Snapshot of the live Movex BOM captured at DC_APPROVED entry.
     -- Pre-validate from_date against this before the APPROVED write.
-    movex_snapshot_at_review JSONB,                -- Full BOM component list from movex-rest-api at DC_REVIEW
+    movex_snapshot_at_review JSONB,                -- Full BOM component list from movex-rest-api at DC_APPROVED
     snapshot_captured_at     TIMESTAMPTZ,          -- When the snapshot was taken
 
     created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),

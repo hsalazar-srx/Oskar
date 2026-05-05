@@ -40,11 +40,11 @@ tls = Tls(
     version=ssl.PROTOCOL_TLS_CLIENT,
     ca_certs_file="/run/secrets/internal_ca.crt"
 )
-server = Server("ldap.scanfil.local", port=636, use_ssl=True, tls=tls)
+server = Server("srxdc01.srxglobal.com", port=636, use_ssl=True, tls=tls)
 ```
 
-LDAP bind account (`svc-oskar-ldap`): read-only, scoped to OSKAR-related OUs, excluded from
-AD lockout policy (lockout-susceptible bind account = DoS vector), 90-day password rotation.
+LDAP bind account (`svc-oskar-ldap`): read-only, located in `OU=Managed Service Accounts,DC=srxglobal,DC=com`,
+excluded from AD lockout policy (lockout-susceptible bind account = DoS vector), 90-day password rotation.
 
 **LDAP unavailability:** Fail closed. No new logins issued. Existing valid JWTs continue to
 work until expiry. A `/health/auth` endpoint reports LDAP reachability (for ops alerting, not
@@ -92,12 +92,12 @@ incident. The blocklist auto-cleans at startup and hourly via FastAPI lifespan t
 {
   "sub": "jsmith",
   "name": "John Smith",
-  "email": "jsmith@scanfil.apac",
-  "groups": ["OSKAR-Engineers", "OSKAR-Approvers"],
+  "email": "jsmith@srxglobal.com",
+  "groups": ["ecn-initiator", "ecn-approver"],
   "iat": 1744200000,
   "exp": 1744203600,
   "jti": "uuid-v4",
-  "iss": "oskar.scanfil.apac",
+  "iss": "oskar.srxglobal.com",
   "aud": "oskar-api"
 }
 ```
@@ -107,9 +107,10 @@ No per-ECN roles in the JWT. No PII beyond name/email. No internal system paths 
 ### AD group re-check on sensitive writes
 
 Sensitive write operations (approve, reject, trigger Movex write) re-check AD group membership
-via a cached LDAP lookup (refreshed every 30 minutes). This catches the case where a user's
-AD account is disabled mid-session. Stale window of 30 minutes is documented in the IQ as
-a known limitation acceptable for this environment.
+via a cached LDAP lookup against `OU=Application Roles,OU=Groups,DC=srxglobal,DC=com`
+(refreshed every 30 minutes). This catches the case where a user's AD account is disabled
+mid-session. Stale window of 30 minutes is documented in the IQ as a known limitation
+acceptable for this environment.
 
 ---
 

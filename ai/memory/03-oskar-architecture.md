@@ -6,8 +6,8 @@
 > Diagrams use Mermaid — renders in VS Code (Markdown Preview), GitHub, and Obsidian
 > (requires Mermaid plugin). Run `Ctrl+Shift+V` in VS Code to preview.
 
-**Version:** 2.0 — 2026-05-01
-**Changes:** §7 updated (SSE implemented); §10 updated (SSE row); §17–20 added (AIProvider, Agent Action Outbox, SSE flow, extended platform diagram)
+**Version:** 2.1 — 2026-05-01
+**Changes:** §7 updated (SSE implemented); §10 updated (SSE row); §14 updated (ADR-009: DC single gate, 10-status machine, diagrams redrawn); §17–20 added (AIProvider, Agent Action Outbox, SSE flow, extended platform diagram)
 
 ---
 
@@ -97,9 +97,9 @@ graph TB
     end
   end
 
-  subgraph OskarVM["OSKAR Linux VM — VMware, Ubuntu 24.04 LTS<br/>oskar-vm.srxglobal.local | 2 vCPU / 4 GB"]
+  subgraph OskarVM["OSKAR Linux VM — VMware, Ubuntu 24.04 LTS<br/>apac-plm-ops.srxglobal.local | 2 vCPU / 4 GB"]
     direction TB
-    Harbor["Harbor Registry<br/>oskar-vm.srxglobal.local"]
+    Harbor["Harbor Registry<br/>apac-plm-ops.srxglobal.local"]
 
     subgraph DockerProd["Docker Compose — Production"]
       oskar_fe["oskar-frontend<br/>React/TS — :3000"]
@@ -411,7 +411,7 @@ Every ECN transition is recorded as an immutable row in `ecn_transition_history`
   "ecn_id":           "uuid — FK to ecn_instances",
   "from_status":      "integer | null (null for chain head)",
   "to_status":        "integer",
-  "action":           "submit | accept | pass_to_engineering | approve_role | ...",
+  "action":           "submit | approve_role | dc_approve | complete_management_review | role_assigned | ...",
   "actor_username":   "sAMAccountName (LDAP-verified) | 'system' for Celery transitions",
   "actor_role":       "DC | QM | ... | null",
   "notes":            "free text | null",
@@ -515,7 +515,7 @@ This eliminates Stargile's stuck-ECN problem: APPROVED = Movex pending (correct)
 | Layer | Store | Question answered | Who manages |
 |---|---|---|---|
 | Authentication | Active Directory (LDAPS bind port 636) | Is this a valid Scanfil APAC user? | IT (Manal) |
-| Platform access | AD groups (`OSKAR-Engineers`, `OSKAR-Approvers`, `OSKAR-Admins`) | Can this user log into OSKAR? | IT (Manal) |
+| Platform access | AD groups (`OSKAR-Engineers`, `OSKAR-Approvers`) | Can this user log into OSKAR? | IT (Manal) |
 | System role | `system_role_users` (PostgreSQL) | Is this user a DC / EM / QM system-wide? | OSKAR Admin |
 | Per-ECN role | `ecn_role_assignments` (PostgreSQL) | Who is the DC for ECN-2026-0042? | Auto-assigned at creation; overrideable by Admin |
 
@@ -537,7 +537,8 @@ At ECN creation, for each required role: query `system_role_users` for active us
 
 > **Implementation:** `src/workflow/machine.py` — `ECNWorkflowMachine` + `ECNStatus` IntEnum.
 > **Decision rationale:** `decisions/ADR-002-workflow-engine-celery-postgresql-transitions.md`.
-> Stargile's 50+60 collapsed into APPROVED+IMPLEMENTED — Movex write state is infrastructure, not user-visible workflow.
+> **ADR-009 (2026-05-01):** DC single gate. SUBMITTED(10) and DC_REVIEW(20) removed; DC_APPROVED(25) added
+> between MANAGEMENT_REVIEW and APPROVED. IMPLEMENTED→CLOSED is now automatic (Celery). 10 active statuses.
 > ARCHIVED is a flag (`is_archived=TRUE`), not a status — no state machine transition involved.
 
 ### 14.1 Status Reference
@@ -545,17 +546,18 @@ At ECN creation, for each required role: query `system_role_users` for active us
 | Code | Name | Terminal? | Description |
 |------|------|-----------|-------------|
 | 0 | DRAFT | No | Being authored; not yet submitted |
-| 10 | SUBMITTED | No | Submitted to DC for completeness check |
-| 20 | DC_REVIEW | No | DC performing document control check |
+| 25 | DC_APPROVED | No | DC final sign-off before Movex write; customer approval gate here |
 | 30 | ENGINEERING_REVIEW | No | SE/CE technical review in progress |
 | 40 | MANAGEMENT_REVIEW | No | Parallel approval block: EM + QM always; PM/SC/FN conditional |
 | 50 | APPROVED | No | All human approvals complete; Movex writes queued in outbox |
 | 60 | IMPLEMENTED | No | All Movex writes confirmed successful by Celery |
 | 65 | REJECTED | No | Rejected at any stage; routed to originator with mandatory reason |
-| 70 | CLOSED | **Yes** | Post-implementation sign-off complete (ISO 13485 gate) |
+| 70 | CLOSED | **Yes** | Post-implementation complete; automatic via Celery (ADR-009) |
 | 80 | CANCELLED | **Yes** | Withdrawn before approval; no Movex writes made |
 | 90 | ON_HOLD | No | Suspended pending external input; pre_hold_status saves prior status |
 | — | ARCHIVED | Flag only | `is_archived=TRUE` on CLOSED records; not a transition |
+
+**Tombstoned integers:** 10 (SUBMITTED) and 20 (DC_REVIEW) removed by ADR-009. Must never be reused.
 
 ### 14.2 Full Transition Diagram
 
@@ -563,44 +565,37 @@ At ECN creation, for each required role: query `system_role_users` for active us
 stateDiagram-v2
     [*] --> DRAFT : ECN created
 
-    DRAFT --> SUBMITTED : submit\n[originator only · ≥1 item · title set]
-    DRAFT --> CANCELLED : cancel\n[originator or Admin]
+    DRAFT --> ENGINEERING_REVIEW : submit<br>[originator only · ≥1 item · title set]
+    DRAFT --> CANCELLED : cancel<br>[originator or Admin]
+    DRAFT --> ON_HOLD : place_on_hold<br>[DC or Admin · reason + resume date]
 
-    SUBMITTED --> DC_REVIEW : accept\n[DC only]
-    SUBMITTED --> REJECTED : reject\n[DC only · reason mandatory]
-    SUBMITTED --> CANCELLED : cancel\n[originator or Admin]
+    ENGINEERING_REVIEW --> MANAGEMENT_REVIEW : approve_engineering<br>[SE or CE]
+    ENGINEERING_REVIEW --> REJECTED : reject<br>[SE or CE · reason mandatory]
+    ENGINEERING_REVIEW --> ON_HOLD : place_on_hold<br>[DC or Admin]
 
-    DC_REVIEW --> ENGINEERING_REVIEW : pass_to_engineering\n[DC only]
-    DC_REVIEW --> REJECTED : reject\n[DC only · reason mandatory]
+    MANAGEMENT_REVIEW --> MANAGEMENT_REVIEW : approve_role<br>[EM/QM/PM/SC/FN/CE/CA · no self-approval]
+    MANAGEMENT_REVIEW --> DC_APPROVED : complete_management_review<br>[system — all required roles approved]
+    MANAGEMENT_REVIEW --> REJECTED : reject<br>[any required role · reason mandatory]
+    MANAGEMENT_REVIEW --> ON_HOLD : place_on_hold<br>[DC or Admin]
 
-    ENGINEERING_REVIEW --> MANAGEMENT_REVIEW : approve_engineering\n[SE or CE]
-    ENGINEERING_REVIEW --> REJECTED : reject\n[SE or CE · reason mandatory]
+    DC_APPROVED --> APPROVED : dc_approve<br>[DC only · ISO 13485 customer approval gate]
+    DC_APPROVED --> REJECTED : reject<br>[DC only · reason mandatory]
+    DC_APPROVED --> ON_HOLD : place_on_hold<br>[DC or Admin]
 
-    MANAGEMENT_REVIEW --> MANAGEMENT_REVIEW : approve_role\n[EM/QM/PM/SC/FN/CE/CA · no self-approval]
-    MANAGEMENT_REVIEW --> APPROVED : complete_management_review\n[system — all required roles approved]
-    MANAGEMENT_REVIEW --> REJECTED : reject\n[any required role · reason mandatory]
+    APPROVED --> IMPLEMENTED : movex_write_complete<br>[Celery — all outbox entries completed]
+    APPROVED --> ON_HOLD : place_on_hold<br>[DC or Admin]
 
-    APPROVED --> IMPLEMENTED : movex_write_complete\n[Celery — all outbox entries completed]
+    IMPLEMENTED --> CLOSED : auto_close<br>[Celery — automatic · no human action required]
+    IMPLEMENTED --> ON_HOLD : place_on_hold<br>[DC or Admin]
 
-    IMPLEMENTED --> CLOSED : close\n[DC only · customer approval gate if required]
-
-    REJECTED --> SUBMITTED : resubmit\n[originator only]
-    REJECTED --> CANCELLED : withdraw\n[originator only]
-
-    DRAFT --> ON_HOLD : place_on_hold\n[DC or Admin · reason + resume date]
-    SUBMITTED --> ON_HOLD : place_on_hold\n[DC or Admin]
-    DC_REVIEW --> ON_HOLD : place_on_hold\n[DC or Admin]
-    ENGINEERING_REVIEW --> ON_HOLD : place_on_hold\n[DC or Admin]
-    MANAGEMENT_REVIEW --> ON_HOLD : place_on_hold\n[DC or Admin]
-    APPROVED --> ON_HOLD : place_on_hold\n[DC or Admin]
-    IMPLEMENTED --> ON_HOLD : place_on_hold\n[DC or Admin]
-    REJECTED --> ON_HOLD : place_on_hold\n[DC or Admin]
+    REJECTED --> ENGINEERING_REVIEW : resubmit<br>[originator only]
+    REJECTED --> CANCELLED : withdraw<br>[originator only]
+    REJECTED --> ON_HOLD : place_on_hold<br>[DC or Admin]
 
     ON_HOLD --> DRAFT : resume [pre_hold=0]
-    ON_HOLD --> SUBMITTED : resume [pre_hold=10]
-    ON_HOLD --> DC_REVIEW : resume [pre_hold=20]
     ON_HOLD --> ENGINEERING_REVIEW : resume [pre_hold=30]
     ON_HOLD --> MANAGEMENT_REVIEW : resume [pre_hold=40]
+    ON_HOLD --> DC_APPROVED : resume [pre_hold=25]
     ON_HOLD --> APPROVED : resume [pre_hold=50]
     ON_HOLD --> IMPLEMENTED : resume [pre_hold=60]
     ON_HOLD --> REJECTED : resume [pre_hold=65]
@@ -625,10 +620,8 @@ sequenceDiagram
     participant MG as Mgmt Block\n(EM · QM · PM · SC · FN)
     participant SYS as System (Celery)
 
-    OR->>DC: submit — DRAFT → SUBMITTED
-    Note over OR,DC: Guard: ≥1 item, title set, originator only
-
-    DC->>SE: accept + pass_to_engineering\nSUBMITTED → DC_REVIEW → ENGINEERING_REVIEW
+    OR->>SE: submit — DRAFT → ENGINEERING_REVIEW
+    Note over OR,SE: Guard: ≥1 item, title set, originator only\nNo DC gate at submission (ADR-009)
 
     SE->>MG: approve_engineering\nENGINEERING_REVIEW → MANAGEMENT_REVIEW
     Note over MG: Parallel block opens\nAll required roles notified simultaneously
@@ -645,14 +638,17 @@ sequenceDiagram
         MG-->>MG: approve_role [FN] (if wapc_delta_pct > threshold)
     end
 
-    MG->>SYS: complete_management_review\nMANAGEMENT_REVIEW → APPROVED
-    Note over SYS:  movex_outbox entries created atomically<br>with status advance (Transactional Outbox)  
+    MG->>DC: complete_management_review\nMANAGEMENT_REVIEW → DC_APPROVED
+    Note over DC: DC_APPROVED — single gate before Movex write (ADR-009)
 
-    SYS->>DC: movex_write_complete\nAPPROVED → IMPLEMENTED
-    Note over SYS,DC: All MI calls confirmed<br>Celery dispatches email notification
+    DC->>SYS: dc_approve — DC_APPROVED → APPROVED
+    Note over SYS:  movex_outbox entries created atomically<br>with status advance (Transactional Outbox)
 
-    DC->>DC: close\nIMPLEMENTED → CLOSED
-    Note over DC: ISO 13485 gate:<br>customer_approved_at required if flag set
+    SYS->>SYS: movex_write_complete\nAPPROVED → IMPLEMENTED
+    Note over SYS: All MI calls confirmed<br>Celery dispatches email notification
+
+    SYS->>SYS: auto_close — IMPLEMENTED → CLOSED
+    Note over SYS: Celery-triggered — no DC action required (ADR-009)
 ```
 
 ### 14.4 Rejection and Recovery Paths
@@ -671,10 +667,9 @@ flowchart TD
     classDef term    fill:#2d6a4f,color:#fff,stroke:#1b4332
 
     DR([DRAFT]):::active
-    SU([SUBMITTED]):::active
-    DC([DC_REVIEW]):::active
     ER([ENGINEERING_REVIEW]):::active
     MR([MANAGEMENT_REVIEW]):::active
+    DA([DC_APPROVED]):::active
     AP([APPROVED]):::active
     IM([IMPLEMENTED]):::active
     RJ([REJECTED]):::reject
@@ -682,30 +677,26 @@ flowchart TD
     CA([CANCELLED]):::term
     OH([ON_HOLD]):::hold
 
-    DR -->|"submit\n[originator]"| SU
-    SU -->|"accept [DC]"| DC
-    DC -->|"pass_to_engineering [DC]"| ER
+    DR -->|"submit [originator]"| ER
     ER -->|"approve_engineering [SE/CE]"| MR
-    MR -->|"complete_management_review"| AP
+    MR -->|"complete_management_review\n[system — auto]"| DA
+    DA -->|"dc_approve [DC]\ncustomer approval gate"| AP
     AP -->|"movex_write_complete\n[Celery]"| IM
-    IM -->|"close [DC]\nISO 13485 gate"| CL
+    IM -->|"auto_close [Celery]"| CL
 
-    SU -->|"reject [DC]\nreason mandatory"| RJ
-    DC -->|"reject [DC]\nreason mandatory"| RJ
     ER -->|"reject [SE/CE]\nreason mandatory"| RJ
     MR -->|"reject [any role]\nreason mandatory"| RJ
+    DA -->|"reject [DC]\nreason mandatory"| RJ
 
-    RJ -->|"resubmit [originator]"| SU
+    RJ -->|"resubmit [originator]"| ER
     RJ -->|"withdraw [originator]"| CA
     DR -->|"cancel [originator/Admin]"| CA
-    SU -->|"cancel [originator/Admin]"| CA
 
-    DR & SU & DC & ER & MR & AP & IM & RJ -->|"place_on_hold\n[DC/Admin]\nreason + resume date"| OH
+    DR & ER & MR & DA & AP & IM & RJ -->|"place_on_hold\n[DC/Admin]\nreason + resume date"| OH
     OH -->|"resume [DC/Admin]\nrestores pre_hold_status"| DR
-    OH -->|"resume"| SU
-    OH -->|"resume"| DC
     OH -->|"resume"| ER
     OH -->|"resume"| MR
+    OH -->|"resume"| DA
     OH -->|"resume"| AP
     OH -->|"resume"| IM
     OH -->|"resume"| RJ
@@ -822,18 +813,18 @@ sequenceDiagram
 | Trigger | Source | Guard | Who |
 |---------|--------|-------|-----|
 | `submit` | DRAFT | ≥1 item; title set; actor = originator | Originator |
-| `accept` | SUBMITTED | actor_role = `DC` | DC |
-| `pass_to_engineering` | DC_REVIEW | actor_role = `DC` | DC |
 | `approve_engineering` | ENGINEERING_REVIEW | actor_role ∈ {`SE`, `CE`} | SE or CE |
 | `approve_role` | MANAGEMENT_REVIEW | actor_role ∈ valid mgmt roles; actor ≠ originator | EM/QM/PM/SC/FN/CE/CA |
 | `complete_management_review` | MANAGEMENT_REVIEW | all non-skipped steps `approved`; `all_required_approved_fn` registered | System |
+| `dc_approve` | DC_APPROVED | actor_role = `DC`; `customer_approved_at` set if `requires_customer_approval=TRUE` (ADR-009) | DC |
 | `movex_write_complete` | APPROVED | _(no guard — Celery only)_ | Celery |
-| `close` | IMPLEMENTED | actor_role = `DC`; `customer_approved_at` set if `requires_customer_approval=TRUE` | DC |
-| `reject` | SUBMITTED/DC_REVIEW/ENGINEERING_REVIEW/MANAGEMENT_REVIEW | rejection_reason non-empty | Role-appropriate |
+| `auto_close` | IMPLEMENTED | _(no guard — Celery only, ADR-009)_ | Celery |
+| `reject` | ENGINEERING_REVIEW/MANAGEMENT_REVIEW/DC_APPROVED | rejection_reason non-empty | Role-appropriate |
 | `resubmit` | REJECTED | actor = originator | Originator |
-| `cancel` | DRAFT/SUBMITTED | actor = originator or actor_role = `AD` | Originator or Admin |
+| `cancel` | DRAFT | actor = originator or actor_role = `AD` | Originator or Admin |
 | `place_on_hold` | any non-terminal/non-hold | actor_role ∈ {`DC`, `AD`}; hold_reason set; expected_resume_date set | DC or Admin |
 | `resume` | ON_HOLD | actor_role ∈ {`DC`, `AD`}; `pre_hold_status` not NULL | DC or Admin |
+> **ADR-009:** `accept` (SUBMITTED→DC_REVIEW) and `pass_to_engineering` (DC_REVIEW→ENGINEERING_REVIEW) removed. Integers 10 and 20 tombstoned.
 
 **Self-approval prohibition:** Enforced on `approve_role` — actor_username cannot equal ecn.originator_username at any stage, regardless of role membership.
 
@@ -862,15 +853,15 @@ tasks only. If `LISTEN/NOTIFY` is introduced, this taxonomy becomes the `pg_noti
 | event_type | Trigger | Key fields |
 |------------|---------|-----------|
 | `ecn.created` | ECN created (DRAFT) | `title`, `originator` |
-| `ecn.submitted` | DRAFT → SUBMITTED | — |
-| `ecn.accepted` | SUBMITTED → DC_REVIEW | — |
-| `ecn.passed_to_engineering` | DC_REVIEW → ENGINEERING_REVIEW | — |
+| `ecn.submitted` | DRAFT → ENGINEERING_REVIEW | — |
 | `ecn.approved_by_role` | Parallel approver completes | `role`, `remaining` |
-| `ecn.management_approved` | MANAGEMENT_REVIEW → APPROVED | — |
+| `ecn.dc_approved` | DC_APPROVED → APPROVED | — |
 | `ecn.implemented` | APPROVED → IMPLEMENTED | `mi_calls` count |
-| `ecn.closed` | IMPLEMENTED → CLOSED | — |
+| `ecn.closed` | IMPLEMENTED → CLOSED (auto_close) | — |
 | `ecn.rejected` | Any stage → REJECTED | `rejection_number`, `reason` |
 | `ecn.on_hold` | Any stage → ON_HOLD | `reason`, `resume_by` |
+| `ecn.role_assigned` | Role reassigned by DC | `role_id`, `new_username`, `superseded_username` |
+> **ADR-009:** `ecn.accepted` and `ecn.passed_to_engineering` events removed (SUBMITTED/DC_REVIEW statuses tombstoned).
 | `ecn.resumed` | ON_HOLD → prior status | `resumed_status` |
 | `ecn.cancelled` | → CANCELLED | — |
 | `ecn.movex_write_failed` | Outbox attempt 3 | `mi_transaction`, `error_code` |

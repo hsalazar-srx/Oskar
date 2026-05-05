@@ -18,7 +18,7 @@ set -euo pipefail
 TAG="${1:-latest}"
 # Harbor registry — hostname confirmed by Manal once VM is provisioned (expected 2026-04-17)
 # Update REGISTRY below or set it as an environment variable
-REGISTRY="${REGISTRY:-oskar-vm.srxglobal.local}"
+REGISTRY="${REGISTRY:-apac-plm-ops.srxglobal.local}"
 APP_IMAGE="${REGISTRY}/oskar-app"
 FRONTEND_IMAGE="${REGISTRY}/oskar-frontend"
 

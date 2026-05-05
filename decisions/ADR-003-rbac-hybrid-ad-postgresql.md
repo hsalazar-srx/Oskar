@@ -26,15 +26,15 @@ OSKAR must satisfy ISO 13485 non-repudiation requirements and DISP audit evidenc
 | Layer | Store | Question | Who manages |
 |---|---|---|---|
 | Authentication | Active Directory (LDAPS 636) | Valid Scanfil APAC user? | IT (Manal) |
-| Platform access | AD groups (`OSKAR-*`) | Can this user log into OSKAR? | IT (Manal) |
+| Platform access | AD groups (`ecn-*`) | Can this user log into OSKAR? | IT (Manal) |
 | System role | `system_role_users` (PostgreSQL) | Is this user a DC / QM system-wide? | OSKAR Admin |
 | Per-ECN role | `ecn_role_assignments` (PostgreSQL) | Who is DC for ECN-2026-0042? | Auto-assigned; Admin override |
 
 ### What goes in the JWT
 
 The JWT issued at login carries:
-- `sub`: LDAP username
-- `groups`: AD group membership (e.g., `["OSKAR-Engineers", "OSKAR-Approvers"]`)
+- `sub`: LDAP username (sAMAccountName)
+- `groups`: AD group membership (e.g., `["ecn-initiator", "ecn-approver"]`)
 - `name`, `email` (from LDAP `displayName` and `mail` attributes)
 - `iat`, `exp`, `jti`, `iss`, `aud`
 
@@ -45,10 +45,24 @@ mid-ECN) and must always be queried live from `ecn_role_assignments`.
 
 Every approval-gate endpoint uses a two-layer check:
 
-1. **Coarse (stateless):** JWT `groups` claim — "Is this user in OSKAR-Approvers at all?"
+1. **Coarse (stateless):** JWT `groups` claim — "Is this user in `ecn-approver` at all?"
 2. **Fine (live DB):** `ecn_role_assignments` query — "Is this user the QM for this specific ECN?"
 
 Both must pass. Either failure returns 403. The fine check is never cached in the JWT.
+
+### AD Group Structure
+
+Groups are located under `OU=Application Roles,OU=Groups,DC=srxglobal,DC=com`
+(Security Group — Universal). Domain: `srxglobal.com`, DC: `srxdc01.srxglobal.com`.
+
+| AD Group CN | Distinguished Name | OSKAR gate | Managed by |
+|---|---|---|---|
+| `ecn-initiator` | `CN=ecn-initiator,OU=Application Roles,OU=Groups,DC=srxglobal,DC=com` | Can create ECNs and view items/BOM | IT (Manal) |
+| `ecn-approver` | `CN=ecn-approver,OU=Application Roles,OU=Groups,DC=srxglobal,DC=com` | Can action approval steps (SE, CE, EM, QM, PM, SC, FN, CA, AD) | IT (Manal) |
+| `ecn-doc-controller` | `CN=ecn-doc-controller,OU=Application Roles,OU=Groups,DC=srxglobal,DC=com` | Document Controller gate (subset of ecn-approver) | IT (Manal) |
+
+Service account `svc-oskar-ldap` resides in `OU=Managed Service Accounts,DC=srxglobal,DC=com`.
+Read-only, excluded from AD lockout policy. 90-day password rotation.
 
 ### OSKAR Role Set (11 active + 3 observer — from @expert-manufacturing-engineering)
 

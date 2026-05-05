@@ -8,6 +8,10 @@ Two implementations:
 OSKAR runs in Docker on Linux. Windows Negotiate (Kerberos/NTLM) is not available
 inside Docker containers. LDAP bind to on-prem AD is the correct path.
 Engineers authenticate with their Windows AD credentials via LDAP.
+
+Domain: srxglobal.com  |  DC: srxdc01.srxglobal.com
+Groups live under: OU=Application Roles,OU=Groups,DC=srxglobal,DC=com
+ECN groups: ecn-initiator, ecn-approver, ecn-doc-controller
 """
 
 from __future__ import annotations
@@ -50,10 +54,10 @@ class LDAPIdentityProvider:
     """Production identity provider — on-prem Active Directory via ldap3.
 
     Configuration via environment variables:
-        LDAP_SERVER   — e.g. ldap://srxdc01.srxglobal.local
-        LDAP_BASE_DN  — e.g. DC=srxglobal,DC=local
-        LDAP_BIND_DN  — Service account for group lookups (optional)
-        LDAP_BIND_PW  — Service account password (optional)
+        LDAP_SERVER   — e.g. ldaps://srxdc01.srxglobal.com:636
+        LDAP_BASE_DN  — e.g. DC=srxglobal,DC=com
+        LDAP_BIND_DN  — Service account DN for group lookups (svc-oskar-ldap)
+        LDAP_BIND_PW  — Service account password
     """
 
     def __init__(self) -> None:
@@ -66,7 +70,7 @@ class LDAPIdentityProvider:
     def _make_server(server_uri: str):
         """Build a TLS-hardened ldap3 Server.
 
-        Production: LDAP_SERVER=ldaps://srxdc01.srxglobal.local:636
+        Production: LDAP_SERVER=ldaps://srxdc01.srxglobal.com:636
         TLS: CERT_REQUIRED, CA cert from Docker secret /run/secrets/internal_ca.crt
              Falls back to system CA bundle when the secret file is absent (dev/CI).
         ADR-006 P0-1 — LDAPS mandatory; plain LDAP on 389 is a DISP Tier 1 finding.
@@ -86,20 +90,61 @@ class LDAPIdentityProvider:
         )
         return ldap3.Server(server_uri, use_ssl=True, tls=tls, get_info=ldap3.ALL)
 
-    def authenticate(self, username: str, password: str) -> bool:
-        """Bind to LDAPS with user credentials. Return True on success."""
+    def _find_user_dn(self, username: str) -> str | None:
+        """Look up the user's full DN via sAMAccountName using the service account.
+
+        Users are distributed across site OUs (JohorBahru, Melbourne, Penang) under
+        DC=srxglobal,DC=com — a flat CN={user},DC=... bind would fail for most accounts.
+        """
         try:
             import ldap3  # type: ignore[import]
 
             server = self._make_server(self.server_uri)
-            user_dn = f"CN={username},{self.base_dn}"
+            conn = ldap3.Connection(
+                server,
+                user=self.bind_dn,
+                password=self.bind_pw,
+                auto_bind=True,
+            )
+            conn.search(
+                search_base=self.base_dn,
+                search_filter=f"(sAMAccountName={username})",
+                attributes=["distinguishedName"],
+            )
+            if not conn.entries:
+                return None
+            return str(conn.entries[0].distinguishedName.value)  # type: ignore[attr-defined]
+        except Exception:
+            return None
+
+    def authenticate(self, username: str, password: str) -> bool:
+        """Bind to LDAPS with user credentials. Return True on success.
+
+        Resolves the user's full DN via sAMAccountName search first, then binds.
+        Required because users sit under site OUs (JohorBahru, Melbourne, Penang).
+        """
+        try:
+            import ldap3  # type: ignore[import]
+
+            user_dn = self._find_user_dn(username)
+            if not user_dn:
+                return False
+            server = self._make_server(self.server_uri)
             conn = ldap3.Connection(server, user=user_dn, password=password)
             return conn.bind()
         except Exception:
             return False
 
+    # OU containing all ECN application role groups (srxglobal-active-directory-groups-structure.md)
+    _GROUP_SEARCH_BASE = "OU=Application Roles,OU=Groups,DC=srxglobal,DC=com"
+
     def get_groups(self, username: str) -> list[str]:
-        """Return CN values of AD groups the user belongs to."""
+        """Return CN values of AD groups the user belongs to.
+
+        Searches the user's memberOf attribute and returns only groups that live
+        under OU=Application Roles,OU=Groups — ECN groups are ecn-initiator,
+        ecn-approver, ecn-doc-controller (docs/srxglobal-active-directory-groups-structure.md).
+        """
         try:
             import ldap3  # type: ignore[import]
 
@@ -118,8 +163,13 @@ class LDAPIdentityProvider:
             if not conn.entries:
                 return []
             member_of: list[str] = conn.entries[0].memberOf.values  # type: ignore[attr-defined]
-            # Extract CN= from each DN, e.g. "CN=OSKAR-Engineers,OU=Groups,DC=..."
-            return [dn.split(",")[0].replace("CN=", "") for dn in member_of]
+            # Return CN of groups that live in the Application Roles OU only
+            app_role_dn_suffix = self._GROUP_SEARCH_BASE.lower()
+            return [
+                dn.split(",")[0].replace("CN=", "")
+                for dn in member_of
+                if app_role_dn_suffix in dn.lower()
+            ]
         except Exception:
             return []
 

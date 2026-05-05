@@ -3,8 +3,8 @@
 > **PROVIDER-AGNOSTIC — Non-Negotiable #12**
 > No tool-specific syntax. Readable by any LLM tool or none.
 
-**Version:** 1.0
-**Date:** 2026-04-13
+**Version:** 1.1
+**Date:** 2026-05-04
 **Phase:** Phase 1 Track E deliverable
 **Stack:** Python 3.12, FastAPI, PostgreSQL 16, Redis 7, Celery, `transitions` library
 
@@ -47,20 +47,19 @@
 Every transition in the state table (Section 2 of `ai/memory/06-ecn-requirements.md`) must have at least one test:
 
 ```
-test_draft_submit_valid                    DRAFT → SUBMITTED (all guards pass)
-test_draft_submit_no_items                 SUBMITTED guard: 0 items → ValueError
-test_draft_submit_missing_effectivity      SUBMITTED guard: item missing effectivity_type → ValueError
-test_submitted_accept                      SUBMITTED → DC_REVIEW
-test_submitted_reject_requires_reason      reject without reason → ValueError
-test_dc_review_pass                        DC_REVIEW → ENGINEERING_REVIEW
+test_draft_submit_valid                    DRAFT → ENGINEERING_REVIEW (all guards pass) [ADR-009]
+test_draft_submit_no_items                 submit guard: 0 items → ValueError
+test_draft_submit_missing_effectivity      submit guard: item missing effectivity_type → ValueError
 test_engineering_approve                   ENGINEERING_REVIEW → MANAGEMENT_REVIEW
-test_management_parallel_all_approve       All required roles approve → APPROVED (automatic)
+test_management_parallel_all_approve       All required roles approve → DC_APPROVED (automatic) [ADR-009]
 test_management_parallel_conditional_skip  PM skipped when routing_changes=FALSE
 test_management_any_rejection_wins         One rejection → REJECTED regardless of others approved
+test_dc_approved_dc_approve                DC_APPROVED → APPROVED (dc_approve, actor_role=DC) [ADR-009]
+test_dc_approved_customer_gate             dc_approve blocked if requires_customer_approval and no customer_approved_at
 test_approved_celery_complete              APPROVED → IMPLEMENTED (outbox all completed)
 test_approved_celery_fail_stays_approved   APPROVED stays on MI failure
-test_implemented_close                     IMPLEMENTED → CLOSED
-test_rejected_resubmit_restart             REJECTED → SUBMITTED, all steps reset
+test_implemented_auto_close               IMPLEMENTED → CLOSED (Celery auto_close, no DC) [ADR-009]
+test_rejected_resubmit_restart             REJECTED → ENGINEERING_REVIEW, all steps reset [ADR-009]
 test_rejected_resubmit_proceed             REJECTED → prior stage, only rejecting step reset
 test_self_approval_blocked                 Originator cannot approve own ECN → 403
 test_on_hold_resume_restores_status        ON_HOLD → prior status from pre_hold_status field

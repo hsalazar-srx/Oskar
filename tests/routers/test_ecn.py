@@ -244,16 +244,17 @@ class TestGetECN:
 
 
 class TestTransitionECNStatus:
-    def test_submit_returns_200_submitted_status(self, client: TestClient) -> None:
-        after = _detail(ecn_status=ECNStatus.SUBMITTED)
+    def test_submit_returns_200_engineering_review_status(self, client: TestClient) -> None:
+        """submit goes directly to ENGINEERING_REVIEW (ADR-009 — no SUBMITTED queue)."""
+        after = _detail(ecn_status=ECNStatus.ENGINEERING_REVIEW)
         with patch.object(ECNService, "transition", new_callable=AsyncMock, return_value=after):
             resp = client.patch(
                 "/api/v1/ecn/ecn-0001/status",
                 json={"trigger": "submit", "actor_role": "OR"},
             )
         assert resp.status_code == 200
-        assert resp.json()["status"] == ECNStatus.SUBMITTED
-        assert resp.json()["status_name"] == "SUBMITTED"
+        assert resp.json()["status"] == ECNStatus.ENGINEERING_REVIEW
+        assert resp.json()["status_name"] == "ENGINEERING_REVIEW"
 
     def test_guard_failure_returns_422(self, client: TestClient) -> None:
         with patch.object(
@@ -262,7 +263,7 @@ class TestTransitionECNStatus:
         ):
             resp = client.patch(
                 "/api/v1/ecn/ecn-0001/status",
-                json={"trigger": "accept", "actor_role": "OR"},
+                json={"trigger": "dc_approve", "actor_role": "OR"},  # wrong role
             )
         assert resp.status_code == 422
         assert "DC" in resp.json()["detail"]
@@ -313,11 +314,11 @@ class TestTransitionECNStatus:
     def test_invalid_transition_returns_422(self, client: TestClient) -> None:
         with patch.object(
             ECNService, "transition", new_callable=AsyncMock,
-            side_effect=ECNTransitionError("Can't trigger 'close' from DRAFT."),
+            side_effect=ECNTransitionError("Can't trigger 'auto_close' from DRAFT."),
         ):
             resp = client.patch(
                 "/api/v1/ecn/ecn-0001/status",
-                json={"trigger": "close", "actor_role": "DC"},
+                json={"trigger": "auto_close", "actor_role": "DC"},
             )
         assert resp.status_code == 422
 
@@ -400,7 +401,7 @@ class TestOptimisticLocking:
 
     # OQ-40 (continued): valid If-Unmodified-Since on PATCH /status succeeds
     def test_oq40_valid_header_on_status_patch_succeeds(self, client: TestClient) -> None:
-        after = _detail(ecn_status=ECNStatus.SUBMITTED)
+        after = _detail(ecn_status=ECNStatus.ENGINEERING_REVIEW)
         with patch.object(ECNService, "transition", new_callable=AsyncMock, return_value=after):
             resp = client.patch(
                 "/api/v1/ecn/ecn-0001/status",
@@ -480,7 +481,7 @@ class TestOptimisticLocking:
 
     # OQ-43: two concurrent PATCHes — second (stale) loses with 409
     def test_oq43_concurrent_patches_second_loses(self, client: TestClient) -> None:
-        after = _detail(ecn_status=ECNStatus.SUBMITTED)
+        after = _detail(ecn_status=ECNStatus.ENGINEERING_REVIEW)
         current_ts = datetime(2026, 4, 23, 4, 10, 1, tzinfo=timezone.utc)
 
         call_count = 0
@@ -515,7 +516,7 @@ class TestOptimisticLocking:
         ):
             resp = client.patch(
                 "/api/v1/ecn/ecn-0001/status",
-                json={"trigger": "accept", "actor_role": "DC"},
+                json={"trigger": "dc_approve", "actor_role": "DC"},
                 headers={"If-Unmodified-Since": _STALE_TS},
             )
         assert resp.status_code == 409

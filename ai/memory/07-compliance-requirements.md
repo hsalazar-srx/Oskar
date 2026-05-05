@@ -3,8 +3,8 @@
 > **PROVIDER-AGNOSTIC — Non-Negotiable #12**
 > No tool-specific syntax. Readable by any LLM tool or none.
 
-**Version:** 1.1
-**Date:** 2026-04-14
+**Version:** 1.2
+**Date:** 2026-05-04
 **Phase:** Phase 1 Track C deliverable
 **Status:** Draft — pending UAT sign-off
 
@@ -45,7 +45,7 @@ Verifies that OSKAR is installed correctly and that the environment matches the 
 | IQ-03 | Celery broker tables present in PostgreSQL — `kombu_message`, `kombu_queue`, `celery_taskmeta` (ADR-007: Redis eliminated) | `SELECT tablename FROM pg_tables WHERE tablename LIKE 'kombu%'` returns rows | Manal |
 | IQ-04 | OSKAR API responds to health endpoint | `GET /api/v1/health` returns `200 OK` | Lead Engineer |
 | IQ-05 | LDAPS connection to AD on port 636 confirmed | Auth endpoint returns JWT on valid credentials | Lead Engineer + Devian |
-| IQ-06 | Harbor registry reachable from OSKAR VM | `docker pull oskar-vm.srxglobal.local/oskar-app:latest` succeeds | Manal |
+| IQ-06 | Harbor registry reachable from OSKAR VM | `docker pull apac-plm-ops.srxglobal.local/oskar-app:latest` succeeds | Manal |
 | IQ-07 | IIS reverse proxy routes `/api/v1/` to oskar-app correctly | External HTTPS request reaches FastAPI | Manal |
 | IQ-08 | Backup: pg_dump runs and produces non-zero archive | Cron job runs; output file > 0 bytes | Manal |
 | IQ-09 | `.env` file absent from Docker image layers | `docker history oskar-app:latest` contains no secret values | Lead Engineer |
@@ -76,10 +76,11 @@ Verifies that OSKAR functions correctly according to its specification under nor
 | OQ-10 | Create ECN in DRAFT status | `POST /api/v1/ecn/` returns `201 Created`; status = `DRAFT` |
 | OQ-11 | Submit ECN — guard: ≥1 item required | `POST /submit` with 0 items returns `422 Unprocessable` |
 | OQ-12 | Submit ECN — guard: `effectivity_type` required on all items | `POST /submit` with item missing `effectivity_type` returns `422` |
-| OQ-13 | Valid submit transitions DRAFT → SUBMITTED | Status in DB = `SUBMITTED`; DC receives notification email |
-| OQ-14 | DC accept transitions SUBMITTED → DC_REVIEW | Status = `DC_REVIEW` |
+| OQ-13 | Valid submit transitions DRAFT → ENGINEERING_REVIEW | Status in DB = `ENGINEERING_REVIEW`; SE/CE receives notification email (ADR-009 — no DC gate at submission) |
+| OQ-14 | ~~DC accept (SUBMITTED→DC_REVIEW)~~ — **Removed by ADR-009** | Integers 10 and 20 tombstoned; trigger `accept` no longer exists |
 | OQ-15 | DC reject transitions to REJECTED with mandatory reason | Status = `REJECTED`; rejection record created; originator notified |
-| OQ-16 | DC pass transitions DC_REVIEW → ENGINEERING_REVIEW | Status = `ENGINEERING_REVIEW`; SE notified |
+| OQ-16 | ~~DC pass (DC_REVIEW→ENGINEERING_REVIEW)~~ — **Removed by ADR-009** | Replaced by OQ-16a |
+| OQ-16a | DC approves at DC_APPROVED → APPROVED (`dc_approve`) | Status = `APPROVED`; `customer_approved_at` gate enforced if flag set; movex_outbox created |
 | OQ-17 | SE approve triggers parallel block — all required roles notified simultaneously | Status = `MANAGEMENT_REVIEW`; all required role members receive email in same Celery batch |
 | OQ-18 | Conditional role (PM) not notified when condition is FALSE | PM has `skipped=TRUE` in `ecn_approval_steps`; no email sent to PM |
 | OQ-19 | All required parallel approvals → APPROVED | Status = `APPROVED`; outbox entries created |

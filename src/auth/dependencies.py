@@ -81,10 +81,15 @@ async def get_current_user(
 def require_group(group_name: str):
     """Dependency factory — raises 403 if the user is not in the required AD group.
 
+    AD group CNs (OU=Application Roles,OU=Groups,DC=srxglobal,DC=com):
+        ecn-initiator      — ECN creators (Originators)
+        ecn-approver       — All approval-role users (DC, SE, CE, EM, QM, PM, SC, FN, CA, AD)
+        ecn-doc-controller — Document Controllers only (subset of ecn-approver)
+
     Usage:
         @router.post("/ecn/{id}/approve")
         async def approve(
-            user: Annotated[CurrentUser, Depends(require_group("OSKAR-Approvers"))],
+            user: Annotated[CurrentUser, Depends(require_group("ecn-approver"))],
         ): ...
     """
     async def _check(
@@ -101,7 +106,8 @@ def require_group(group_name: str):
 
 
 # ── Convenience aliases ───────────────────────────────────────────────────────
+# Group CNs from docs/srxglobal-active-directory-groups-structure.md
 
-RequireEngineer = Depends(require_group("OSKAR-Engineers"))
-RequireApprover = Depends(require_group("OSKAR-Approvers"))
-RequireAdmin    = Depends(require_group("OSKAR-Admins"))
+RequireInitiator    = Depends(require_group("ecn-initiator"))
+RequireApprover     = Depends(require_group("ecn-approver"))
+RequireDocController = Depends(require_group("ecn-doc-controller"))

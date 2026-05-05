@@ -34,6 +34,7 @@ from src.services.ecn import (
     ECNConflict,
     ECNCreateRequest,
     ECNDetail,
+    ECNForbidden,
     ECNNotFound,
     ECNPreconditionRequired,
     ECNService,
@@ -42,7 +43,9 @@ from src.services.ecn import (
     ECNTransitionError,
     ECNUpdateRequest,
     ECNValidationError,
+    RoleAssignmentResult,
     VALID_FACILITIES,
+    VALID_ROLE_IDS,
 )
 
 log = structlog.get_logger(__name__)
@@ -452,6 +455,32 @@ async def update_ecn(
     return _detail_out(detail)  # type: ignore[return-value]
 
 
+class RoleAssignBody(BaseModel):
+    role_id: str = Field(..., min_length=2, max_length=2)
+    username: str = Field(..., min_length=1, max_length=50)
+    actor_role: str = Field(..., min_length=2, max_length=2)
+    notes: str | None = None
+
+    @field_validator("role_id")
+    @classmethod
+    def validate_role_id(cls, v: str) -> str:
+        upper = v.upper()
+        if upper not in VALID_ROLE_IDS:
+            raise ValueError(f"Unknown role_id '{v}'. Valid: {sorted(VALID_ROLE_IDS)}")
+        return upper
+
+    @field_validator("actor_role")
+    @classmethod
+    def validate_actor_role(cls, v: str) -> str:
+        return v.upper()
+
+
+class RoleAssignmentResultOut(BaseModel):
+    ecn_id: str
+    role_assignments: list[RoleAssignmentOut]
+    superseded_username: str | None
+
+
 @ecn_router.patch("/{ecn_id}/status", response_model=ECNDetailOut)
 async def transition_ecn_status(
     ecn_id: str,
@@ -503,3 +532,58 @@ async def transition_ecn_status(
             detail=str(exc),
         )
     return _detail_out(detail)  # type: ignore[return-value]
+
+
+@ecn_router.post(
+    "/{ecn_id}/role-assignments",
+    response_model=RoleAssignmentResultOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def assign_ecn_role(
+    ecn_id: str,
+    body: RoleAssignBody,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> RoleAssignmentResultOut:
+    """Reassign a role on an ECN (DC authority only).
+
+    Supersedes the existing active assignment for the given role_id and inserts
+    a new one. Writes an audit record to ecn_transition_history.
+    Returns 403 if actor_role is not 'DC'.
+    Returns 404 if the ECN does not exist.
+    Returns 422 if role_id is invalid, OR is specified, or ECN is terminal.
+    """
+    svc = ECNService(session)
+    try:
+        result: RoleAssignmentResult = await svc.assign_role(
+            ecn_id=ecn_id,
+            role_id=body.role_id,
+            username=body.username,
+            actor_username=user.username,
+            actor_role=body.actor_role,
+            notes=body.notes,
+        )
+    except ECNForbidden as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    except ECNNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"ECN {ecn_id!r} not found",
+        )
+    except ECNValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        )
+    return RoleAssignmentResultOut(
+        ecn_id=result.ecn_id,
+        role_assignments=[
+            RoleAssignmentOut(
+                role_id=ra.role_id,
+                username=ra.username,
+                is_auto_assigned=ra.is_auto_assigned,
+            )
+            for ra in result.role_assignments
+        ],
+        superseded_username=result.superseded_username,
+    )

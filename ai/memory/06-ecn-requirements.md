@@ -3,8 +3,8 @@
 > **PROVIDER-AGNOSTIC — Non-Negotiable #12**
 > No tool-specific syntax. Readable by any LLM tool or none.
 
-**Version:** 1.1
-**Date:** 2026-05-01
+**Version:** 1.2
+**Date:** 2026-05-04
 **Phase:** Phase 1 Track B deliverable
 **Status:** Draft — pending Branko/Nick UAT validation (post-POC)
 
@@ -115,7 +115,7 @@ DRAFT
 
 - All required roles receive work items **simultaneously** on MANAGEMENT_REVIEW entry.
 - Roles whose condition evaluates to FALSE get their `ecn_approval_steps` record set to `skipped=TRUE` automatically — not notified, not required.
-- MANAGEMENT_REVIEW → APPROVED fires automatically when the last required non-skipped approver completes.
+- MANAGEMENT_REVIEW → DC_APPROVED fires automatically when the last required non-skipped approver completes.
 - **Any single rejection** at MANAGEMENT_REVIEW sends the ECN to REJECTED immediately.
 - On proceed-path resubmit: only the rejecting role's step resets; other approvals are preserved.
 
@@ -123,10 +123,11 @@ DRAFT
 
 | Stage | Type | Reason |
 |-------|------|--------|
-| SUBMITTED → DC_REVIEW | Sequential | DC must confirm completeness before technical review begins |
-| DC_REVIEW → ENGINEERING_REVIEW | Sequential | SE needs complete documentation to review |
+| DRAFT → ENGINEERING_REVIEW | Sequential (submit) | Originator submits; goes directly to engineering — no DC gate at submission (ADR-009) |
 | MANAGEMENT_REVIEW | Parallel | All management roles have equal standing; eliminates sequential bottleneck |
+| DC_APPROVED → APPROVED | Sequential (DC gate) | DC certifies the full change package before Movex write is authorised |
 | APPROVED → IMPLEMENTED | Automatic (Celery) | Movex write execution — not a human decision |
+| IMPLEMENTED → CLOSED | Automatic (Celery) | auto_close; no DC action required post-Movex write (ADR-009) |
 
 ---
 
@@ -217,7 +218,7 @@ OSKAR `ecn_items` table is the equivalent of Stargile `ZECNITMN` + `ECNItem.java
 | `created_at` | TIMESTAMPTZ | No | System | |
 | `updated_at` | TIMESTAMPTZ | No | System | |
 
-`effectivity_type` and `effectivity_from` are validated by an `ecn_step_conditions` rule at SUBMITTED — not hardcoded in Python.
+`effectivity_type` and `effectivity_from` are validated by an `ecn_step_conditions` rule at submit (before ENGINEERING_REVIEW entry) — not hardcoded in Python.
 
 ---
 
@@ -270,7 +271,7 @@ Observer roles (RD, TE, MQ) receive a read-only summary at CLOSED only. No work 
 
 Two paths inherited from Stargile `RejectECN.awf`, both preserved in OSKAR.
 
-**Path 1 — Restart:** All `ecn_approval_steps` reset. ECN returns to SUBMITTED. ECN revision number incremented. Used when the rejection indicates the ECN needs fundamental rework.
+**Path 1 — Restart:** All `ecn_approval_steps` reset. ECN returns to ENGINEERING_REVIEW. ECN revision number incremented. Used when the rejection indicates the ECN needs fundamental rework.
 
 **Path 2 — Proceed:** Only the rejecting role's step resets. All other approvals preserved. ECN returns to the stage where rejection occurred. Used when only the rejecting role's specific concern needs addressing.
 
@@ -294,17 +295,17 @@ PATCH  /api/v1/ecn/{ecn_id}                  Update header fields (DRAFT only)
 ### Transition Endpoints
 
 ```
-POST   /api/v1/ecn/{ecn_id}/submit           DRAFT → SUBMITTED           Role: OR
-POST   /api/v1/ecn/{ecn_id}/accept           SUBMITTED → DC_REVIEW        Role: DC
-POST   /api/v1/ecn/{ecn_id}/pass             DC_REVIEW → ENGINEERING_REVIEW  Role: DC
-POST   /api/v1/ecn/{ecn_id}/approve          Role-specific approval       Role: current stage role
-POST   /api/v1/ecn/{ecn_id}/reject           Any active stage → REJECTED  Role: current stage role
-POST   /api/v1/ecn/{ecn_id}/resubmit         REJECTED → SUBMITTED         Role: OR
-POST   /api/v1/ecn/{ecn_id}/close            IMPLEMENTED → CLOSED         Role: DC
-POST   /api/v1/ecn/{ecn_id}/cancel           → CANCELLED                  Role: OR or AD
-POST   /api/v1/ecn/{ecn_id}/hold             → ON_HOLD                    Role: DC or AD
-POST   /api/v1/ecn/{ecn_id}/resume           ON_HOLD → prior status       Role: DC or AD
+POST   /api/v1/ecn/{ecn_id}/submit           DRAFT → ENGINEERING_REVIEW       Role: OR
+POST   /api/v1/ecn/{ecn_id}/approve          Role-specific approval            Role: current stage role
+POST   /api/v1/ecn/{ecn_id}/dc_approve       DC_APPROVED → APPROVED            Role: DC
+POST   /api/v1/ecn/{ecn_id}/reject           Any active stage → REJECTED       Role: current stage role
+POST   /api/v1/ecn/{ecn_id}/resubmit         REJECTED → ENGINEERING_REVIEW     Role: OR
+POST   /api/v1/ecn/{ecn_id}/cancel           → CANCELLED                       Role: OR or AD
+POST   /api/v1/ecn/{ecn_id}/hold             → ON_HOLD                         Role: DC or AD
+POST   /api/v1/ecn/{ecn_id}/resume           ON_HOLD → prior status            Role: DC or AD
 ```
+> **Note (ADR-009):** `accept` (SUBMITTED→DC_REVIEW) and `pass` (DC_REVIEW→ENGINEERING_REVIEW) endpoints removed.
+> `close` (IMPLEMENTED→CLOSED) replaced by `auto_close` — Celery-triggered, no HTTP endpoint.
 
 ### Standard Request Body
 
@@ -317,8 +318,8 @@ POST   /api/v1/ecn/{ecn_id}/resume           ON_HOLD → prior status       Role
 ```json
 {
   "ecn_id": "uuid",
-  "previous_status": "DC_REVIEW",
-  "new_status": "ENGINEERING_REVIEW",
+  "previous_status": "DC_APPROVED",
+  "new_status": "APPROVED",
   "transitioned_by": "username",
   "transitioned_at": "2026-04-13T10:00:00Z",
   "audit_record_id": "uuid"
@@ -347,7 +348,7 @@ POST   /api/v1/ecn/{ecn_id}/movex-retry     Retry failed outbox entries   Role: 
 Before each `PDS002MI` Movex write at APPROVED:
 
 1. Fetch current Movex BOM state for the affected product via `movex-rest-api`
-2. Compare against the BOM snapshot captured at DC_REVIEW (`ecn_bom_changes.movex_snapshot_at_review` JSONB)
+2. Compare against the BOM snapshot captured at DC_APPROVED (`ecn_bom_changes.movex_snapshot_at_review` JSONB)
 3. If any component or sequence has changed since snapshot: abort write, set outbox entry to `failed`, surface diff to DC recovery panel
 4. DC resolves (update ECN or explicit override) before retry
 
@@ -399,7 +400,7 @@ Table schema reserved in Sprint 1. Feature active Sprint 2+. Stargile has no equ
 
 | Filter param | Values | Notes |
 |-------------|--------|-------|
-| `status` | `DRAFT`, `SUBMITTED`, etc. | Multi-value; `open` = all except CLOSED/CANCELLED/ARCHIVED |
+| `status` | `DRAFT`, `ENGINEERING_REVIEW`, etc. | Multi-value; `open` = all except CLOSED/CANCELLED/ARCHIVED |
 | `facility` | `D`, `M`, etc. | From `ecn_instances.facility` field (add to schema in F-1) |
 | `assignee` | username | Current work item holder — the true "Next Action Person" |
 | `overdue` | boolean | `ecn_approval_steps.assigned_at` > 48h without action |

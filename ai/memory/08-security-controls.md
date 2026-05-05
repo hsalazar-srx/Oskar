@@ -31,7 +31,8 @@ These must be in place before Sprint 1 code is written. Failure = DISP Tier 1 fi
 **Why:** LDAP on 389 sends credentials in cleartext. DISP Tier 1 requirement.
 
 **Implementation:**
-- `LDAP_SERVER=ldaps://srxdc01.srxglobal.local:636` in `.env`
+- `LDAP_SERVER=ldaps://srxdc01.srxglobal.com:636` in `.env`
+- `LDAP_BASE_DN=DC=srxglobal,DC=com` in `.env`
 - `ldap3.Server(..., use_ssl=True)` in `LDAPIdentityProvider`
 - Certificate validation against ADCS root CA (Manal provisions ADCS cert)
 - Confirm with Devian before Sprint 1 starts — record in `ai/evidence/decision-log.md`

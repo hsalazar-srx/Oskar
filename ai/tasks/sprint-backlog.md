@@ -1,7 +1,7 @@
 # OSKAR — Sprint Backlog
 # Source of truth for all work status.
 # oskar-state.md (gitignored) is for next-session notes only — not for tracking status.
-# Last synced: 2026-05-01
+# Last synced: 2026-05-04 (ADR-009 machine + docs complete)
 
 ---
 
@@ -88,8 +88,8 @@
 | Pre-condition | Status |
 |--------------|--------|
 | P0-1: git init | ✅ 2026-04-21 |
-| LDAPS confirmed with Devian/Manal | ⏳ Manal confirms ~2026-04-24 |
-| `/etc/oskar/secrets.env` on VM | ⏳ Manal runs setup-server-secrets.sh after VM provisioned |
+| LDAPS confirmed with Devian/Manal | ⏳ Not a priority; details expected next week (~2026-05-08) |
+| `/etc/oskar/secrets.env` on VM | ⏳ VM provisioned ✅ (4 CPUs / 16 GB RAM / 100 GB storage — 2026-05-01). Docker + Harbor install: Lead Engineer responsibility. |
 | structlog + correlation ID (P0-4) | ✅ |
 | JWT TTL 60min/8h in .env.example + ADR-006 | ✅ |
 | PostgreSQL schema (F-1) | ✅ |
@@ -139,8 +139,8 @@
 - **Optimistic locking (ADR-008):** `If-Unmodified-Since` check in `ECNService.update_ecn` + `transition_ecn`; 428 if header absent, 409 if stale; OQ-40 through OQ-45 ✅ 2026-04-24
 - **Transactional Outbox:** `src/tasks/celery_app.py` + `src/tasks/movex_outbox.py`; retry 30s → 5min → 30min; DC alert attempt 3; ABANDONED + EM alert attempt 10; `advance_ecn_to_implemented` task; 23 tests ✅ 2026-04-24
 - ECN write gate: DB-layer `oskar_worker` REVOKE INSERT on `movex_outbox` + RLS on `ecn_instances` ✅ 2026-04-24 (migration 0005 — HMAC token approach superseded)
-- **Workflow machine update (ADR-009):** remove SUBMITTED/DC_REVIEW from ECNStatus; add DC_APPROVED=25; update _TRANSITIONS (remove accept/pass_to_engineering; add dc_approve + auto_close); update all guard conditions and tests
-- **Per-ECN role customisation (ADR-009):** `POST /api/v1/ecn/{id}/role-assignments`; DC-authority guard; supersede-and-insert pattern; transition history record
+- **Workflow machine update (ADR-009):** remove SUBMITTED/DC_REVIEW from ECNStatus; add DC_APPROVED=25; update _TRANSITIONS (remove accept/pass_to_engineering; add dc_approve + auto_close); update all guard conditions and tests ✅ 2026-05-04
+- **Per-ECN role customisation (ADR-009):** `POST /api/v1/ecn/{id}/role-assignments`; DC-authority guard; supersede-and-insert pattern; transition history record ✅ 2026-05-04
 - Rejection flows: restart vs proceed
 - Drawing number workflow: DC confirmation at DC_APPROVED gate (replaces DC_REVIEW gate)
 - MPN alias: automatic `MMS025MI.AddAlias` at IMPLEMENTED (uses `ecn_items.customer_alias` + `ecn_items.item_group` as ALWQ)
@@ -177,9 +177,9 @@
 |------|-------|--------|-------|
 | ~~Project name confirmation~~ | ✅ Resolved | — | Confirmed **OSKAR** 2026-04-21 |
 | IQ/OQ/PQ sign-off per section | Karen / Divya / Manal | C-2 | Karen=system, Divya=quality, Manal=infra |
-| LDAPS confirmation | Manal | S1-9 live test | Expected ~2026-04-24 |
-| Harbor hostname (final) | Manal | `scripts/push-image.sh` | Overdue (~2026-04-17) |
-| Linux VM provisioned | Manal | Docker deployment | Overdue (~2026-04-17) |
+| LDAPS confirmation | Manal | S1-9 live test | Not a priority; expected ~2026-05-08 |
+| Harbor hostname (final) | Lead Engineer (Manal provides hostname) | `scripts/push-image.sh` | Blocked on Docker install |
+| Linux VM provisioned | ✅ Resolved 2026-05-01 | — | 4 CPUs / 16 GB RAM / 100 GB storage. Docker + Harbor install: Lead Engineer. |
 | ~~movex-rest-api: MMS025MI.AddAlias~~ | ✅ Resolved 2026-05-01 | — | MMS025MI.json present; generic routing sufficient. No dotnet work needed. |
 | movex-rest-api: MPDDOC drawing creation | @developer-dotnet | Sprint 2 design | |
 | DBCHK_OpenECN disable at go-live | Infrastructure | G-6 | |

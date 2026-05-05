@@ -11,7 +11,7 @@
 services:
 
   oskar-app:
-    image: ${REGISTRY:-oskar-vm.srxglobal.local}/oskar-app:${TAG:-latest}
+    image: ${REGISTRY:-apac-plm-ops.srxglobal.local}/oskar-app:${TAG:-latest}
     container_name: oskar-app-staging
     restart: unless-stopped
     read_only: true
@@ -53,7 +53,7 @@ services:
       retries: 3
 
   oskar-worker:
-    image: ${REGISTRY:-oskar-vm.srxglobal.local}/oskar-app:${TAG:-latest}
+    image: ${REGISTRY:-apac-plm-ops.srxglobal.local}/oskar-app:${TAG:-latest}
     container_name: oskar-worker-staging
     restart: unless-stopped
     read_only: true
@@ -79,7 +79,7 @@ services:
         condition: service_healthy
 
   oskar-frontend:
-    image: ${REGISTRY:-oskar-vm.srxglobal.local}/oskar-frontend:${TAG:-latest}
+    image: ${REGISTRY:-apac-plm-ops.srxglobal.local}/oskar-frontend:${TAG:-latest}
     container_name: oskar-frontend-staging
     restart: unless-stopped
     read_only: true
