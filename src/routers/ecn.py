@@ -35,6 +35,8 @@ from src.services.ecn import (
     ECNCreateRequest,
     ECNDetail,
     ECNForbidden,
+    ECNItemDetail,
+    ECNMPNDetail,
     ECNNotFound,
     ECNPreconditionRequired,
     ECNService,
@@ -721,3 +723,362 @@ async def approve_role(
     except ECNValidationError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
     return _detail_out(detail)
+
+
+# ── ECN items + MPN endpoints ─────────────────────────────────────────────────
+
+_LIFECYCLE_VALUES = {"active", "eol", "nrnd"}
+_PACKAGING_VALUES = {"tape_reel", "tray", "tube", "cut_tape"}
+_EFFECTIVITY_VALUES = {"DATE", "ECN", "IMMEDIATE"}
+
+
+class MPNOut(BaseModel):
+    id: str
+    ecn_item_id: str
+    mpn: str
+    manufacturer: str | None
+    is_default: bool
+    alias_written: bool
+    msl_level: int | None
+    lifecycle: str | None
+    eol_date: str | None
+    lead_time_weeks: int | None
+    packaging_type: str | None
+    do_not_buy: bool
+    alt_mpn: str | None
+    supplier_data_at: datetime | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ECNItemOut(BaseModel):
+    id: str
+    ecn_id: str
+    line_number: int
+    is_new_item: bool
+    item_number: str
+    item_name: str | None
+    description_2: str | None
+    drawing_number: str | None
+    drawing_created: bool
+    procurement_group: str | None
+    product_group: str | None
+    unit_of_measure: str | None
+    item_group: str | None
+    customer_alias: str | None
+    effectivity_type: str
+    effectivity_from: str | None
+    created_at: datetime
+    updated_at: datetime
+    mpns: list[MPNOut] = []
+
+    model_config = {"from_attributes": True}
+
+
+def _mpn_out(m: ECNMPNDetail) -> MPNOut:
+    return MPNOut(
+        id=m.id,
+        ecn_item_id=m.ecn_item_id,
+        mpn=m.mpn,
+        manufacturer=m.manufacturer,
+        is_default=m.is_default,
+        alias_written=m.alias_written,
+        msl_level=m.msl_level,
+        lifecycle=m.lifecycle,
+        eol_date=m.eol_date,
+        lead_time_weeks=m.lead_time_weeks,
+        packaging_type=m.packaging_type,
+        do_not_buy=m.do_not_buy,
+        alt_mpn=m.alt_mpn,
+        supplier_data_at=m.supplier_data_at,
+        created_at=m.created_at,
+    )
+
+
+def _item_out(i: ECNItemDetail) -> ECNItemOut:
+    return ECNItemOut(
+        id=i.id,
+        ecn_id=i.ecn_id,
+        line_number=i.line_number,
+        is_new_item=i.is_new_item,
+        item_number=i.item_number,
+        item_name=i.item_name,
+        description_2=i.description_2,
+        drawing_number=i.drawing_number,
+        drawing_created=i.drawing_created,
+        procurement_group=i.procurement_group,
+        product_group=i.product_group,
+        unit_of_measure=i.unit_of_measure,
+        item_group=i.item_group,
+        customer_alias=i.customer_alias,
+        effectivity_type=i.effectivity_type,
+        effectivity_from=i.effectivity_from,
+        created_at=i.created_at,
+        updated_at=i.updated_at,
+        mpns=[_mpn_out(m) for m in i.mpns],
+    )
+
+
+class CreateItemBody(BaseModel):
+    line_number: int = Field(..., ge=1)
+    is_new_item: bool = False
+    item_number: str = Field(..., min_length=1, max_length=15)
+    item_name: str | None = Field(None, max_length=30)
+    description_2: str | None = Field(None, max_length=60)
+    drawing_number: str | None = Field(None, max_length=20)
+    procurement_group: str | None = Field(None, max_length=3)
+    product_group: str | None = Field(None, max_length=5)
+    unit_of_measure: str | None = Field(None, max_length=3)
+    item_group: str | None = Field(None, max_length=3)
+    customer_alias: str | None = Field(None, max_length=30)
+    effectivity_type: str = Field(..., description="DATE | ECN | IMMEDIATE")
+    effectivity_from: str | None = None
+
+    @field_validator("effectivity_type")
+    @classmethod
+    def _validate_effectivity(cls, v: str) -> str:
+        if v not in _EFFECTIVITY_VALUES:
+            raise ValueError(f"effectivity_type must be one of {_EFFECTIVITY_VALUES}")
+        return v
+
+
+class UpdateItemBody(BaseModel):
+    item_name: str | None = Field(None, max_length=30)
+    description_2: str | None = Field(None, max_length=60)
+    drawing_number: str | None = Field(None, max_length=20)
+    procurement_group: str | None = Field(None, max_length=3)
+    product_group: str | None = Field(None, max_length=5)
+    unit_of_measure: str | None = Field(None, max_length=3)
+    item_group: str | None = Field(None, max_length=3)
+    customer_alias: str | None = Field(None, max_length=30)
+    effectivity_type: str | None = None
+    effectivity_from: str | None = None
+    is_new_item: bool | None = None
+
+    @field_validator("effectivity_type")
+    @classmethod
+    def _validate_effectivity(cls, v: str | None) -> str | None:
+        if v is not None and v not in _EFFECTIVITY_VALUES:
+            raise ValueError(f"effectivity_type must be one of {_EFFECTIVITY_VALUES}")
+        return v
+
+
+class CreateMPNBody(BaseModel):
+    mpn: str = Field(..., min_length=1, max_length=30)
+    manufacturer: str | None = Field(None, max_length=30)
+    is_default: bool = False
+    msl_level: int | None = Field(None, ge=1, le=6)
+    lifecycle: str | None = None
+    eol_date: str | None = None
+    lead_time_weeks: int | None = Field(None, ge=0)
+    packaging_type: str | None = None
+    do_not_buy: bool = False
+    alt_mpn: str | None = Field(None, max_length=100)
+
+    @field_validator("lifecycle")
+    @classmethod
+    def _validate_lifecycle(cls, v: str | None) -> str | None:
+        if v is not None and v not in _LIFECYCLE_VALUES:
+            raise ValueError(f"lifecycle must be one of {_LIFECYCLE_VALUES}")
+        return v
+
+    @field_validator("packaging_type")
+    @classmethod
+    def _validate_packaging(cls, v: str | None) -> str | None:
+        if v is not None and v not in _PACKAGING_VALUES:
+            raise ValueError(f"packaging_type must be one of {_PACKAGING_VALUES}")
+        return v
+
+
+class UpdateMPNBody(BaseModel):
+    mpn: str | None = Field(None, min_length=1, max_length=30)
+    manufacturer: str | None = Field(None, max_length=30)
+    is_default: bool | None = None
+    msl_level: int | None = Field(None, ge=1, le=6)
+    lifecycle: str | None = None
+    eol_date: str | None = None
+    lead_time_weeks: int | None = Field(None, ge=0)
+    packaging_type: str | None = None
+    do_not_buy: bool | None = None
+    alt_mpn: str | None = Field(None, max_length=100)
+
+    @field_validator("lifecycle")
+    @classmethod
+    def _validate_lifecycle(cls, v: str | None) -> str | None:
+        if v is not None and v not in _LIFECYCLE_VALUES:
+            raise ValueError(f"lifecycle must be one of {_LIFECYCLE_VALUES}")
+        return v
+
+    @field_validator("packaging_type")
+    @classmethod
+    def _validate_packaging(cls, v: str | None) -> str | None:
+        if v is not None and v not in _PACKAGING_VALUES:
+            raise ValueError(f"packaging_type must be one of {_PACKAGING_VALUES}")
+        return v
+
+
+@ecn_router.post(
+    "/{ecn_id}/items",
+    response_model=ECNItemOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_item(
+    ecn_id: str,
+    body: CreateItemBody,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> ECNItemOut:
+    svc = ECNService(session)
+    try:
+        item = await svc.create_item(
+            ecn_id,
+            **body.model_dump(),
+        )
+    except ECNNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ECN not found")
+    except ECNValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    return _item_out(item)
+
+
+@ecn_router.get(
+    "/{ecn_id}/items",
+    response_model=list[ECNItemOut],
+)
+async def list_items(
+    ecn_id: str,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[ECNItemOut]:
+    svc = ECNService(session)
+    items = await svc.list_items(ecn_id)
+    return [_item_out(i) for i in items]
+
+
+@ecn_router.get(
+    "/{ecn_id}/items/{item_id}",
+    response_model=ECNItemOut,
+)
+async def get_item(
+    ecn_id: str,
+    item_id: str,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> ECNItemOut:
+    svc = ECNService(session)
+    try:
+        item = await svc.get_item(ecn_id, item_id)
+    except ECNNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+    return _item_out(item)
+
+
+@ecn_router.patch(
+    "/{ecn_id}/items/{item_id}",
+    response_model=ECNItemOut,
+)
+async def update_item(
+    ecn_id: str,
+    item_id: str,
+    body: UpdateItemBody,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> ECNItemOut:
+    svc = ECNService(session)
+    try:
+        item = await svc.update_item(
+            ecn_id,
+            item_id,
+            **{k: v for k, v in body.model_dump().items() if v is not None},
+        )
+    except ECNNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+    except ECNValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    return _item_out(item)
+
+
+@ecn_router.delete(
+    "/{ecn_id}/items/{item_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_item(
+    ecn_id: str,
+    item_id: str,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    svc = ECNService(session)
+    try:
+        await svc.delete_item(ecn_id, item_id)
+    except ECNNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+    except ECNValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+
+
+@ecn_router.post(
+    "/{ecn_id}/items/{item_id}/mpns",
+    response_model=MPNOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_mpn(
+    ecn_id: str,
+    item_id: str,
+    body: CreateMPNBody,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> MPNOut:
+    svc = ECNService(session)
+    try:
+        mpn = await svc.create_mpn(ecn_id, item_id, **body.model_dump())
+    except ECNNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+    except ECNValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    return _mpn_out(mpn)
+
+
+@ecn_router.patch(
+    "/{ecn_id}/items/{item_id}/mpns/{mpn_id}",
+    response_model=MPNOut,
+)
+async def update_mpn(
+    ecn_id: str,
+    item_id: str,
+    mpn_id: str,
+    body: UpdateMPNBody,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> MPNOut:
+    svc = ECNService(session)
+    try:
+        mpn = await svc.update_mpn(
+            ecn_id,
+            mpn_id,
+            **{k: v for k, v in body.model_dump().items() if v is not None},
+        )
+    except ECNNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MPN not found")
+    except ECNValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    return _mpn_out(mpn)
+
+
+@ecn_router.delete(
+    "/{ecn_id}/items/{item_id}/mpns/{mpn_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_mpn(
+    ecn_id: str,
+    item_id: str,
+    mpn_id: str,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    svc = ECNService(session)
+    try:
+        await svc.delete_mpn(ecn_id, mpn_id)
+    except ECNNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MPN not found")
