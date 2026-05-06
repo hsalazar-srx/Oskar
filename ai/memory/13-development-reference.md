@@ -213,18 +213,50 @@ class Settings(BaseSettings):
 ## Conventional Commits Format
 
 ```
-<type>(oskar-<scope>): <description>
+<type>(oskar-<scope>): <short subject — what changed>
+
+<body — bullet points explaining the why, what, and any non-obvious decisions>
+- Use present tense imperative ("add", "remove", "fix")
+- One bullet per logical change; group related lines
+- Name files, endpoints, and classes explicitly
+- Capture decisions that would otherwise be lost (why a field was removed,
+  why a guard fires synchronously, which ADR drove a choice)
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+```
 
 Types:  feat | fix | docs | refactor | chore | test | adr | security
 Scopes: ecn | bom | supplier | auth | api | db | docker | ai | harness | security
-```
+
+**Body is mandatory for feat/fix/refactor.** Optional for docs/chore/test when the subject
+is self-explanatory. The body is the primary input for the knowledge base graph — it must
+capture decisions and rationale, not just file names.
 
 Examples:
 ```
-feat(oskar-ecn): add ECN approval workflow POST /api/v1/ecn/{id}/approve
-test(oskar-ecn): TDD — write failing tests for status transition guards
-adr(oskar-auth): ADR-001 SM-Portal navigation link no auth coupling
-security(oskar-auth): apply STRIDE findings to JWT issuance and LDAP bind
+feat(oskar-ecn): add dc_approve drawing number guard to ECNWorkflowMachine
+
+- _guard_dc_approve reads _pending_missing_drawings attr set by ECNService before trigger fires
+- Synchronous guard reads pre-computed list (transitions library is sync-only)
+- ECNService.transition() awaits _missing_drawings() and stores result on machine instance
+- Same pre-computation pattern as _guard_all_required_approved (parallel approval block)
+- Raises GuardFailed → ECNTransitionError → HTTP 422 (consistent with all other transition errors)
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+feat(oskar-ecn): rejection flows restart/proceed paths POST /ecn/{id}/resubmit
+
+- ECNService.resubmit(): restart resets all ecn_approval_steps + increments revision_number;
+  proceed resets only the rejecting role's step, preserving other approvals
+- Mirrors Stargile RejectECN.awf two-path design (ai/memory/05-stargile-ecn-reference.md §8)
+- ECNTransitionError → 409 on resubmit (conflict semantics — differs from transition's 422)
+- resolution field validated to 'restart' | 'proceed' at Pydantic layer
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+test(oskar-ecn): TDD — 14 failing tests for drawing number workflow before implementation
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 ```
 
 ---
