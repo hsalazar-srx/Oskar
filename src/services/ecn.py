@@ -958,6 +958,10 @@ class ECNService:
         if req.trigger == "dc_approve":
             await self._queue_drawing_outbox(ecn_id)
 
+        # Queue MMS025MI.AddAlias outbox entries on movex_write_complete (one per unwritten MPN)
+        if req.trigger == "movex_write_complete":
+            await self._queue_alias_outbox(ecn_id)
+
         # Insert rejection record when trigger is 'reject'
         if req.trigger == "reject" and req.rejection_reason:
             await self._insert_rejection(ecn_id, actor_username, req, from_status)
@@ -1330,6 +1334,46 @@ class ECNService:
             )
 
         return await self.get(ecn_id)
+
+    async def _queue_alias_outbox(self, ecn_id: str) -> None:
+        """Queue one MMS025MI.AddAlias outbox entry per unwritten ecn_mpns row.
+
+        Selects ecn_mpns rows where alias_written=FALSE for all items in this ECN.
+        Skips rows already written (alias_written=TRUE) — idempotency key provides
+        an additional ON CONFLICT DO NOTHING safety net.
+        Idempotency key: MMS025MI.AddAlias:{ecn_id}:{mpn_id}
+        """
+        rows = await self._session.execute(
+            sa.text(
+                "SELECT m.id, m.ecn_item_id, m.mpn, m.manufacturer, m.is_default "
+                "FROM ecn_mpns m "
+                "JOIN ecn_items i ON i.id = m.ecn_item_id "
+                "WHERE i.ecn_id = :ecn_id AND m.alias_written = FALSE"
+            ),
+            {"ecn_id": ecn_id},
+        )
+        for mpn_id, item_id, mpn, manufacturer, is_default in rows:
+            idempotency_key = f"MMS025MI.AddAlias:{ecn_id}:{mpn_id}"
+            await self._session.execute(
+                sa.text(
+                    "INSERT INTO movex_outbox "
+                    "(id, ecn_id, ecn_item_id, mi_transaction, mi_params, idempotency_key) "
+                    "VALUES (:id, :ecn_id, :item_id, :mi_tx, :mi_params::jsonb, :ikey) "
+                    "ON CONFLICT (idempotency_key) DO NOTHING"
+                ),
+                {
+                    "id": str(uuid.uuid4()),
+                    "ecn_id": ecn_id,
+                    "item_id": str(item_id),
+                    "mi_tx": "MMS025MI.AddAlias",
+                    "mi_params": json.dumps({
+                        "mpn": mpn,
+                        "manufacturer": manufacturer,
+                        "is_default": bool(is_default),
+                    }),
+                    "ikey": idempotency_key,
+                },
+            )
 
     # ── List ──────────────────────────────────────────────────────────────────
 
