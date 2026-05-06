@@ -674,3 +674,50 @@ async def set_drawing_number(
     except ECNValidationError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
     return _detail_out(detail)
+
+
+# ── Parallel approval block ───────────────────────────────────────────────────
+
+class ApproveRoleBody(BaseModel):
+    actor_role: str = Field(..., min_length=2, max_length=2)
+    notes: str | None = None
+
+    @field_validator("actor_role")
+    @classmethod
+    def _upper_actor_role(cls, v: str) -> str:
+        return v.upper()
+
+
+@ecn_router.post(
+    "/{ecn_id}/approve",
+    response_model=ECNDetailOut,
+    status_code=status.HTTP_200_OK,
+)
+async def approve_role(
+    ecn_id: str,
+    body: ApproveRoleBody,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> ECNDetailOut:
+    """Approve one role's step in the MANAGEMENT_REVIEW parallel block.
+
+    Records the actor's approval for their assigned role.  If this is the last
+    pending step, the ECN automatically advances to DC_APPROVED (25).
+    Returns 422 if ECN is not in MANAGEMENT_REVIEW, role is not required, or
+    step is already approved.  Returns 403 for wrong assignee or self-approval.
+    """
+    svc = ECNService(session)
+    try:
+        detail = await svc.approve_role(
+            ecn_id,
+            actor_username=user.username,
+            actor_role=body.actor_role,
+            notes=body.notes,
+        )
+    except ECNForbidden as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    except ECNNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ECN not found")
+    except ECNValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    return _detail_out(detail)

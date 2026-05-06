@@ -24,6 +24,8 @@ Sources:
 
 from __future__ import annotations
 
+import json
+import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -948,6 +950,10 @@ class ECNService:
             action=req.trigger,
         )
 
+        # Seed parallel approval steps when entering MANAGEMENT_REVIEW
+        if to_status == ECNStatus.MANAGEMENT_REVIEW:
+            await self._seed_approval_steps(ecn_id, dict(row))
+
         # Queue MPDDOC.CreateDrawing outbox entries on dc_approve (one per new item)
         if req.trigger == "dc_approve":
             await self._queue_drawing_outbox(ecn_id)
@@ -1075,7 +1081,6 @@ class ECNService:
             ),
             {"ecn_id": ecn_id},
         )
-        import json
         for item_id, item_number, drawing_number in rows:
             idempotency_key = f"MPDDOC.CreateDrawing:{ecn_id}:{item_id}"
             await self._session.execute(
@@ -1097,6 +1102,234 @@ class ECNService:
                     "ikey": idempotency_key,
                 },
             )
+
+    # ── Parallel approval block ───────────────────────────────────────────────
+
+    async def _seed_approval_steps(self, ecn_id: str, ecn_row: dict[str, Any]) -> None:
+        """Insert ecn_approval_steps rows when an ECN enters MANAGEMENT_REVIEW (status 40).
+
+        Reads ecn_step_conditions for the ECN's facility (stage=40) to determine which
+        roles are required.  Condition logic:
+          - condition_op='always'  → always required
+          - condition_op='eq_true' → required if ecn_row[condition_field] is truthy
+          - condition_op='gt'      → required if ecn_row[condition_field] > threshold
+            (condition_value holds the env var name for the threshold, e.g. 'FN_THRESHOLD_PCT')
+
+        Uses INSERT ... ON CONFLICT DO NOTHING so re-seeding on a resubmit-proceed path
+        is idempotent for roles that were already set.
+
+        Assigns each step to the first active system_role_users row for that role+facility.
+        """
+        facility = ecn_row["facility"]
+
+        # Load conditions for this facility at MANAGEMENT_REVIEW
+        cond_rows = await self._session.execute(
+            sa.text(
+                "SELECT role_id, condition_field, condition_op, condition_value "
+                "FROM ecn_step_conditions "
+                "WHERE facility = :facility AND stage = 40"
+            ),
+            {"facility": facility},
+        )
+        conditions = list(cond_rows.mappings())
+
+        # Deduplicate: a role can have multiple condition rows (e.g. PM has routing_changes
+        # AND operation_changes).  Required if ANY condition evaluates to true.
+        required_roles: set[str] = set()
+        conditional_roles: set[str] = set()
+
+        for cond in conditions:
+            role_id = cond["role_id"]
+            op = cond["condition_op"]
+            field_name = cond["condition_field"]
+            cond_value = cond["condition_value"]
+
+            if op == "always":
+                required_roles.add(role_id)
+            elif op == "eq_true":
+                if bool(ecn_row.get(field_name)):
+                    required_roles.add(role_id)
+                else:
+                    conditional_roles.add(role_id)
+            elif op == "gt":
+                # condition_value is an env var name holding the numeric threshold
+                threshold = float(os.getenv(str(cond_value), "5.0"))
+                field_val = ecn_row.get(field_name)
+                if field_val is not None and float(field_val) > threshold:
+                    required_roles.add(role_id)
+                else:
+                    conditional_roles.add(role_id)
+
+        # Roles that appeared only as conditional and never met → skipped
+        skipped_roles = conditional_roles - required_roles
+
+        # Fetch one assignee per required role from system_role_users
+        async def _assignee(role_id: str) -> str | None:
+            r = await self._session.execute(
+                sa.text(
+                    "SELECT username FROM system_role_users "
+                    "WHERE role_id = :role_id AND facility = :facility "
+                    "AND removed_at IS NULL "
+                    "ORDER BY created_at LIMIT 1"
+                ),
+                {"role_id": role_id, "facility": facility},
+            )
+            row = r.first()
+            return row[0] if row else None
+
+        now = datetime.now(timezone.utc)
+
+        for role_id in required_roles:
+            assignee = await _assignee(role_id)
+            await self._session.execute(
+                sa.text(
+                    "INSERT INTO ecn_approval_steps "
+                    "(id, ecn_id, at_status, role_id, username, status, skipped, assigned_at) "
+                    "VALUES (:id, :ecn_id, 40, :role_id, :username, 'pending', FALSE, :now) "
+                    "ON CONFLICT (ecn_id, at_status, role_id) DO NOTHING"
+                ),
+                {
+                    "id": str(uuid.uuid4()),
+                    "ecn_id": ecn_id,
+                    "role_id": role_id,
+                    "username": assignee,
+                    "now": now,
+                },
+            )
+
+        for role_id in skipped_roles:
+            await self._session.execute(
+                sa.text(
+                    "INSERT INTO ecn_approval_steps "
+                    "(id, ecn_id, at_status, role_id, username, status, skipped, skip_reason, assigned_at) "
+                    "VALUES (:id, :ecn_id, 40, :role_id, NULL, 'skipped', TRUE, :reason, :now) "
+                    "ON CONFLICT (ecn_id, at_status, role_id) DO NOTHING"
+                ),
+                {
+                    "id": str(uuid.uuid4()),
+                    "ecn_id": ecn_id,
+                    "role_id": role_id,
+                    "reason": "Condition not met for this ECN",
+                    "now": now,
+                },
+            )
+
+    async def approve_role(
+        self,
+        ecn_id: str,
+        *,
+        actor_username: str,
+        actor_role: str,
+        notes: str | None = None,
+    ) -> ECNDetail:
+        """Record one role's approval at MANAGEMENT_REVIEW.
+
+        Guards:
+        - ECN must be in MANAGEMENT_REVIEW (status 40)
+        - actor_role must have a non-skipped pending step for this ECN
+        - actor_username must be assigned to that step (or be any valid user for the role)
+        - Self-approval prohibition: actor_username must not be the ECN originator
+
+        After marking the step approved, checks if all required non-skipped steps are now
+        done.  If so, fires complete_management_review → ECN advances to DC_APPROVED (25).
+        Returns the updated ECNDetail (either still MANAGEMENT_REVIEW or now DC_APPROVED).
+        """
+        row = await _load_ecn_row(self._session, ecn_id)
+        if row is None:
+            raise ECNNotFound(ecn_id)
+
+        if int(row["status"]) != ECNStatus.MANAGEMENT_REVIEW:
+            raise ECNValidationError(
+                "approve_role is only valid in MANAGEMENT_REVIEW status."
+            )
+
+        # Self-approval prohibition (ADR-003)
+        if actor_username == row["originator_username"]:
+            raise ECNForbidden(
+                f"Self-approval is prohibited: {actor_username} is the originator of this ECN."
+            )
+
+        # Load the step for this role
+        step_row = await self._session.execute(
+            sa.text(
+                "SELECT id, status, skipped, username "
+                "FROM ecn_approval_steps "
+                "WHERE ecn_id = :ecn_id AND at_status = 40 AND role_id = :role_id"
+            ),
+            {"ecn_id": ecn_id, "role_id": actor_role},
+        )
+        step = step_row.mappings().first()
+
+        if step is None:
+            raise ECNValidationError(
+                f"{actor_role} is not a required approver for this ECN."
+            )
+        if bool(step["skipped"]):
+            raise ECNValidationError(
+                f"{actor_role} is not a required approver for this ECN."
+            )
+        if step["status"] == "approved":
+            raise ECNValidationError(
+                f"{actor_role} step is already approved for this ECN."
+            )
+
+        # Verify actor is the assigned user for this role (or the step has no assignee yet)
+        assigned = step["username"]
+        if assigned is not None and assigned != actor_username:
+            raise ECNForbidden(
+                f"You are not assigned as {actor_role} for this ECN."
+            )
+
+        now = datetime.now(timezone.utc)
+
+        # Mark step approved
+        await self._session.execute(
+            sa.text(
+                "UPDATE ecn_approval_steps "
+                "SET status = 'approved', username = :username, "
+                "    completed_at = :now, notes = :notes "
+                "WHERE ecn_id = :ecn_id AND at_status = 40 AND role_id = :role_id"
+            ),
+            {
+                "username": actor_username,
+                "now": now,
+                "notes": notes,
+                "ecn_id": ecn_id,
+                "role_id": actor_role,
+            },
+        )
+
+        log.info(
+            "ecn.approve_role",
+            ecn_id=ecn_id,
+            role_id=actor_role,
+            actor=actor_username,
+        )
+
+        # Check if all required non-skipped steps are now approved
+        pending = await self._session.execute(
+            sa.text(
+                "SELECT COUNT(*) FROM ecn_approval_steps "
+                "WHERE ecn_id = :ecn_id AND at_status = 40 "
+                "AND status = 'pending' AND skipped = FALSE"
+            ),
+            {"ecn_id": ecn_id},
+        )
+        remaining = int(pending.scalar_one())
+
+        if remaining == 0:
+            # All done — fire complete_management_review via the transition machinery
+            await self.transition(
+                ecn_id,
+                ECNStatusTransitionRequest(
+                    trigger="complete_management_review",
+                    actor_role=actor_role,
+                    notes=notes,
+                ),
+                actor_username=actor_username,
+            )
+
+        return await self.get(ecn_id)
 
     # ── List ──────────────────────────────────────────────────────────────────
 
