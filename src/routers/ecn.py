@@ -71,9 +71,6 @@ class ECNCreateBody(BaseModel):
     wapc_delta_pct: float | None = None
     wapc_threshold_override: bool = False
 
-    is_emergency: bool = False
-    emergency_reason: str | None = None
-
     requires_customer_approval: bool = False
     customer_approval_reference: str | None = None
     regulatory_impact: bool = False
@@ -101,8 +98,6 @@ class ECNUpdateBody(BaseModel):
     change_to_documents: bool | None = None
     wapc_delta_pct: float | None = None
     wapc_threshold_override: bool | None = None
-    is_emergency: bool | None = None
-    emergency_reason: str | None = None
     requires_customer_approval: bool | None = None
     customer_approval_reference: str | None = None
     regulatory_impact: bool | None = None
@@ -154,10 +149,6 @@ class ECNDetailOut(BaseModel):
     change_to_documents: bool
     wapc_delta_pct: float | None
     wapc_threshold_override: bool
-    is_emergency: bool
-    emergency_reason: str | None
-    emergency_approved_by: str | None
-    emergency_approved_at: str | None
     requires_customer_approval: bool
     customer_approval_reference: str | None
     customer_approved_at: str | None
@@ -215,10 +206,6 @@ def _detail_out(d: ECNDetail) -> ECNDetailOut:
         change_to_documents=d.change_to_documents,
         wapc_delta_pct=d.wapc_delta_pct,
         wapc_threshold_override=d.wapc_threshold_override,
-        is_emergency=d.is_emergency,
-        emergency_reason=d.emergency_reason,
-        emergency_approved_by=d.emergency_approved_by,
-        emergency_approved_at=_ts(d.emergency_approved_at),
         requires_customer_approval=d.requires_customer_approval,
         customer_approval_reference=d.customer_approval_reference,
         customer_approved_at=_ts(d.customer_approved_at),
@@ -326,8 +313,6 @@ async def create_ecn(
         change_to_documents=body.change_to_documents,
         wapc_delta_pct=body.wapc_delta_pct,
         wapc_threshold_override=body.wapc_threshold_override,
-        is_emergency=body.is_emergency,
-        emergency_reason=body.emergency_reason,
         requires_customer_approval=body.requires_customer_approval,
         customer_approval_reference=body.customer_approval_reference,
         regulatory_impact=body.regulatory_impact,
@@ -430,8 +415,6 @@ async def update_ecn(
         change_to_documents=body.change_to_documents,
         wapc_delta_pct=body.wapc_delta_pct,
         wapc_threshold_override=body.wapc_threshold_override,
-        is_emergency=body.is_emergency,
-        emergency_reason=body.emergency_reason,
         requires_customer_approval=body.requires_customer_approval,
         customer_approval_reference=body.customer_approval_reference,
         regulatory_impact=body.regulatory_impact,
@@ -587,3 +570,107 @@ async def assign_ecn_role(
         ],
         superseded_username=result.superseded_username,
     )
+
+
+# ── Resubmit (rejection flows) ───────────────────────────────────────────────
+
+class ResubmitBody(BaseModel):
+    resolution: str = Field(..., description="'restart' or 'proceed'")
+    actor_role: str = Field(..., min_length=2, max_length=2)
+    notes: str | None = None
+
+    @field_validator("resolution")
+    @classmethod
+    def _validate_resolution(cls, v: str) -> str:
+        if v not in ("restart", "proceed"):
+            raise ValueError("resolution must be 'restart' or 'proceed'")
+        return v
+
+    @field_validator("actor_role")
+    @classmethod
+    def _upper_actor_role(cls, v: str) -> str:
+        return v.upper()
+
+
+@ecn_router.post(
+    "/{ecn_id}/resubmit",
+    response_model=ECNDetailOut,
+    status_code=status.HTTP_200_OK,
+)
+async def resubmit_ecn(
+    ecn_id: str,
+    body: ResubmitBody,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> ECNDetailOut:
+    """Resubmit a REJECTED ECN via restart or proceed path.
+
+    Restart: all approval steps reset; revision incremented; → ENGINEERING_REVIEW.
+    Proceed: only rejecting role's step reset; other approvals preserved; → prior stage.
+    """
+    svc = ECNService(session)
+    try:
+        detail = await svc.resubmit(
+            ecn_id,
+            resolution=body.resolution,
+            actor_username=user.username,
+            actor_role=body.actor_role,
+            notes=body.notes,
+        )
+    except ECNForbidden as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    except ECNNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ECN not found")
+    except ECNValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    except ECNTransitionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    return _detail_out(detail)
+
+
+# ── Drawing number ────────────────────────────────────────────────────────────
+
+class SetDrawingNumberBody(BaseModel):
+    drawing_number: str = Field(..., min_length=1, max_length=20)
+    actor_role: str = Field(..., min_length=2, max_length=2)
+
+    @field_validator("actor_role")
+    @classmethod
+    def _upper_actor_role(cls, v: str) -> str:
+        return v.upper()
+
+
+@ecn_router.patch(
+    "/{ecn_id}/items/{item_id}/drawing",
+    response_model=ECNDetailOut,
+)
+async def set_drawing_number(
+    ecn_id: str,
+    item_id: str,
+    body: SetDrawingNumberBody,
+    user: CurrentUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> ECNDetailOut:
+    """Set a drawing number on a new item (is_new_item=TRUE).
+
+    DC role only. ECN must be in DC_APPROVED status.
+    Returns 422 if ECN is not DC_APPROVED or item is not is_new_item=TRUE.
+    Returns 403 if actor_role is not 'DC'.
+    Returns 404 if ECN or item not found.
+    """
+    svc = ECNService(session)
+    try:
+        detail = await svc.set_drawing_number(
+            ecn_id,
+            item_id,
+            drawing_number=body.drawing_number,
+            actor_username=user.username,
+            actor_role=body.actor_role,
+        )
+    except ECNForbidden as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
+    except ECNNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ECN or item not found")
+    except ECNValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    return _detail_out(detail)

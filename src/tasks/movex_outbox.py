@@ -38,6 +38,8 @@ import psycopg2
 import psycopg2.extras
 import structlog
 
+from src.workflow.audit_hash import compute_transition_hash as _canonical_hash
+
 from src.tasks.celery_app import celery_app
 
 log = structlog.get_logger(__name__)
@@ -619,6 +621,21 @@ def advance_ecn_to_implemented(ecn_id: str) -> None:
             sa.text("UPDATE ecn_instances SET status = 60 WHERE id = :id AND status = 50"),
             {"id": ecn_id},
         )
+        sha256_prev = _get_last_hash_sync(session, ecn_id)
+        sha256_self = _canonical_hash(
+            record_id=record_id,
+            ecn_id=ecn_id,
+            from_status=50,
+            to_status=60,
+            action="movex_write_complete",
+            actor_username="celery-worker",
+            actor_role=None,
+            notes="All Movex MI calls completed successfully.",
+            movex_payload=None,
+            agent_provenance=None,
+            sha256_prev=sha256_prev,
+            created_at=created_at,
+        )
         session.execute(
             sa.text(
                 "INSERT INTO ecn_transition_history "
@@ -631,8 +648,8 @@ def advance_ecn_to_implemented(ecn_id: str) -> None:
             {
                 "id": record_id,
                 "ecn_id": ecn_id,
-                "sha256_self": _compute_hash(record_id, 50, 60, created_at),
-                "sha256_prev": _get_last_hash_sync(session, ecn_id),
+                "sha256_self": sha256_self,
+                "sha256_prev": sha256_prev,
                 "created_at": created_at,
             },
         )
@@ -644,12 +661,6 @@ def advance_ecn_to_implemented(ecn_id: str) -> None:
 # ---------------------------------------------------------------------------
 # SHA-256 chain helpers (sync versions for the Celery worker)
 # ---------------------------------------------------------------------------
-
-def _compute_hash(record_id: str, from_status: int, to_status: int, created_at: datetime) -> str:
-    import hashlib
-    payload = f"{record_id}:{from_status}:{to_status}:movex_write_complete:{created_at.isoformat()}"
-    return hashlib.sha256(payload.encode()).hexdigest()
-
 
 def _get_last_hash_sync(session: Any, ecn_id: str) -> str | None:
     import sqlalchemy as sa

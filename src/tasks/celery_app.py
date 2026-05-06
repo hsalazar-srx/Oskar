@@ -44,6 +44,7 @@ celery_app.conf.update(
     # Task discovery
     imports=[
         "src.tasks.movex_outbox",
+        "src.tasks.audit_checkpoint",
     ],
 
     # Reliability: task is acknowledged only after it returns successfully.
@@ -67,4 +68,16 @@ celery_app.conf.update(
     # Worker — conservative for a 2 vCPU / 4 GB VM (PRE-8)
     worker_prefetch_multiplier=1,
     worker_max_tasks_per_child=200,
+
+    # Beat schedule — periodic tasks
+    beat_schedule={
+        "audit-chain-checkpoint-daily": {
+            "task": "src.tasks.audit_checkpoint.checkpoint_audit_chain",
+            "schedule": 86400.0,  # every 24 hours — persists tail hashes to audit_checkpoints
+        },
+        "audit-chain-report-weekly": {
+            "task": "src.tasks.audit_checkpoint.report_audit_checkpoint",
+            "schedule": 604800.0,  # every 7 days — emails out-of-band witness (ADR-004)
+        },
+    },
 )

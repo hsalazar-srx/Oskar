@@ -79,10 +79,6 @@ class ECNCreateRequest:
     wapc_delta_pct: float | None = None
     wapc_threshold_override: bool = False
 
-    # Emergency — Sprint 2 workflow; data model accepted now
-    is_emergency: bool = False
-    emergency_reason: str | None = None
-
     # Customer / regulatory
     requires_customer_approval: bool = False
     customer_approval_reference: str | None = None
@@ -170,12 +166,6 @@ class ECNDetail:
     # Cost
     wapc_delta_pct: float | None
     wapc_threshold_override: bool
-
-    # Emergency
-    is_emergency: bool
-    emergency_reason: str | None
-    emergency_approved_by: str | None
-    emergency_approved_at: datetime | None
 
     # Customer / regulatory
     requires_customer_approval: bool
@@ -506,10 +496,6 @@ def _row_to_detail(
         change_to_documents=bool(row["change_to_documents"]),
         wapc_delta_pct=float(row["wapc_delta_pct"]) if row["wapc_delta_pct"] is not None else None,
         wapc_threshold_override=bool(row["wapc_threshold_override"]),
-        is_emergency=bool(row["is_emergency"]),
-        emergency_reason=row.get("emergency_reason"),
-        emergency_approved_by=row.get("emergency_approved_by"),
-        emergency_approved_at=row.get("emergency_approved_at"),
         requires_customer_approval=bool(row["requires_customer_approval"]),
         customer_approval_reference=row.get("customer_approval_reference"),
         customer_approved_at=row.get("customer_approved_at"),
@@ -656,8 +642,6 @@ class ECNUpdateRequest:
     change_to_documents: bool | None = None
     wapc_delta_pct: float | None = None
     wapc_threshold_override: bool | None = None
-    is_emergency: bool | None = None
-    emergency_reason: str | None = None
     requires_customer_approval: bool | None = None
     customer_approval_reference: str | None = None
     regulatory_impact: bool | None = None
@@ -711,14 +695,14 @@ class ECNService:
                 "(id, ecn_number, facility, title, description, originator_username, "
                 " is_new_item, routing_changes, operation_changes, new_parts, "
                 " lead_time_changes, change_to_documents, wapc_delta_pct, "
-                " wapc_threshold_override, is_emergency, emergency_reason, "
+                " wapc_threshold_override, "
                 " requires_customer_approval, customer_approval_reference, "
                 " regulatory_impact, extra_data) "
                 "VALUES "
                 "(:id, :ecn_number, :facility, :title, :description, :originator, "
                 " :is_new_item, :routing_changes, :operation_changes, :new_parts, "
                 " :lead_time_changes, :change_to_documents, :wapc_delta_pct, "
-                " :wapc_threshold_override, :is_emergency, :emergency_reason, "
+                " :wapc_threshold_override, "
                 " :requires_customer_approval, :customer_approval_reference, "
                 " :regulatory_impact, :extra_data::jsonb)"
             ),
@@ -737,8 +721,6 @@ class ECNService:
                 "change_to_documents": req.change_to_documents,
                 "wapc_delta_pct": req.wapc_delta_pct,
                 "wapc_threshold_override": req.wapc_threshold_override,
-                "is_emergency": req.is_emergency,
-                "emergency_reason": req.emergency_reason,
                 "requires_customer_approval": req.requires_customer_approval,
                 "customer_approval_reference": req.customer_approval_reference,
                 "regulatory_impact": req.regulatory_impact,
@@ -828,7 +810,7 @@ class ECNService:
         for flag in (
             "is_new_item", "routing_changes", "operation_changes",
             "new_parts", "lead_time_changes", "change_to_documents",
-            "wapc_threshold_override", "is_emergency",
+            "wapc_threshold_override",
             "requires_customer_approval", "regulatory_impact",
         ):
             val = getattr(req, flag)
@@ -836,7 +818,6 @@ class ECNService:
                 set_parts.append(f"{flag} = :{flag}")
                 params[flag] = val
         _maybe("wapc_delta_pct", req.wapc_delta_pct)
-        _maybe("emergency_reason", req.emergency_reason)
         _maybe("customer_approval_reference", req.customer_approval_reference)
         if req.extra_data is not None:
             set_parts.append("extra_data = :extra_data::jsonb")
@@ -912,11 +893,29 @@ class ECNService:
 
         from_status = ecn_model.status
 
+        # For dc_approve: pre-check which new items lack a drawing number
+        async def _missing_drawings() -> list[str]:
+            r = await self._session.execute(
+                sa.text(
+                    "SELECT id FROM ecn_items "
+                    "WHERE ecn_id = :ecn_id AND is_new_item = TRUE "
+                    "AND drawing_number IS NULL"
+                ),
+                {"ecn_id": ecn_id},
+            )
+            return [str(row[0]) for row in r]
+
         machine = ECNWorkflowMachine(
             ecn_model, ctx,
             all_required_approved_fn=_all_approved,
+            missing_drawings_fn=_missing_drawings,
         )
         machine.set_sha256_prev(sha256_prev)
+
+        # Pre-populate missing drawings list on the machine so _guard_dc_approve
+        # can inspect it synchronously (same pattern as _guard_all_required_approved).
+        if req.trigger == "dc_approve":
+            machine._pending_missing_drawings = await _missing_drawings()
 
         try:
             await machine.trigger(req.trigger)
@@ -949,6 +948,10 @@ class ECNService:
             action=req.trigger,
         )
 
+        # Queue MPDDOC.CreateDrawing outbox entries on dc_approve (one per new item)
+        if req.trigger == "dc_approve":
+            await self._queue_drawing_outbox(ecn_id)
+
         # Insert rejection record when trigger is 'reject'
         if req.trigger == "reject" and req.rejection_reason:
             await self._insert_rejection(ecn_id, actor_username, req, from_status)
@@ -959,6 +962,68 @@ class ECNService:
             trigger=req.trigger,
             from_status=from_status,
             to_status=to_status,
+            actor=actor_username,
+        )
+        return await self.get(ecn_id)
+
+    # ── Drawing number ────────────────────────────────────────────────────────
+
+    async def set_drawing_number(
+        self,
+        ecn_id: str,
+        item_id: str,
+        *,
+        drawing_number: str,
+        actor_username: str,
+        actor_role: str,
+    ) -> ECNDetail:
+        """Set a drawing number on a specific ECN item.
+
+        Guards:
+        - actor_role must be 'DC'
+        - ECN must be in DC_APPROVED status
+        - Item must exist, belong to this ECN, and have is_new_item=TRUE
+        """
+        if actor_role != "DC":
+            raise ECNForbidden("Only the DC may set drawing numbers.")
+
+        row = await _load_ecn_row(self._session, ecn_id)
+        if row is None:
+            raise ECNNotFound(ecn_id)
+
+        if int(row["status"]) != ECNStatus.DC_APPROVED:
+            raise ECNValidationError(
+                "Drawing numbers may only be set while ECN is in DC_APPROVED status."
+            )
+
+        item_row = await self._session.execute(
+            sa.text(
+                "SELECT id, is_new_item FROM ecn_items "
+                "WHERE id = :item_id AND ecn_id = :ecn_id"
+            ),
+            {"item_id": item_id, "ecn_id": ecn_id},
+        )
+        item = item_row.mappings().first()
+        if item is None:
+            raise ECNNotFound(item_id)
+        if not bool(item["is_new_item"]):
+            raise ECNValidationError(
+                "Drawing number can only be set on new items (is_new_item=TRUE)."
+            )
+
+        await self._session.execute(
+            sa.text(
+                "UPDATE ecn_items SET drawing_number = :drawing_number "
+                "WHERE id = :item_id"
+            ),
+            {"drawing_number": drawing_number, "item_id": item_id},
+        )
+
+        log.info(
+            "ecn.drawing_number.set",
+            ecn_id=ecn_id,
+            item_id=item_id,
+            drawing_number=drawing_number,
             actor=actor_username,
         )
         return await self.get(ecn_id)
@@ -996,6 +1061,42 @@ class ECNService:
                 "desc": req.rejection_reason,
             },
         )
+
+    async def _queue_drawing_outbox(self, ecn_id: str) -> None:
+        """Queue one MPDDOC.CreateDrawing outbox entry per is_new_item=TRUE item.
+
+        Stub — waits for @developer-dotnet to implement POST /api/ecn/drawing.
+        Idempotency key: ecn_id + item_id ensures safe retry.
+        """
+        rows = await self._session.execute(
+            sa.text(
+                "SELECT id, item_number, drawing_number FROM ecn_items "
+                "WHERE ecn_id = :ecn_id AND is_new_item = TRUE"
+            ),
+            {"ecn_id": ecn_id},
+        )
+        import json
+        for item_id, item_number, drawing_number in rows:
+            idempotency_key = f"MPDDOC.CreateDrawing:{ecn_id}:{item_id}"
+            await self._session.execute(
+                sa.text(
+                    "INSERT INTO movex_outbox "
+                    "(id, ecn_id, ecn_item_id, mi_transaction, mi_params, idempotency_key) "
+                    "VALUES (:id, :ecn_id, :item_id, :mi_tx, :mi_params::jsonb, :ikey) "
+                    "ON CONFLICT (idempotency_key) DO NOTHING"
+                ),
+                {
+                    "id": str(uuid.uuid4()),
+                    "ecn_id": ecn_id,
+                    "item_id": str(item_id),
+                    "mi_tx": "MPDDOC.CreateDrawing",
+                    "mi_params": json.dumps({
+                        "item_number": item_number,
+                        "drawing_number": drawing_number,
+                    }),
+                    "ikey": idempotency_key,
+                },
+            )
 
     # ── List ──────────────────────────────────────────────────────────────────
 
@@ -1219,3 +1320,162 @@ class ECNService:
             role_assignments=role_assignments,
             superseded_username=superseded_username,
         )
+
+    # ── Rejection flows ───────────────────────────────────────────────────────
+
+    async def resubmit(
+        self,
+        ecn_id: str,
+        *,
+        resolution: str,                   # 'restart' | 'proceed'
+        actor_username: str,
+        actor_role: str,
+        notes: str | None = None,
+    ) -> ECNDetail:
+        """Resubmit a REJECTED ECN via restart or proceed path.
+
+        Restart: all ecn_approval_steps reset to 'pending'; revision_number
+        incremented; ECN → ENGINEERING_REVIEW.
+
+        Proceed: only the rejecting role's most recent ecn_approval_step reset
+        to 'pending'; other approvals preserved; ECN → prior stage (the status
+        recorded on the most recent ecn_rejections row as rejected_at_status).
+
+        Guards:
+        - actor_role must be 'OR' (originator only)
+        - ECN must be in REJECTED (65) status
+        - resolution must be 'restart' or 'proceed'
+        - ecn_rejections must have at least one unresolved row
+        """
+        if actor_role != "OR":
+            raise ECNForbidden("Only the originator (OR) may resubmit a rejected ECN.")
+
+        if resolution not in ("restart", "proceed"):
+            raise ECNValidationError(
+                f"Invalid resolution '{resolution}'. Must be 'restart' or 'proceed'."
+            )
+
+        row = await _load_ecn_row(self._session, ecn_id)
+        if row is None:
+            raise ECNNotFound(ecn_id)
+
+        current_status = int(row["status"])
+        if current_status != ECNStatus.REJECTED:
+            raise ECNValidationError(
+                f"ECN is not in REJECTED status (current: {current_status})."
+            )
+
+        # Verify originator
+        if str(row["originator_username"]) != actor_username:
+            raise ECNForbidden("Only the originator of this ECN may resubmit it.")
+
+        # Load the most recent unresolved rejection record
+        rej_row = await self._session.execute(
+            sa.text(
+                "SELECT id, rejected_at_status, role_id "
+                "FROM ecn_rejections "
+                "WHERE ecn_id = :ecn_id AND resolution IS NULL "
+                "ORDER BY rejection_number DESC LIMIT 1"
+            ),
+            {"ecn_id": ecn_id},
+        )
+        rejection = rej_row.mappings().first()
+        if rejection is None:
+            raise ECNValidationError(
+                "No unresolved rejection record found for this ECN."
+            )
+
+        now = datetime.now(timezone.utc)
+
+        if resolution == "restart":
+            # Reset ALL approval steps for this ECN to 'pending'
+            await self._session.execute(
+                sa.text(
+                    "UPDATE ecn_approval_steps "
+                    "SET step_status = 'pending', actor_username = NULL, "
+                    "    acted_at = NULL "
+                    "WHERE ecn_id = :ecn_id"
+                ),
+                {"ecn_id": ecn_id},
+            )
+            new_status = ECNStatus.ENGINEERING_REVIEW
+            new_revision = int(row["revision_number"]) + 1
+            await self._session.execute(
+                sa.text(
+                    "UPDATE ecn_instances "
+                    "SET status = :status, revision_number = :rev, updated_at = :now "
+                    "WHERE id = :ecn_id"
+                ),
+                {"status": new_status, "rev": new_revision,
+                 "now": now, "ecn_id": ecn_id},
+            )
+        else:  # proceed
+            # Reset only the rejecting role's most recent step
+            rejecting_role = str(rejection["role_id"])
+            rejected_at_status = int(rejection["rejected_at_status"])
+            await self._session.execute(
+                sa.text(
+                    "UPDATE ecn_approval_steps "
+                    "SET step_status = 'pending', actor_username = NULL, "
+                    "    acted_at = NULL "
+                    "WHERE ecn_id = :ecn_id AND role_id = :role_id "
+                    "  AND at_status = :at_status"
+                ),
+                {
+                    "ecn_id": ecn_id,
+                    "role_id": rejecting_role,
+                    "at_status": rejected_at_status,
+                },
+            )
+            new_status = rejected_at_status
+            new_revision = int(row["revision_number"])
+            await self._session.execute(
+                sa.text(
+                    "UPDATE ecn_instances "
+                    "SET status = :status, updated_at = :now "
+                    "WHERE id = :ecn_id"
+                ),
+                {"status": new_status, "now": now, "ecn_id": ecn_id},
+            )
+
+        # Mark the rejection record as resolved
+        await self._session.execute(
+            sa.text(
+                "UPDATE ecn_rejections "
+                "SET resolution = :res, resolved_at = :now, resolved_by = :by "
+                "WHERE id = :rej_id"
+            ),
+            {
+                "res": resolution,
+                "now": now,
+                "by": actor_username,
+                "rej_id": str(rejection["id"]),
+            },
+        )
+
+        # Write audit chain record
+        sha256_prev = await _get_last_transition_hash(self._session, ecn_id)
+        ecn_model = _row_to_ecn_model(row)
+        ctx = TransitionContext(
+            actor_username=actor_username,
+            actor_role=actor_role,
+            notes=notes or f"Resubmit ({resolution})",
+        )
+        machine = ECNWorkflowMachine(ecn_model, ctx)
+        machine.set_sha256_prev(sha256_prev)
+        await _write_transition_history(
+            self._session, machine, ecn_id,
+            from_status=ECNStatus.REJECTED,
+            to_status=new_status,
+            action="resubmit",
+        )
+
+        log.info(
+            "ecn.resubmitted",
+            ecn_id=ecn_id,
+            resolution=resolution,
+            new_status=new_status,
+            actor=actor_username,
+        )
+
+        return await self.get(ecn_id)
