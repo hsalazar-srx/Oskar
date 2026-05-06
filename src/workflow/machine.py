@@ -32,8 +32,6 @@ Sources:
 
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import IntEnum
@@ -41,6 +39,8 @@ from typing import Any, Callable, Coroutine
 from uuid import uuid4
 
 from transitions import Machine, MachineError  # type: ignore[import]
+
+from src.workflow.audit_hash import compute_transition_hash as _compute_transition_hash
 
 
 # ---------------------------------------------------------------------------
@@ -309,11 +309,15 @@ class ECNWorkflowMachine:
         # For MANAGEMENT_REVIEW parallel block: called to check if all required
         # roles have approved (caller queries ecn_approval_steps).
         all_required_approved_fn: Callable[[], Coroutine[Any, Any, bool]] | None = None,
+        # For DC_APPROVED gate: called to get item IDs missing drawing numbers.
+        # Returns list of item IDs that are is_new_item=TRUE with drawing_number IS NULL.
+        missing_drawings_fn: Callable[[], Coroutine[Any, Any, list[str]]] | None = None,
     ) -> None:
         self.ecn = ecn
         self.ctx = ctx
         self._on_transition = on_transition
         self._all_required_approved_fn = all_required_approved_fn
+        self._missing_drawings_fn = missing_drawings_fn
 
         # Transition record built by _before_transition, consumed by _after_transition
         self._pending_from_status: int | None = None
@@ -377,30 +381,20 @@ class ECNWorkflowMachine:
         action: str,
         created_at: datetime,
     ) -> str:
-        """Compute SHA-256 for a transition history row.
-
-        Fields included in hash (must match ecn_transition_history INSERT):
-          id, ecn_id, from_status, to_status, action, actor_username,
-          actor_role, notes, movex_payload, agent_provenance, sha256_prev, created_at
-
-        Do NOT hash sha256_self itself. Do NOT compute in the DB — Python only.
-        """
-        payload = {
-            "id": record_id,
-            "ecn_id": self.ecn.id,
-            "from_status": from_status,
-            "to_status": to_status,
-            "action": action,
-            "actor_username": self.ctx.actor_username,
-            "actor_role": self.ctx.actor_role,
-            "notes": self.ctx.notes,
-            "movex_payload": self.ctx.movex_payload,
-            "agent_provenance": self.ctx.agent_provenance,
-            "sha256_prev": self._sha256_prev,
-            "created_at": created_at.isoformat(),
-        }
-        canonical = json.dumps(payload, sort_keys=True, default=str, ensure_ascii=True)
-        return hashlib.sha256(canonical.encode()).hexdigest()
+        return _compute_transition_hash(
+            record_id=record_id,
+            ecn_id=self.ecn.id,
+            from_status=from_status,
+            to_status=to_status,
+            action=action,
+            actor_username=self.ctx.actor_username,
+            actor_role=self.ctx.actor_role,
+            notes=self.ctx.notes,
+            movex_payload=self.ctx.movex_payload,
+            agent_provenance=self.ctx.agent_provenance,
+            sha256_prev=self._sha256_prev,
+            created_at=created_at,
+        )
 
     # ---------------------------------------------------------------------------
     # Before / after hooks (called by transitions library)
@@ -522,10 +516,12 @@ class ECNWorkflowMachine:
         return True
 
     def _guard_dc_approve(self) -> bool:
-        """DC_APPROVED → APPROVED: DC role + customer approval gate (ISO 13485 §7.3.9).
+        """DC_APPROVED → APPROVED: DC role + drawing numbers + customer approval gate.
 
         ADR-009: consolidates former _guard_is_dc + _guard_close into one gate.
         DC certifies the full change package before the Movex write is authorised.
+        Drawing numbers must be set on all is_new_item=TRUE items before dc_approve.
+        Customer approval gate: ISO 13485 §7.3.9.
         """
         if self.ctx.actor_role != "DC":
             raise GuardFailed(
@@ -539,6 +535,16 @@ class ECNWorkflowMachine:
             raise GuardFailed(
                 "Customer approval is required for this ECN (ISO 13485 §7.3.9). "
                 "Set customer_approved_at before DC approval."
+            )
+        # Drawing number check: caller pre-validates via missing_drawings_fn.
+        # The _pending_missing_drawings attr is set by ECNService.transition
+        # before firing the trigger (same pattern as _all_required_approved_fn).
+        missing = getattr(self, "_pending_missing_drawings", None)
+        if missing:
+            ids = ", ".join(missing)
+            raise GuardFailed(
+                f"All new items must have a drawing number before DC approval. "
+                f"Missing: {ids}."
             )
         return True
 

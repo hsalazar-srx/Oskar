@@ -82,12 +82,6 @@ def upgrade() -> None:
             wapc_delta_pct              DECIMAL(7,4),
             wapc_threshold_override     BOOLEAN NOT NULL DEFAULT FALSE,
 
-            -- Emergency ECN (data model reserved; workflow Sprint 2+)
-            is_emergency                BOOLEAN NOT NULL DEFAULT FALSE,
-            emergency_reason            TEXT,
-            emergency_approved_by       VARCHAR(50),
-            emergency_approved_at       TIMESTAMPTZ,
-
             -- Customer/regulatory (ISO 13485 §7.3.9)
             requires_customer_approval  BOOLEAN NOT NULL DEFAULT FALSE,
             customer_approval_reference VARCHAR(100),
