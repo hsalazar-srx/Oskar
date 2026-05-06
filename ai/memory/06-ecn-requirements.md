@@ -222,19 +222,6 @@ OSKAR `ecn_items` table is the equivalent of Stargile `ZECNITMN` + `ECNItem.java
 
 ---
 
-## 6. Emergency ECN — Data Model Reservation
-
-Workflow Sprint 2+. Fields reserved now to avoid a migration later.
-
-| Field on `ecn_instances` | Type | Notes |
-|--------------------------|------|-------|
-| `is_emergency` | BOOLEAN | Default FALSE. Set by originator at creation. |
-| `emergency_reason` | TEXT | Mandatory if `is_emergency=TRUE`. |
-| `emergency_approved_by` | VARCHAR(10) | EM or Admin who authorises the flag. |
-| `emergency_approved_at` | TIMESTAMPTZ | |
-
-**Sprint 2+ behaviour:** Emergency ECNs compress MANAGEMENT_REVIEW to DC + EM co-approval only. QM review remains mandatory (ISO 13485 cannot be skipped). All bypassed roles receive mandatory notification.
-
 ---
 
 ## 7. Notification Matrix

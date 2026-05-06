@@ -97,20 +97,21 @@ must be on the ABC before any business logic is written. See `decisions/ADR-005-
 | PDS002MI | UpdateOperation | Modify routing operation | `BOMService.java` — confirmed | **MISSING** | Sprint 2 blocker |
 | PDS002MI | AddOperation | Add new routing step | `BOMService.java` — confirmed | **MISSING** | Sprint 2 blocker |
 | MMS025MI | AddAlias | Register MPN (POPN) as item alias in MITPOP | `ItemService.addItemAlias()` — graph analysis §8.2 | **MISSING** | Sprint 2 blocker |
-| MPDDOC | (see note) | Drawing number creation — copy `#TEMPLATE` record | `ItemService.createDwno()` — graph analysis §8.1 | **MISSING — may not be an MI program** | Sprint 2 blocker |
+| MPDDOC | `POST /api/ecn/drawing` (custom DB2 endpoint) | Drawing number creation — copy `#TEMPLATE` record | `ItemService.createDwno()` — Stargile source confirmed 2026-05-06 | **MISSING — `@developer-dotnet` to implement** | Sprint 2 blocker |
 
 **New item write sequence (when `ecn_items.is_new_item = TRUE`):**
 All steps execute at Status 50 (APPROVED) via the Transactional Outbox in order:
 1. `MMS200MI.AddItmViaItmTyp` — create MITMAS record
 2. `MMS200MI.AddItmFac` — create MITFAC record for ECN facility
 3. `MMS200MI.AddItmWhs` — create MITWHL record for default warehouse
-4. `PDS001MI.AddProduct` — create product structure header
-5. `PDS002MI.AddComponent` — BOM lines
-6. `MMS025MI.AddAlias` — register MPN
+4. `MPDDOC.CreateDrawing` — copy `#TEMPLATE` row in MPDDOC for the drawing number (custom DB2 endpoint; idempotent via WHERE NOT EXISTS)
+5. `PDS001MI.AddProduct` — create product structure header
+6. `PDS002MI.AddComponent` — BOM lines
+7. `MMS025MI.AddAlias` — register MPN
 
 **Why Stargile did not do this:** Engineers manually created the item in Movex first, then referenced it in Stargile. Confirmed in the 2018-04-17 Branko session (timestamp 43:57): *"this is another step where we use a shortcut sometimes by manually creating it in Movex."* This was a normalised workaround, not a named pain point — which is why it was not flagged in the original gap analysis. OSKAR must eliminate this manual step.
 
-**MPDDOC note:** `createDwno()` copies a `#TEMPLATE` record in the MPDDOC table. This is likely a direct DB2 operation (`PreparedStatementHelper` pattern confirmed in Stargile source), not an MI API call. The `@developer-dotnet` team must confirm: is there an MI program for MPDDOC manipulation, or does movex-rest-api need a custom DB2 endpoint? Flag as investigation item before Sprint 2 design.
+**MPDDOC note (resolved 2026-05-06):** `createDwno()` is a raw DB2 `INSERT … SELECT` — there is no MI program. Confirmed via Stargile source (`ItemService.java` lines 116–152) and live DB2 query against CONO=100. The `#TEMPLATE` row exists in `MVXCDTA.MPDDOC`. The `CSYTAB CFI1` template (10-space key) also exists. `@developer-dotnet` must implement `POST /api/ecn/drawing` as a parameterised DB2 query copying all 42 MPDDOC columns from `DODOID='#TEMPLATE'`, substituting `DODOID=<new_dwno>` and `DOCHID=<current_user>`. The `WHERE NOT EXISTS` clause makes it idempotent — safe for outbox retry. Also note: Stargile creates matching `CSYTAB` entries for `CFI1`, `CFI3`, `CFI4` (user-defined field lookups) via the same pattern — include these in the endpoint spec.
 
 **Existing-item change path:** `MMS200MI.UpdItmBasic` (already exposed) covers STAT/ITDS/FUDS/RESP/UNMS updates on items that already exist in Movex. This satisfies the change path for ECN lines where `is_new_item = FALSE`.
 
@@ -274,9 +275,53 @@ Deliver all of the following to movex-rest-api **before Sprint 2 starts**. Each 
 }
 ```
 
-#### MPDDOC — Drawing number creation (investigation required)
+#### MPDDOC — Drawing number creation (custom DB2 endpoint — resolved 2026-05-06)
 
-**Action for @developer-dotnet:** Determine whether MPDDOC manipulation is exposed via an MI API program or requires a custom DB2 query endpoint. Stargile uses `ItemService.createDwno()` which copies a `#TEMPLATE` record via `PreparedStatementHelper` — this suggests direct DB2, not MI. If confirmed, add a custom `/api/ecn/drawing` endpoint to movex-rest-api that wraps the DB2 INSERT. Deliver finding before Sprint 2 design session.
+**Confirmed:** No MI program exists for MPDDOC. Implement `POST /api/ecn/drawing` as a custom DB2 endpoint.
+
+**SQL to execute** (parameterised — do not use string concatenation):
+
+```sql
+INSERT INTO MVXCDTA.MPDDOC (
+    DOCONO, DODOID, DODOTY, DOADS1, DOAISB, DODNUM, DOADOB,
+    DODOSS, DODOFM, DOLNCD, DODATE, DOECMA, DOECVE, DOECAC, DODODE,
+    DOASBJ, DOASB2, DODOME, DOFIOF, DOFUNC, DOSTNC, DODGRP, DOMDOC,
+    DODAUT, DODINT, DORESP, DODEPT, DOAREG, DOAISD, DOAEDT, DOAED2,
+    DOCOPY, DOITNO, DOARVS, DOACPL, DOFACI, DOTXID, DORGDT, DORGTM,
+    DOLMDT, DOCHNO, DOCHID
+)
+SELECT
+    DOCONO, @dwno, DODOTY, DOADS1, DOAISB, DODNUM, DOADOB,
+    DODOSS, DODOFM, DOLNCD, DODATE, DOECMA, DOECVE, DOECAC, DODODE,
+    DOASBJ, DOASB2, DODOME, DOFIOF, DOFUNC, DOSTNC, DODGRP, DOMDOC,
+    DODAUT, DODINT, DORESP, DODEPT, DOAREG, DOAISD, DOAEDT, DOAED2,
+    DOCOPY, DOITNO, DOARVS, DOACPL, DOFACI, DOTXID, DORGDT, DORGTM,
+    DOLMDT, DOCHNO, @usid
+FROM MVXCDTA.MPDDOC AS T1
+WHERE T1.DOCONO = @cono
+  AND T1.DODOID = '#TEMPLATE'
+  AND NOT EXISTS (
+      SELECT 1 FROM MVXCDTA.MPDDOC AS T2
+      WHERE T2.DOCONO = T1.DOCONO AND T2.DODOID = @dwno
+  )
+```
+
+**Request body:**
+
+```json
+{
+  "cono": 100,
+  "dwno": "LF-AB-IC-0001",
+  "itno": "LF-AB-IC-0001",
+  "usid": "dc_user"
+}
+```
+
+**Response:** HTTP 200 `{ "created": true }` if row inserted, `{ "created": false }` if already existed (idempotent — safe for outbox retry). HTTP 500 on DB2 error with detail.
+
+**Pre-condition check** (run once at startup, not per request): `SELECT COUNT(*) FROM MVXCDTA.MPDDOC WHERE DOCONO = @cono AND DODOID = '#TEMPLATE'` must return 1. If 0, the template is missing — alert and refuse all drawing creation requests.
+
+**Also required — CSYTAB CFI1 entry** (same pattern, `CTSTCO='CFI1'`, template key = 10 spaces). Implement as `POST /api/ecn/drawing/cfi1` or fold into the drawing endpoint as a second DB2 statement. Confirmed present in CONO=100.
 
 ---
 

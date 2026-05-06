@@ -85,11 +85,20 @@ All of the following generate audit chain entries:
 
 ### Agent provenance distinction
 
-Agent actions use `actor = "agent:{agent_id}"` and `transition_type = "agent_suggestion"`.
-They never appear as `actor = human_username` and never appear with `transition_type` of
-`advance`, `approve`, `reject`, or `movex_write`. This is enforced by a PostgreSQL CHECK
-constraint: `CHECK (transition_type NOT IN ('advance','approve','reject','movex_write') OR
-actor NOT LIKE 'agent:%')`.
+Agent-originated rows use `actor_username = "agent:{agent_id}"` (e.g. `"agent:oskar-ecn"`).
+Human-originated rows always use a plain LDAP `sAMAccountName`. System/Celery rows use
+`"celery-worker"` or `"system"`. The `agent_provenance JSONB` column carries the full
+AI suggestion context when an engineer accepts an AI proposal.
+
+Enforcement is by convention + application layer only — no DB CHECK constraint. A constraint
+on `actor_username LIKE 'agent:%'` combined with `action` values would need updating for
+every new action type added and was judged more fragile than the application-layer guard.
+The `agent_actions` table (ADR-010, migration 0007) provides the structural gate that prevents
+any agent write from bypassing human review at the schema level (`requires_human DEFAULT TRUE`).
+
+**Correction note (2026-05-06):** An earlier version of this ADR referenced a `transition_type`
+column and a CHECK constraint. That column does not exist — the column is `action`. The CHECK
+constraint was never created. This section reflects the actual implementation.
 
 ### Stargile migration data
 
@@ -111,10 +120,12 @@ out-of-band witness that prevents DB admin tampering — the gap that pure in-DB
 
 ## Consequences
 
-- `pg_audit` extension installed and configured before Sprint 1
-- PostgreSQL `oskar_api_user` role: INSERT+SELECT on `ecn_transition_history`, no UPDATE/DELETE
+- `pgaudit` extension installed and configured on the PostgreSQL server (Manal — infra, see `scripts/setup-server-secrets.sh`)
+- PostgreSQL `oskar_app` role: INSERT+SELECT on `ecn_transition_history`, no UPDATE/DELETE (migration `0003`)
+- PostgreSQL `oskar_worker` role: INSERT+SELECT on `ecn_transition_history` (migration `0005`)
+- Canonical hash function lives in `src/workflow/audit_hash.py` — single source of truth imported by `machine.py`, `movex_outbox.py`, and `audit_checkpoint.py`
 - NTP enforced on Linux VM; NTP sync failures logged as security events
-- Celery task: daily checkpoint export to Azure Blob (or SMTP to Devian if Blob not available)
+- Celery beat task: daily checkpoint export via SMTP to `AUDIT_CHECKPOINT_RECIPIENT` (Azure Blob deferred — no storage account provisioned; SMTP is the out-of-band witness)
 - `ecn_transition_history` must be included in `pg_dump` daily backup (Manal — PRE-7)
 - No PII in audit records — actor is LDAP username only (not full name, not email)
 - Audit chain integrity check included in IQ/OQ/PQ test suite (Track E)

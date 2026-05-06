@@ -504,6 +504,8 @@ This eliminates Stargile's stuck-ECN problem: APPROVED = Movex pending (correct)
 
 **Deferred (not Sprint 1):** `ecn_circuit_refs` (ZECNCIRF), threaded comments table, ZQ01–ZQ18 questionnaire UI (JSONB safety valve present).
 
+**Deferred (Stargile migration — separate schema):** `legacy.legacy_ecn_history` — Stargile audit records imported at go-live. Separate schema, separate table. Rows carry `source='stargile-migration'` and have **no** `sha256_self`/`sha256_prev` columns — they are explicitly excluded from the OSKAR SHA-256 chain (ADR-004). The OSKAR chain starts fresh at go-live date. Migration: `0008_legacy_ecn_history.py` (to be written when Stargile data extract is ready, target late June–July 2026). `oskar_app` role: SELECT only — import via admin script, never application INSERT.
+
 ---
 
 ## 13. RBAC Hybrid Model
@@ -560,6 +562,11 @@ At ECN creation, for each required role: query `system_role_users` for active us
 **Tombstoned integers:** 10 (SUBMITTED) and 20 (DC_REVIEW) removed by ADR-009. Must never be reused.
 
 ### 14.2 Full Transition Diagram
+
+> **Note — role assignment is not a status transition.** `POST /api/v1/ecn/{id}/role-assignments`
+> changes *who* acts at a stage without changing the ECN status. It is recorded in
+> `ecn_transition_history` as `action="role_assigned"` with `from_status == to_status`.
+> See §14.6 for the full role assignment lifecycle diagram.
 
 ```mermaid
 stateDiagram-v2
@@ -760,7 +767,93 @@ flowchart TD
     wait --> check
 ```
 
-### 14.6 Movex Write State Machine (APPROVED → IMPLEMENTED)
+### 14.6 Role Assignment Lifecycle
+
+Per-ECN role customisation is an orthogonal management action available to the DC at any
+non-terminal ECN status. It does not advance the workflow — the ECN status is unchanged.
+
+**Why it exists (ADR-009):** Sprint 1 auto-assigned roles from `system_role_users` at ECN
+creation but had no mechanism to replace an assigned user mid-workflow (e.g. primary SE on
+leave, QM conflict of interest). The `ecn_role_assignments` table supported this structurally
+via the supersede-and-insert pattern (ADR-003); this endpoint and service guard complete it.
+
+**Constraints enforced:**
+- Only DC (`actor_role = "DC"`) may reassign roles
+- Originator (OR) role cannot be reassigned — originator is locked at creation
+- Role ID must be a valid OSKAR role (`SE`, `CE`, `EM`, `QM`, `PM`, `SC`, `FN`, `DC`, `AD`, ...)
+- Reassignment on CLOSED or CANCELLED ECNs is rejected (422)
+- Self-approval prohibition still applies after reassignment — the new assignee cannot be the originator
+
+```mermaid
+---
+config:
+  theme: light
+  layout: elk
+  look: classic
+---
+sequenceDiagram
+    participant DC as Document Controller
+    participant API as oskar-app (FastAPI)
+    participant DB as PostgreSQL
+
+    DC->>API: POST /api/v1/ecn/{id}/role-assignments<br>{role_id: "SE", username: "jsmith",<br> actor_role: "DC", notes: "Primary SE on leave"}
+
+    API->>API: Validate JWT — get_current_user()
+    API->>API: RoleAssignBody validation\n(role_id ∈ VALID_ROLE_IDS, username non-empty, \nOR role blocked)
+
+    API->>DB: SELECT status FROM ecn_instances WHERE id = $1
+    DB-->>API: current_status (e.g. ENGINEERING_REVIEW)
+    API->>API: Guard: actor_role = "DC"? → else 403\nGuard: status not CLOSED/CANCELLED? → else 422
+
+    API->>DB: BEGIN
+
+    API->>DB: UPDATE ecn_role_assignments\nSET superseded_at = now()\nWHERE ecn_id=$1 AND role_id=$2\nAND superseded_at IS NULL
+    Note over DB: Supersede-and-insert pattern (ADR-003)\nOld row becomes historical record
+
+    API->>DB: INSERT ecn_role_assignments\n(ecn_id, role_id, username, assigned_at)\nReturns new assignment row
+
+    API->>DB: INSERT ecn_transition_history\n(action="role_assigned",\nfrom_status=current, to_status=current,\nsha256 chain maintained)
+
+    API->>DB: COMMIT
+    DB-->>API: new assignment + superseded username
+
+    API-->>DC: 201 Created\n{ecn_id, role_assignments[], superseded_username}
+```
+
+```mermaid
+---
+config:
+  theme: light
+  layout: elk
+  look: classic
+---
+flowchart LR
+    classDef active     fill:#1168bd,color:#fff,stroke:#0b4884
+    classDef superseded fill:#aab7b8,color:#333,stroke:#717d7e
+    classDef history    fill:#2d6a4f,color:#fff,stroke:#1b4332
+
+    subgraph ecn_role_assignments["ecn_role_assignments table"]
+        A["row 1\nrole_id: SE\nusername: alee\nassigned_at: T0\nsuperseded_at: T1"]:::superseded
+        B["row 2\nrole_id: SE\nusername: jsmith\nassigned_at: T1\nsuperseded_at: NULL ← active"]:::active
+    end
+
+    subgraph ecn_transition_history["ecn_transition_history (audit chain)"]
+        H["action: role_assigned\nfrom_status: ENGINEERING_REVIEW\nto_status: ENGINEERING_REVIEW\nactor: dc_user\npayload: {role_id, new, superseded}\nsha256_self: abc…"]:::history
+    end
+
+    A -->|"superseded by DC at T1"| B
+    B -.->|"INSERT recorded in"| H
+```
+
+**Partial unique index** (`uq_ecn_role_active`) enforces at most one active assignment per
+`(ecn_id, role_id)` at any time:
+```sql
+CREATE UNIQUE INDEX uq_ecn_role_active
+    ON ecn_role_assignments (ecn_id, role_id)
+    WHERE superseded_at IS NULL;
+```
+
+### 14.7 Movex Write State Machine (APPROVED → IMPLEMENTED)
 
 ```mermaid
 ---
@@ -808,7 +901,7 @@ sequenceDiagram
     Celery->>smtp: dispatch ecn.implemented email notification (aiosmtplib)
 ```
 
-### 14.7 Guard Conditions Reference
+### 14.8 Guard Conditions Reference
 
 | Trigger | Source | Guard | Who |
 |---------|--------|-------|-----|
@@ -1116,6 +1209,7 @@ graph TB
     db_core["13 core ECN tables"]:::existing
     db_auth["Auth tables"]:::existing
     db_ai["ai_suggestions\nagent_actions\n(schema Sprint 2)"]:::sprint2
+    db_legacy["legacy.legacy_ecn_history\nStargile migration — SELECT only\n(migration 0008 — deferred)"]:::stage2
   end
 
   subgraph External["External Systems"]

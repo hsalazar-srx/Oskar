@@ -129,10 +129,6 @@ erDiagram
         BOOLEAN     change_to_documents
         DECIMAL74   wapc_delta_pct
         BOOLEAN     wapc_threshold_override
-        BOOLEAN     is_emergency
-        TEXT        emergency_reason
-        VARCHAR50   emergency_approved_by
-        TIMESTAMPTZ emergency_approved_at
         BOOLEAN     requires_customer_approval
         VARCHAR100  customer_approval_reference
         TIMESTAMPTZ customer_approved_at
@@ -463,12 +459,6 @@ CREATE TABLE ecn_instances (
     -- Cost fields — Finance gate input
     wapc_delta_pct             DECIMAL(7,4),                  -- % WAPC change; FN gate trigger
     wapc_threshold_override    BOOLEAN NOT NULL DEFAULT FALSE, -- Admin override for FN gate
-
-    -- Emergency ECN — data model reserved; workflow Sprint 2+
-    is_emergency               BOOLEAN NOT NULL DEFAULT FALSE,
-    emergency_reason           TEXT,                          -- Mandatory if is_emergency=TRUE
-    emergency_approved_by      VARCHAR(50),
-    emergency_approved_at      TIMESTAMPTZ,
 
     -- Customer/regulatory — ISO 13485 §7.3.9
     requires_customer_approval BOOLEAN NOT NULL DEFAULT FALSE,
@@ -1187,5 +1177,3 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO oskar_readonly;
 | `facilities` lookup table | Phase 2 | `facility` is free VARCHAR(10) for Sprint 1 |
 | Per-facility RLS on `ecn_instances` | Phase 2 | Sprint 1: application-layer `facility` filter |
 | Training acknowledgement UI | Sprint 2 | Table present; UI deferred |
-| JTI blocklist DB table | Sprint 2 | Redis DB1 sufficient for Sprint 1 if AOF persistence enabled |
-| WebSocket / SSE consumer | Sprint 2 | Redis stream wired producer-side (R-15) |

@@ -1,7 +1,7 @@
 # OSKAR — Sprint Backlog
 # Source of truth for all work status.
 # oskar-state.md (gitignored) is for next-session notes only — not for tracking status.
-# Last synced: 2026-05-04 (ADR-009 machine + docs complete)
+# Last synced: 2026-05-05 (Sprint 3 added — 820-min scope gaps H-1/H-2/H-3; MPN extended fields added to Sprint 2)
 
 ---
 
@@ -144,6 +144,7 @@
 - Rejection flows: restart vs proceed
 - Drawing number workflow: DC confirmation at DC_APPROVED gate (replaces DC_REVIEW gate)
 - MPN alias: automatic `MMS025MI.AddAlias` at IMPLEMENTED (uses `ecn_items.customer_alias` + `ecn_items.item_group` as ALWQ)
+- **MPN extended fields (820-min scope — Nick, 2026-04-29):** `ecn_mpns` columns for `lifecycle` (active/eol/nrnd), `eol_date`, `lead_time_weeks`, `msl_level` (1–6), `packaging_type`, `do_not_buy`, `alt_mpn`; surfaced in ECN item UI. Schema pre-created in migration 0007 (AI/Agent groundwork plan). Blocker for Iteration 1 sign-off — Nick explicitly requested these fields.
 - Parallel approval block: Management Review (EM + PM + QM + SC + FN simultaneous)
 - Overdue escalation: 48h → role + manager; 96h → EM added (DC escalation now triggers at DC_APPROVED, not SUBMITTED)
 - DC recovery UI: Movex Write Status Panel
@@ -152,6 +153,31 @@
 - Email notifications via `get_email()` + SMTP (10.10.0.155, port 25)
 - ECN version/revision lineage on rejection+resubmit
 - DBCHK replacement: G-4 Celery digest + G-5 on-demand endpoint
+
+---
+
+## Sprint 3 — Part Number Intelligence (820-Minute Scope Gap)
+
+> **Source:** Engineers meeting 2026-04-29 (Branko, Nick, Karen). Karen confirmed scope:
+> *"if this tool is ECN focused and it replaces that 820 minutes with 30 minutes, there's a win."*
+> These items were identified as the primary remaining time sinks not covered by Sprint 2.
+
+**Pre-conditions:**
+- [ ] Sprint 2 complete
+- [x] Nick's methodology documentation received ✅ — `context/ecn-history/Initial_Meeting_Nick_and_Branko_290426/`
+
+| # | Task | Source | Status |
+|---|------|--------|--------|
+| H-1 | **Part number lookup UI** — alias check against Movex on ECN item entry: full match / partial match / no match result surfaced to engineer. Replaces manual MOVEX search (Step 4 — identified by Hector as single biggest time sink: 30 min on tasks that should take seconds, 1:01:32). | Nick 42:56–44:27 | ⏳ |
+| H-2 | **Auto SRX part number generation** — "no match" path: generate new SRX PN using Nick's methodology (`LF` + customer code + commodity code + next available 4-digit sequence from `MITMAS`). Commodity→Proc/Prod Group lookup from Nick's matrix (50 rows). Calls `PDS001MI.AddProduct` via outbox. **Methodology doc received** — `context/ecn-history/Initial_Meeting_Nick_and_Branko_290426/ecn xxxx_item_upload_v13_ecn_item_upload.csv` + `_Proc_Prod_Grp_Matrix.csv`. | Nick 42:56–44:27 | ⏳ | 
+| H-3 | **Stock code population** — auto-populate `ecn_items` stock code fields from Movex lookup result on full/partial match. Eliminates manual copy-paste from MOVEX screens. | Hector 1:01:32 | ⏳ |
+| H-4 | **Proc & Product Group auto-population** — on new item entry, derive `procurement_group` + `product_group` from MPN commodity type using Nick's matrix (currently 120 min manual lookup). Matrix is fully documented in `_Proc_Prod_Grp_Matrix.csv` (50 commodity rows). Exposed as dropdown + auto-suggest in ECN item UI. | VSM p.6, Nick matrix | ⏳ |
+| H-5 | **SRX item description normalisation** — enforce ≤30 char limit (Movex hard constraint); propose standard description from Nick's template names (e.g. "RESISTOR SMD", "IC TH"); pull candidate from DigiKey description and truncate/map. Eliminates 120-min manual sanitisation task. | VSM p.6 + template | ⏳ |
+
+**Explicitly out of scope for Iteration 1 (Karen, 1:10:42):**
+- BOM scrubbing as standalone tool (Nick 24:33) — Iteration 3
+- Customer BOM vs Quoted BOM comparison (Nick 34:37) — Iteration 2/3
+- AI/MCP integration (Nick, Hector 54:40) — gated on Scanfil group AI policy
 
 ---
 

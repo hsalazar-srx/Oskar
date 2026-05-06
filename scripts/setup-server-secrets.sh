@@ -81,10 +81,6 @@ echo "  Tip: generate with: openssl rand -hex 32"
 prompt_secret "JWT_SECRET_KEY" "JWT signing key, minimum 256-bit (64 hex chars)"
 
 echo ""
-echo "── Redis ─────────────────────────────────────────────────────"
-prompt_secret "REDIS_PASSWORD" "Redis AUTH password"
-
-echo ""
 echo "── Active Directory (LDAPS) ──────────────────────────────────"
 prompt_secret "LDAP_BIND_PW" "Service account password for LDAPS bind"
 
@@ -94,8 +90,34 @@ echo "  Tip: generate with: openssl rand -hex 32"
 prompt_secret "CELERY_SECURITY_KEY" "Celery task signing key"
 
 echo ""
-echo "── SMTP (Sprint 2 — enter placeholder if not yet configured) ─"
-prompt_secret "SMTP_PASSWORD" "Corporate SMTP relay password"
+echo "── SMTP ──────────────────────────────────────────────────────"
+prompt_secret "SMTP_PASSWORD" "Corporate SMTP relay password (leave blank if relay is unauthenticated)"
+
+echo ""
+echo "── Audit checkpoint (ADR-004) ────────────────────────────────"
+echo "  The weekly audit chain checkpoint is emailed as an out-of-band witness."
+echo "  AUDIT_CHECKPOINT_RECIPIENT should be a mailbox accessible to DISP/Devian,"
+echo "  separate from the OSKAR application team (e.g. it_staff@srxglobal.com)."
+prompt_secret "AUDIT_CHECKPOINT_RECIPIENT" "Email address for daily audit chain checkpoint"
+
+# ── pgaudit extension (ADR-004) ───────────────────────────────────────────────
+# pgaudit must be installed on the PostgreSQL server before Alembic migrations run.
+# On Ubuntu 24.04 with PostgreSQL 16: apt-get install -y postgresql-16-pgaudit
+# Then add to postgresql.conf:
+#   shared_preload_libraries = 'pgaudit'
+#   pgaudit.log = 'ddl,write'
+# This cannot be done via Alembic migration — it requires a PostgreSQL restart.
+#
+echo ""
+echo "── pgaudit (ADR-004) ─────────────────────────────────────────"
+echo "  Checking pgaudit availability on the PostgreSQL server..."
+if sudo -u postgres psql -c "CREATE EXTENSION IF NOT EXISTS pgaudit;" oskar 2>/dev/null; then
+    echo "  ✓ pgaudit extension enabled on oskar database."
+else
+    echo "  ⚠ pgaudit not available. Install postgresql-16-pgaudit and set"
+    echo "    shared_preload_libraries = 'pgaudit' in postgresql.conf, then re-run."
+    echo "    This is a PRE item for Manal — required before go-live (ADR-004)."
+fi
 
 # ── Lock down permissions ─────────────────────────────────────────────────────
 
