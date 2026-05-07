@@ -27,7 +27,7 @@ echo "${REGISTRY_TOKEN}" | docker login "${REGISTRY}" -u "${REGISTRY_USER}" --pa
 
 echo "==> Building oskar-app (backend)"
 docker build \
-  --file docker/Dockerfile \
+  --file Dockerfile \
   --tag "${APP_IMAGE}:${TAG}" \
   --tag "${APP_IMAGE}:latest" \
   .

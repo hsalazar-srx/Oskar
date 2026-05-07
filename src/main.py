@@ -2,6 +2,8 @@
 # Uses skill: integration/rest-api-design v1.0
 # Uses skill: architecture/audit-logging-framework v1.0
 
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -23,9 +25,10 @@ app = FastAPI(
 
 # ── Middleware (order matters: correlation ID first, then CORS) ───────────────
 app.add_middleware(CorrelationIdMiddleware)
+_cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Tighten in production via CORS_ORIGINS env var
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

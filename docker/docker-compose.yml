@@ -71,13 +71,34 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    command: celery -A src.worker worker --loglevel=info --concurrency=4
+    command: celery -A src.tasks.celery_app worker --loglevel=info --concurrency=2
     environment:
       - MOVEX_API_URL=${MOVEX_API_URL}
       - MOVEX_API_KEY=${MOVEX_API_KEY}
       - MOVEX_CONO=${MOVEX_CONO:-300}
-      - DATABASE_URL=postgresql+asyncpg://oskar:${POSTGRES_PASSWORD}@oskar-db:5432/oskar
+      - DATABASE_URL=postgresql+psycopg2://oskar:${POSTGRES_PASSWORD}@oskar-db:5432/oskar
       - CELERY_SECURITY_KEY=${CELERY_SECURITY_KEY}
+      - SMTP_HOST=${SMTP_HOST:-10.10.0.155}
+      - SMTP_PORT=${SMTP_PORT:-25}
+      - SMTP_SENDER=${SMTP_SENDER}
+    depends_on:
+      oskar-db:
+        condition: service_healthy
+
+  oskar-beat:
+    image: ${REGISTRY:-apac-plm-ops.srxglobal.local}/oskar-app:${TAG:-latest}
+    container_name: oskar-beat
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    command: celery -A src.tasks.celery_app beat --loglevel=info --scheduler celery.beat.PersistentScheduler --schedule /tmp/celerybeat-schedule
+    environment:
+      - DATABASE_URL=postgresql+psycopg2://oskar:${POSTGRES_PASSWORD}@oskar-db:5432/oskar
       - SMTP_HOST=${SMTP_HOST:-10.10.0.155}
       - SMTP_PORT=${SMTP_PORT:-25}
       - SMTP_SENDER=${SMTP_SENDER}
