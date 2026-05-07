@@ -19,6 +19,7 @@ This produces: GET /api/v1/ecn/
 
 from fastapi import APIRouter
 
+from src.routers.admin import admin_router
 from src.routers.auth import auth_router
 from src.routers.ecn import ecn_router
 from src.routers.sse import sse_router
@@ -27,3 +28,4 @@ v1_router = APIRouter(prefix="/api/v1")
 v1_router.include_router(auth_router)
 v1_router.include_router(ecn_router)
 v1_router.include_router(sse_router)
+v1_router.include_router(admin_router)

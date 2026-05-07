@@ -45,6 +45,7 @@ celery_app.conf.update(
     imports=[
         "src.tasks.movex_outbox",
         "src.tasks.audit_checkpoint",
+        "src.tasks.ecn_notifications",
     ],
 
     # Reliability: task is acknowledged only after it returns successfully.
@@ -73,11 +74,19 @@ celery_app.conf.update(
     beat_schedule={
         "audit-chain-checkpoint-daily": {
             "task": "src.tasks.audit_checkpoint.checkpoint_audit_chain",
-            "schedule": 86400.0,  # every 24 hours — persists tail hashes to audit_checkpoints
+            "schedule": 86400.0,  # every 24 hours
         },
         "audit-chain-report-weekly": {
             "task": "src.tasks.audit_checkpoint.report_audit_checkpoint",
-            "schedule": 604800.0,  # every 7 days — emails out-of-band witness (ADR-004)
+            "schedule": 604800.0,  # every 7 days
+        },
+        "ecn-overdue-escalation": {
+            "task": "src.tasks.ecn_notifications.check_overdue_escalations_task",
+            "schedule": 21600.0,  # every 6 hours — catches 48h and 96h thresholds within half a day
+        },
+        "ecn-digest-daily": {
+            "task": "src.tasks.ecn_notifications.send_ecn_digest",
+            "schedule": 86400.0,  # every 24 hours — replaces DBCHK_OpenECN (G-4)
         },
     },
 )
