@@ -161,6 +161,26 @@ class MovexRestAdapter(ERPAdapter):
         resp = await self._get(f"/items/{item_number}/facility/{facility}")
         return resp.json()
 
+    async def get_routing_operations(
+        self, item_number: str, facility: str, structure_type: str = "001"
+    ) -> list[dict[str, Any]]:
+        """List active routing ops via PDS002MI.LstOperation (GET, no FDAT/OPNO).
+
+        Returns the records list from the response, or [] if the product has no ops.
+        """
+        resp = await self._get(
+            f"/PDS002MI/LstOperation",
+            params={
+                "CONO": self.cono,
+                "FACI": facility,
+                "PRNO": item_number,
+                "STRT": structure_type,
+            },
+        )
+        payload = resp.json()
+        data = payload.get("data", {})
+        return data.get("records", [])
+
     async def get_bom(self, item_number: str, bom_type: str = "M") -> dict[str, Any]:
         resp = await self._get(f"/bom/{item_number}", params={"type": bom_type})
         return resp.json()

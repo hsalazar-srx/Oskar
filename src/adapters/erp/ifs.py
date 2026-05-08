@@ -41,6 +41,11 @@ class IFSAdapter(ERPAdapter):
     async def get_item_facility(self, item_number: str, facility: str) -> dict[str, Any]:
         raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
 
+    async def get_routing_operations(
+        self, item_number: str, facility: str, structure_type: str = "001"
+    ) -> list[dict[str, Any]]:
+        raise NotImplementedError("IFS integration deferred — OSKAR v1 uses Movex only")
+
     async def get_bom(self, item_number: str, bom_type: str = "M") -> dict[str, Any]:
         raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
 

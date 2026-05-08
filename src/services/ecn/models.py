@@ -191,6 +191,40 @@ class ECNDetail:
 
 
 # ---------------------------------------------------------------------------
+# Routing operation dataclasses (S2-20)
+# ---------------------------------------------------------------------------
+
+VALID_CHANGE_TYPES = {"ADD", "UPDATE"}
+
+
+@dataclass
+class RoutingOperationRequest:
+    """One routing operation row authored by an engineer on an ECN item."""
+    operation_number: int
+    operation_description: str
+    work_centre: str
+    run_time: float
+    change_type: str                    # 'ADD' or 'UPDATE'
+    setup_time: float | None = None
+
+
+@dataclass
+class RoutingOperationResponse:
+    """Routing operation row as returned by the API."""
+    id: str
+    ecn_item_id: str
+    operation_number: int
+    operation_description: str
+    work_centre: str
+    run_time: float
+    setup_time: float | None
+    change_type: str
+    movex_snapshot: dict | None
+    created_at: datetime
+    updated_at: datetime
+
+
+# ---------------------------------------------------------------------------
 # Error types
 # ---------------------------------------------------------------------------
 

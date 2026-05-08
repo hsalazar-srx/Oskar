@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Council Report — OSKAR Routing Operations Architecture</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8f9fa; color: #1a1a1a; line-height: 1.6; }
+  .container { max-width: 860px; margin: 0 auto; padding: 40px 24px; }
+
+  .header { border-bottom: 3px solid #1a1a1a; padding-bottom: 24px; margin-bottom: 32px; }
+  .header h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.3px; }
+  .header .question { margin-top: 12px; font-size: 15px; color: #444; background: #f0f0f0; padding: 16px; border-radius: 6px; border-left: 4px solid #1a1a1a; }
+  .header .meta { margin-top: 10px; font-size: 12px; color: #888; }
+
+  .verdict { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 28px; margin-bottom: 28px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+  .verdict h2 { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #888; margin-bottom: 16px; }
+  .verdict h3 { font-size: 16px; font-weight: 700; color: #1a1a1a; margin: 20px 0 10px; border-top: 1px solid #f0f0f0; padding-top: 16px; }
+  .verdict h3:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
+  .verdict p { font-size: 14px; color: #333; margin-bottom: 12px; }
+  .verdict ul { margin: 8px 0 12px 20px; }
+  .verdict li { font-size: 14px; color: #333; margin-bottom: 6px; }
+  .verdict strong { color: #1a1a1a; }
+
+  .one-thing { background: #1a1a1a; color: #fff; border-radius: 8px; padding: 24px 28px; margin-bottom: 28px; }
+  .one-thing h2 { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #888; margin-bottom: 12px; }
+  .one-thing p { font-size: 15px; line-height: 1.65; }
+  .one-thing strong { color: #f0e68c; }
+
+  .agreement-grid { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 24px; margin-bottom: 28px; }
+  .agreement-grid h2 { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #888; margin-bottom: 16px; }
+  .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+  .advisor-cell { text-align: center; }
+  .advisor-cell .name { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #555; margin-bottom: 6px; }
+  .dot { width: 36px; height: 36px; border-radius: 50%; margin: 0 auto; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #fff; }
+  .agree { background: #2d6a4f; }
+  .partial { background: #d68910; }
+  .dissent { background: #c0392b; }
+  .legend { display: flex; gap: 16px; margin-top: 14px; flex-wrap: wrap; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #555; }
+  .legend-dot { width: 12px; height: 12px; border-radius: 50%; }
+
+  .topic-row { margin-bottom: 10px; }
+  .topic-label { font-size: 12px; font-weight: 600; color: #444; margin-bottom: 4px; }
+  .advisor-row { display: flex; gap: 6px; }
+  .tag { padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+  .tag.agree { background: #d4edda; color: #155724; }
+  .tag.dissent { background: #f8d7da; color: #721c24; }
+  .tag.partial { background: #fff3cd; color: #856404; }
+
+  details { border: 1px solid #e0e0e0; border-radius: 6px; margin-bottom: 10px; background: #fff; }
+  details summary { padding: 14px 18px; font-size: 14px; font-weight: 600; cursor: pointer; list-style: none; display: flex; align-items: center; justify-content: space-between; user-select: none; }
+  details summary::-webkit-details-marker { display: none; }
+  details summary::after { content: '▼'; font-size: 10px; color: #888; transition: transform 0.2s; }
+  details[open] summary::after { transform: rotate(180deg); }
+  details summary .advisor-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; padding: 2px 8px; border-radius: 3px; margin-left: 10px; }
+  .tag-contrarian { background: #f8d7da; color: #721c24; }
+  .tag-firstprinciples { background: #d1ecf1; color: #0c5460; }
+  .tag-expansionist { background: #d4edda; color: #155724; }
+  .tag-outsider { background: #e2d9f3; color: #4a235a; }
+  .tag-executor { background: #fff3cd; color: #856404; }
+  .tag-review { background: #f0f0f0; color: #555; }
+  .details-body { padding: 0 18px 18px; font-size: 14px; color: #333; line-height: 1.65; border-top: 1px solid #f0f0f0; margin-top: 0; padding-top: 14px; }
+  .details-body p { margin-bottom: 10px; }
+
+  .section-header { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #888; margin: 32px 0 12px; }
+
+  .alert { background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; padding: 14px 18px; margin-bottom: 20px; font-size: 13px; color: #664d03; }
+  .alert strong { color: #333; }
+
+  footer { margin-top: 48px; padding-top: 20px; border-top: 1px solid #e0e0e0; font-size: 12px; color: #aaa; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="header">
+    <h1>LLM Council Report</h1>
+    <div class="question">
+      <strong>Question:</strong> Should routing operations be pulled from Iteration 2 into Sprint 2 of the OSKAR platform? And if so, how — given no routing table exists, no MI program is confirmed, and Karen's email requests drag-and-drop Excel intake?
+    </div>
+    <div class="meta">Scanfil APAC · OSKAR Platform · Sprint 2 · 2026-05-07 16:32 · 5 advisors · 5 peer reviewers · 1 chairman</div>
+  </div>
+
+  <!-- ONE THING -->
+  <div class="one-thing">
+    <h2>The One Thing to Do First</h2>
+    <p>Ask Branko one question, by end of day Monday: <strong>"Does the routing data in your Labour Routing template already exist as a routing record in Movex for these parts, or does it originate in the spreadsheet?"</strong><br><br>
+    That single answer determines whether you are building a write path to Movex or an audit capture layer. Everything else — table design, outbox type, MI program spike, Excel import — is downstream of that answer. Do not open a migration file until you have it.</p>
+  </div>
+
+  <!-- CHAIRMAN VERDICT -->
+  <div class="verdict">
+    <h2>Chairman's Verdict</h2>
+
+    <h3>Where the Council Agrees</h3>
+    <p>All five advisors agree on three things without dissent:</p>
+    <ul>
+      <li>The MI program (PDS003MI vs PDS004MI) is unconfirmed and must be confirmed before any outbox entry type is wired.</li>
+      <li>The Excel importer does not belong in Sprint 2. It is a UX enhancement, not a go-live dependency.</li>
+      <li>The routing table schema itself is low-risk — 16 fixed rows, known structure, deterministic source. Adding the table is a cheap, reversible act.</li>
+    </ul>
+    <p>The Executor's sequencing — table now, MI spike in parallel, outbox write in Sprint 3 — received the strongest peer endorsement across all five reviewers.</p>
+
+    <h3>Where the Council Clashes</h3>
+    <p>The central clash is between the Expansionist and everyone else. The Expansionist reads Karen's email as a vision statement for a unified manufacturing data ingestion layer. Every other advisor reads it as a feature request. The reviewers were unanimous: the Expansionist manufactured a strategic mandate from one email and zero validated evidence. <strong>Discard that framing entirely for this decision.</strong></p>
+    <p>The secondary clash: the Contrarian says do nothing until the MI program is confirmed. The First Principles Thinker and the Executor say decouple data capture from write uncertainty. The Contrarian's position is risk-averse but operationally wrong. Blocking schema work on an unresolved API detail creates unnecessary dependencies. <strong>The Executor wins this clash.</strong></p>
+
+    <h3>Blind Spots the Council Caught</h3>
+
+    <div class="alert"><strong>Critical:</strong> Does routing data already exist in Movex? If Branko's template is sourced from an existing Movex routing record, OSKAR does not need to own this write path at all. Nobody asked. This is the most important unasked question in the session.</div>
+
+    <p><strong>The 820→30 minute claim is unverified.</strong> Nobody established whether this figure was a measured baseline, a planning estimate, or a meeting comment. If routing was Iteration 2, was routing's time contribution included? If yes, the claim was always contingent on unscoped work. If no, the 30-minute target may be achievable without routing in Sprint 2.</p>
+
+    <p><strong>Approval gates are missing from the design.</strong> The ECN workflow has 13 statuses and 16 roles. A routing write to Movex is an engineering-controlled document change. It must pass through the approval chain before hitting production ERP. No advisor modelled this. Fire-and-forget outbox for routing is an audit and compliance gap.</p>
+
+    <p><strong>The outbox schema has an integrity problem.</strong> If no MI program is confirmed, <code>outbox_type</code> for routing entries has no valid value. The schema must include a typed <code>status = 'pending_mi_confirmation'</code> sentinel — not a nullable FK — to avoid silent schema rot.</p>
+
+    <h3>The Recommendation</h3>
+    <p><strong>Add the routing table in Sprint 2. Do not add the outbox entry type. Do not build the Excel importer.</strong></p>
+    <p>Before writing any migration, answer two questions this week — both are half-day investigations:</p>
+    <ul>
+      <li><strong>Does routing already exist in Movex?</strong> Ask Branko directly. If yes, OSKAR's routing table becomes audit capture only, and the outbox write discussion is moot for Phase 1.</li>
+      <li><strong>Is a routing write required for ECN closure?</strong> If routing is a downstream post-approval action via a separate Movex user step, the outbox write has no go-live dependency. The table captures data; integration is Sprint 3 or later.</li>
+    </ul>
+    <p>If both answers confirm OSKAR must own this data and write it at ECN closure:</p>
+    <ul>
+      <li>Add <code>ecn_routing_operations</code> with a typed status field including <code>pending_mi_confirmation</code> — no nullable outbox FKs.</li>
+      <li>Run the MI spike in parallel this sprint, against CONO=300.</li>
+      <li>Wire the outbox entry type only when MI program is confirmed and tested.</li>
+      <li>Do <em>not</em> commit the outbox write as a Sprint 2 deliverable. It is a Sprint 2 <em>candidate</em>, conditional on the spike.</li>
+      <li>Excel import is Sprint 3. Karen gets informed, not ignored.</li>
+    </ul>
+    <p>The approval gate question must also be answered before outbox write is designed. Routing writes cannot be modelled as background fire-and-forget through a 16-role approval workflow.</p>
+  </div>
+
+  <!-- AGREEMENT VISUAL -->
+  <div class="agreement-grid">
+    <h2>Advisor Positions at a Glance</h2>
+    <div style="margin-bottom:16px;">
+      <div class="topic-row">
+        <div class="topic-label">Add routing table in Sprint 2</div>
+        <div class="advisor-row">
+          <span class="tag agree">Contrarian ✓</span>
+          <span class="tag agree">First Principles ✓</span>
+          <span class="tag agree">Expansionist ✓</span>
+          <span class="tag agree">Outsider ✓</span>
+          <span class="tag agree">Executor ✓</span>
+        </div>
+      </div>
+      <div class="topic-row" style="margin-top:10px;">
+        <div class="topic-label">Excel importer in Sprint 2</div>
+        <div class="advisor-row">
+          <span class="tag dissent">Contrarian ✗</span>
+          <span class="tag dissent">First Principles ✗</span>
+          <span class="tag agree">Expansionist ✓</span>
+          <span class="tag dissent">Outsider ✗</span>
+          <span class="tag dissent">Executor ✗</span>
+        </div>
+      </div>
+      <div class="topic-row" style="margin-top:10px;">
+        <div class="topic-label">Wire outbox write before MI confirmed</div>
+        <div class="advisor-row">
+          <span class="tag dissent">Contrarian ✗</span>
+          <span class="tag dissent">First Principles ✗</span>
+          <span class="tag agree">Expansionist ✓</span>
+          <span class="tag dissent">Outsider ✗</span>
+          <span class="tag dissent">Executor ✗</span>
+        </div>
+      </div>
+      <div class="topic-row" style="margin-top:10px;">
+        <div class="topic-label">MI program spike this sprint (parallel)</div>
+        <div class="advisor-row">
+          <span class="tag agree">Contrarian ✓</span>
+          <span class="tag agree">First Principles ✓</span>
+          <span class="tag partial">Expansionist ~</span>
+          <span class="tag agree">Outsider ✓</span>
+          <span class="tag agree">Executor ✓</span>
+        </div>
+      </div>
+    </div>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#2d6a4f;"></div> Agrees</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#c0392b;"></div> Disagrees</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#d68910;"></div> Partial / not addressed</div>
+    </div>
+  </div>
+
+  <!-- ADVISOR RESPONSES -->
+  <div class="section-header">Advisor Responses (full)</div>
+
+  <details>
+    <summary>The Contrarian <span class="advisor-tag tag-contrarian">Contrarian</span></summary>
+    <div class="details-body">
+      <p>The fatal flaw here is scope creep dressed up as urgency. You have 8 weeks to go-live. You have no MI program identified for routing writes. You have no file import path built. You have no routing table in the data model. And you're proposing to pull all of this into Sprint 2 — an already active sprint — because Karen sent one email about drag-and-drop Excel.</p>
+      <p>That email is not a requirement. It's a wish. Karen also said "quicker the better" about go-live. Those two things are in direct tension and nobody is acknowledging it.</p>
+      <p>The specific danger: PDS003MI vs PDS004MI is not a minor detail. The wrong MI transaction will either silently succeed with garbage data in Movex, or fail at go-live when the first real ECN hits production. You don't have @developer-dotnet confirmation. "Likely PDS003MI" is not good enough for a transactional outbox write to an IBM i production system.</p>
+      <p>The Excel import path is a separate feature of non-trivial complexity — parsing variable Excel layouts, validating column F against expected op numbers, handling the "only non-zero rows" filter. That's not a Sprint 2 task. That's a sprint by itself.</p>
+      <p>The "820 → 30 minutes" claim needs scrutiny. If routing was already classified as Iteration 2, that time-saving figure was presumably calculated without routing automation. Where did it come from? If it included routing, the calculation is broken and you've been promising something that was never scoped.</p>
+      <p>The honest move: confirm the MI program first. That's a one-day task. Do not open the routing table schema, do not start the import path, until you know exactly what transaction you're writing to.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>The First Principles Thinker <span class="advisor-tag tag-firstprinciples">First Principles</span></summary>
+    <div class="details-body">
+      <p>The question being asked is "should we add routing to Sprint 2?" That is the wrong question. The real question is: what is the actual bottleneck in the 820→30 minute claim?</p>
+      <p>Branko's reply is the most important signal here. "Routing is standard — see rows 393-414 column F." That is a man saying: this data is already structured, deterministic, and sourced from a single canonical spreadsheet. The routing table is 16 rows. Twelve are active. Column F is the computed output. There is no ambiguity in the data model.</p>
+      <p>The actual decision tree has two branches: (1) If the MI program cannot be confirmed within 48 hours via a test transaction against CONO=300, routing capture belongs in Sprint 2 but the outbox write is deferred — store the data, write manually while confirming. You do not block data capture on write uncertainty. (2) If the MI program is confirmed quickly, pull the full write into Sprint 2.</p>
+      <p>The file import question is a distraction. Build the data model and the form now. Excel import is a UX enhancement — not load-bearing for go-live.</p>
+      <p>The assumption to discard: "Iteration 2" scheduling was based on complexity. It was based on incomplete requirements. Requirements are now complete. Reschedule accordingly.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>The Expansionist <span class="advisor-tag tag-expansionist">Expansionist</span></summary>
+    <div class="details-body">
+      <p>The council is sleeping on the real prize here. Karen's email is not a feature request. It is a vision statement. She is describing a unified manufacturing data ingestion layer — one file, structured, drag-and-drop, that Oskar decomposes into BOM + routing + whatever comes next.</p>
+      <p>The Labour Routing template already contains BOM data on a separate sheet. If Oskar can parse both sheets from one upload, you have just eliminated the entire "multiple CSV templates in sequence" model that Stargile required. That is not an incremental improvement — that is a workflow class collapse.</p>
+      <p>Push further: that same Excel template pattern almost certainly exists for other product types. Routing is standard across product lines. Build the importer once against PFM-0005-MEL, parameterise the sheet structure, and you have a reusable intake engine for every new part introduction.</p>
+      <p>The outbox write to Movex is the tail end of the value chain. The front end — structured data capture from engineer-native formats — is where the 820-to-30 claim actually lives. Scope it as a unified file intake service. BOM and routing in Sprint 2.</p>
+      <p><em>Note: Peer reviewers unanimously flagged this response as speculative scope inflation. No evidence the BOM/routing sheet structure is universal. Treat as future vision, not Sprint 2 scope.</em></p>
+    </div>
+  </details>
+
+  <details>
+    <summary>The Outsider <span class="advisor-tag tag-outsider">Outsider</span></summary>
+    <div class="details-body">
+      <p>The "820 → 30 minutes" claim is load-bearing and unverified. You're about to add significant scope to a sprint that's 8 weeks from go-live, based on a GM's email preference and a senior engineer's offhand reference to rows 393–414. That's not a requirements document.</p>
+      <p>Three things an outsider sees immediately: The MI program is unknown. You cannot design a transactional outbox entry type for a write you don't have a confirmed API for. This isn't a detail — it's the entire integration contract. If the MI program doesn't exist, behaves unexpectedly, or requires fields not in the spreadsheet, you've built a pipeline to nowhere.</p>
+      <p>The Excel import is a new product surface with its own edge cases, error handling, and user trust requirements. Engineers need to trust what gets loaded before it hits Movex.</p>
+      <p>You're solving two problems at once: the data model gap (schema debt) and Excel import (UX from one email). Conflating them means if import blocks, routing capture stalls entirely.</p>
+      <p>Fix the schema debt now. Do not pull the Excel import into Sprint 2 until the MI program is confirmed. One unknown at a time.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>The Executor <span class="advisor-tag tag-executor">Executor</span></summary>
+    <div class="details-body">
+      <p>The routing table is 16 fixed rows from a known Excel template. That is the least risky data shape you will ever import. Stop treating it as complex.</p>
+      <p>Here is what you actually do Monday morning: Add <code>ecn_routing_operations</code> (ecn_id, op_no, work_centre, setup_time, run_time_movex, uph, is_active) — 30 minutes of migration work. Do it now, before Sprint 2 scope calcifies.</p>
+      <p>Do not build the Excel importer this sprint. Karen's drag-and-drop vision is real but it is a Sprint 3 feature. A 16-row table can be manually entered in the UI or seeded from a fixture. An Excel parser adds file validation, column mapping, error handling, and test coverage — none of which you have time for.</p>
+      <p>Spike the MI transaction in parallel, off the critical path. One person opens M3 documentation and confirms whether PDS003MI or PDS004MI is the correct program. That spike takes half a day. If confirmed before Sprint 2 closes, wire the outbox entry type. If not, the table still exists and the outbox write slots in Sprint 3 with zero rework.</p>
+      <p><strong>Table: Sprint 2. MI spike: parallel. Outbox write + Excel import: Sprint 3.</strong></p>
+    </div>
+  </details>
+
+  <!-- PEER REVIEWS -->
+  <div class="section-header" style="margin-top:32px;">Peer Review Highlights</div>
+
+  <details>
+    <summary>Peer Reviews — Key Findings <span class="advisor-tag tag-review">5 reviewers</span></summary>
+    <div class="details-body">
+      <p><strong>Strongest response (voted by reviewers):</strong> Response E (Executor) — 3 votes. Response B (First Principles) — 2 votes. Both praised for concrete sequencing and correct decoupling of concerns.</p>
+      <p><strong>Biggest blind spot (unanimous):</strong> Response C (Expansionist). All five reviewers independently flagged it as speculative scope inflation with zero validated evidence behind the "unified ingestion layer" framing.</p>
+      <p><strong>What all five missed — combined findings:</strong></p>
+      <ul>
+        <li><strong>Does routing already exist in Movex?</strong> If Branko's template is sourced from existing Movex routing records, OSKAR may not need to own this write path at all. (Reviewer 5)</li>
+        <li><strong>The 820→30 min claim was never formally verified.</strong> If it originated as a planning estimate rather than a measured baseline, the urgency argument collapses. (Reviewer 1)</li>
+        <li><strong>Is a routing write required for ECN closure?</strong> If routing is a downstream post-approval manual step, the outbox has no go-live dependency. (Reviewer 2)</li>
+        <li><strong>Approval gates are missing.</strong> Routing writes to ERP must flow through the ECN approval chain — not as background fire-and-forget. Compliance and audit gap. (Reviewer 3)</li>
+        <li><strong>The outbox schema needs a typed sentinel.</strong> <code>status = 'pending_mi_confirmation'</code> required; nullable FK is silent schema rot. (Reviewer 4)</li>
+      </ul>
+    </div>
+  </details>
+
+  <footer>
+    Council session: 2026-05-07 · OSKAR Platform · Routing Operations Architecture Decision<br>
+    Adapted from Andrej Karpathy's LLM Council methodology · Generated by Claude Code
+  </footer>
+
+</div>
+</body>
+</html>

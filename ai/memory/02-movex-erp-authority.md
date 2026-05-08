@@ -33,6 +33,9 @@ Never trust OSKAR-internal data over Movex data. If there is a conflict, Movex w
 |-------|---------|-------|
 | MITMAS | Item master | MMITNO = item number, MMITDS = description, MMITCL = product group |
 | MMBOMS / MMBOML | BOM header / lines | BOM structure |
+| MPDHED | Product structure head | PHPRNO = product, PHSTRT = structure type, PHNUOP = op count; written by PDS001MI.AddProduct |
+| MPDOPE | Routing operations | POOPNO = op no, POPLGR = work centre, POPITI = run time (col F from Labour Routing template), POSETI = setup time; physical file MPDMOP00 format PDOPE |
+| MPDMAT | BOM components | PMMTNO = component, PMOPNO = linked operation, PMMSEQ = sequence; physical file MPDMOP00 format PDMAT |
 | OCUSMA | Customer master | OKCUNO = customer number |
 | OHEDCO | Sales order header | OACUNO = customer, OAORDT = order date (YYYYMMDD numeric) |
 | FGINHE / FGLINE | Invoice header / lines | FGINHE.UHVONO = invoice number |
@@ -96,6 +99,7 @@ must be on the ABC before any business logic is written. See `decisions/ADR-005-
 | PDS002MI | DeleteComponent | Remove BOM line | `BOMService.java` — confirmed | **MISSING** | Sprint 2 blocker |
 | PDS002MI | UpdateOperation | Modify routing operation | `BOMService.java` — confirmed | **MISSING** | Sprint 2 blocker |
 | PDS002MI | AddOperation | Add new routing step | `BOMService.java` — confirmed | **MISSING** | Sprint 2 blocker |
+| PDS002MI | LstOperation | Read current routing ops for a product | Source-analysed + live-tested 2026-05-08 | Call without FDAT and without OPNO — e.g., `LstOperation 100 D <PRNO> 001`. FDAT is a seek position not a filter; passing a date skips earlier records. Verified correct at Scanfil APAC. | Read path |
 | MMS025MI | AddAlias | Register MPN (POPN) as item alias in MITPOP | `ItemService.addItemAlias()` — graph analysis §8.2 | **MISSING** | Sprint 2 blocker |
 | MPDDOC | `POST /api/ecn/drawing` (custom DB2 endpoint) | Drawing number creation — copy `#TEMPLATE` record | `ItemService.createDwno()` — Stargile source confirmed 2026-05-06 | **MISSING — `@developer-dotnet` to implement** | Sprint 2 blocker |
 

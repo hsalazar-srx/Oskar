@@ -12,10 +12,12 @@ ai/tasks/sprint-backlog.md          Source of truth for all work status
 ai/evidence/decision-log.md         Recent decisions
 ai/memory/03-oskar-architecture.md  Stack, non-negotiables, deployment
 ai/memory/05-stargile-ecn-reference.md  ECN ground truth — read before any ECN work
-oskar-state.md (project root)       Session state (gitignored)
+oskar-state.md (project root)       Session state (gitignored) — check "Next Session" section
 ```
 
 Reference material (read on demand): `ai/memory/13-development-reference.md`
+
+> If `oskar-state.md` says **"Run audit before starting new work"**, reconcile `ai/tasks/sprint-backlog.md` against the code before doing anything else: check each ⏳/⚠️ row, promote completed items to ✅ with file:line, update the `Last synced:` date, then clear the audit instruction from `oskar-state.md`.
 
 ---
 
@@ -102,6 +104,7 @@ pytest --cov=src --cov-fail-under=80   # Must pass
 - [ ] Audit logging on all ECN state changes
 - [ ] RBAC enforcement on endpoint; `[HUMAN APPROVAL REQUIRED]` flagged if ERP write
 - [ ] `ai/evidence/decision-log.md` updated if a decision was made
+- [ ] If this is a substantial commit (feat:/fix: type, or ≥5 files changed): add "Run audit before starting new work" to `oskar-state.md` → "Next Session Starts With"
 
 ---
 

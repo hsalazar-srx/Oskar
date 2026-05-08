@@ -9,10 +9,14 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.services.ecn.models import (
+    ECNConflict,
     ECNItemDetail,
     ECNMPNDetail,
     ECNNotFound,
     ECNValidationError,
+    RoutingOperationRequest,
+    RoutingOperationResponse,
+    VALID_CHANGE_TYPES,
 )
 from src.workflow.machine import ECNStatus
 
@@ -300,4 +304,132 @@ class ECNItemsMixin:
         await self._session.execute(
             sa.text("DELETE FROM ecn_mpns WHERE id = :mpn_id"),
             {"mpn_id": mpn_id},
+        )
+
+    # ── Routing operations CRUD (S2-23) ───────────────────────────────────────
+
+    def _row_to_routing_op(self, row: Any) -> RoutingOperationResponse:
+        return RoutingOperationResponse(
+            id=str(row[0]),
+            ecn_item_id=str(row[1]),
+            operation_number=row[2],
+            operation_description=row[3],
+            work_centre=row[4],
+            run_time=float(row[5]),
+            setup_time=float(row[6]) if row[6] is not None else None,
+            change_type=row[7],
+            movex_snapshot=row[8],
+            created_at=row[9],
+            updated_at=row[10],
+        )
+
+    async def create_routing_operation(
+        self,
+        ecn_id: str,
+        item_id: str,
+        req: RoutingOperationRequest,
+    ) -> RoutingOperationResponse:
+        if req.change_type not in VALID_CHANGE_TYPES:
+            raise ECNValidationError(
+                f"change_type must be one of {sorted(VALID_CHANGE_TYPES)}, got '{req.change_type}'"
+            )
+        item_row = await self._session.execute(
+            sa.text("SELECT id FROM ecn_items WHERE id = :item_id AND ecn_id = :ecn_id"),
+            {"item_id": item_id, "ecn_id": ecn_id},
+        )
+        if not item_row.first():
+            raise ECNNotFound(item_id)
+
+        # Check for duplicate operation_number on this item
+        dup = await self._session.execute(
+            sa.text(
+                "SELECT id FROM ecn_routing_operations "
+                "WHERE ecn_item_id = :item_id AND operation_number = :opno"
+            ),
+            {"item_id": item_id, "opno": req.operation_number},
+        )
+        if dup.first():
+            from datetime import datetime, timezone
+            raise ECNConflict(datetime.now(tz=timezone.utc))
+
+        op_id = str(uuid.uuid4())
+        await self._session.execute(
+            sa.text(
+                "INSERT INTO ecn_routing_operations "
+                "(id, ecn_item_id, operation_number, operation_description, "
+                "work_centre, run_time, setup_time, change_type) "
+                "VALUES (:id, :item_id, :opno, :opds, :plgr, :piti, :seti, :change_type)"
+            ),
+            {
+                "id": op_id, "item_id": item_id, "opno": req.operation_number,
+                "opds": req.operation_description, "plgr": req.work_centre,
+                "piti": req.run_time, "seti": req.setup_time, "change_type": req.change_type,
+            },
+        )
+        return await self._get_routing_op(ecn_id, item_id, op_id)
+
+    async def _get_routing_op(
+        self, ecn_id: str, item_id: str, op_id: str
+    ) -> RoutingOperationResponse:
+        """Fetch one routing op, verifying it belongs to item_id which belongs to ecn_id."""
+        row = await self._session.execute(
+            sa.text(
+                "SELECT r.id, r.ecn_item_id, r.operation_number, r.operation_description, "
+                "r.work_centre, r.run_time, r.setup_time, r.change_type, r.movex_snapshot, "
+                "r.created_at, r.updated_at "
+                "FROM ecn_routing_operations r "
+                "JOIN ecn_items i ON i.id = r.ecn_item_id "
+                "WHERE r.id = :op_id AND r.ecn_item_id = :item_id AND i.ecn_id = :ecn_id"
+            ),
+            {"op_id": op_id, "item_id": item_id, "ecn_id": ecn_id},
+        )
+        r = row.first()
+        if not r:
+            raise ECNNotFound(op_id)
+        return self._row_to_routing_op(r)
+
+    async def list_routing_operations(
+        self, ecn_id: str, item_id: str
+    ) -> list[RoutingOperationResponse]:
+        item_row = await self._session.execute(
+            sa.text("SELECT id FROM ecn_items WHERE id = :item_id AND ecn_id = :ecn_id"),
+            {"item_id": item_id, "ecn_id": ecn_id},
+        )
+        if not item_row.first():
+            raise ECNNotFound(item_id)
+        rows = await self._session.execute(
+            sa.text(
+                "SELECT id, ecn_item_id, operation_number, operation_description, "
+                "work_centre, run_time, setup_time, change_type, movex_snapshot, "
+                "created_at, updated_at "
+                "FROM ecn_routing_operations WHERE ecn_item_id = :item_id "
+                "ORDER BY operation_number"
+            ),
+            {"item_id": item_id},
+        )
+        return [self._row_to_routing_op(r) for r in rows]
+
+    async def update_routing_operation(
+        self, ecn_id: str, item_id: str, op_id: str, **fields: Any
+    ) -> RoutingOperationResponse:
+        await self._get_routing_op(ecn_id, item_id, op_id)
+        allowed = {"operation_description", "work_centre", "run_time", "setup_time", "change_type"}
+        updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+        if updates:
+            set_clause = ", ".join(f"{k} = :{k}" for k in updates)
+            await self._session.execute(
+                sa.text(
+                    f"UPDATE ecn_routing_operations SET {set_clause} WHERE id = :op_id"
+                ),
+                {**updates, "op_id": op_id},
+            )
+        return await self._get_routing_op(ecn_id, item_id, op_id)
+
+    async def delete_routing_operation(
+        self, ecn_id: str, item_id: str, op_id: str
+    ) -> None:
+        await self._get_routing_op(ecn_id, item_id, op_id)
+        await self._session.execute(
+            sa.text("DELETE FROM ecn_routing_operations WHERE id = :op_id"),
+            {"op_id": op_id},
         )

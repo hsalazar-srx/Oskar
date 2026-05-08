@@ -262,6 +262,7 @@ Rejection triggered → Create ZECNRJCT record → Notify Initiator → Wait for
 **Read operations** (any status, for display):
 - `MPDHED` (Product Header) — validate product structure exists
 - `MPDMAT` (Product Material) — display current BOM for editing
+- `MPDOPE` (Routing Operations) — display current routing; **use direct DB2 query, not LstOperation** (see below)
 - `CITMAS` (Item Master) — validate components exist before adding
 
 **Write rule:** Writes to Movex happen **at Status 50 only**. All earlier statuses are
@@ -271,6 +272,27 @@ OSKAR-internal. This is the boundary between OSKAR workflow and Movex SSoT.
 - Schema: `MVXCDTA.MPDMAT` (PreparedStatementHelper pattern)
 - Company filter: `SessionValues.getValue("CONO")` → CONO=100
 - Audit: `SessionValues.getValue("MVXUSERID")`
+
+**PDS002MI.LstOperation — call without FDAT (verified 2026-05-08):**
+The `FDAT` parameter is an index seek position, not a filter. Passing a date skips earlier
+records. Correct call: `LstOperation 100 D <PRNO> 001` — no FDAT, no OPNO. Verified: returns
+correct results matching direct DB2 query against `MVXCDTA.MPDOPE` for Scanfil APAC products.
+Active ops at this site have `POTDAT = 99999999` so the date filter passes cleanly.
+
+**Routing write path — AddOperation vs UpdateOperation:**
+OSKAR must determine per-operation which call to make. Pre-flight DB2 read returns the set of
+`POOPNO` values currently in `MPDOPE`. Operations in the Labour Routing template but absent from
+`MPDOPE` → `AddOperation`. Operations present in both → `UpdateOperation`.
+
+**Confirmed at Scanfil APAC (product `LFRMR241-7278`, facility `D`, 2026-05-08):**
+- `MPDOPE` contains 2 ops: SMTTS (50), MANASY (100)
+- Labour Routing template has 8 active ops: KIT(10), LABEL(20), SMTTS(50), MANASY(100), ICT(120), FCT(130), QA(180), PACK(190)
+- 6 ops need `AddOperation`; 2 need `UpdateOperation`
+- This is the general pattern for new product introductions at this site
+
+**Movex Explorer display (PDS002 screen):**
+Dark rows = `MPDOPE` routing operations. Blue rows = `MPDMAT` BOM components linked to an
+operation via `PMOPNO`. Both appear in the same screen view. Only dark rows are routing ops.
 
 ---
 

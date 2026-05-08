@@ -144,6 +144,7 @@ class ECNWorkflowMixin:
 
         if req.trigger == "dc_approve":
             await self._queue_drawing_outbox(ecn_id)
+            await self._queue_routing_operations_outbox(ecn_id)
 
         if req.trigger == "movex_write_complete":
             await self._queue_alias_outbox(ecn_id)
@@ -546,6 +547,50 @@ class ECNWorkflowMixin:
                     "id": str(uuid.uuid4()), "ecn_id": ecn_id, "item_id": str(item_id),
                     "mi_tx": "MMS025MI.AddAlias",
                     "mi_params": json.dumps({"mpn": mpn, "manufacturer": manufacturer, "is_default": bool(is_default)}),
+                    "ikey": idempotency_key,
+                },
+            )
+
+    async def _queue_routing_operations_outbox(self, ecn_id: str) -> None:
+        """Queue PDS002MI.AddOperation or UpdateOperation for every routing op on this ECN.
+
+        One outbox row per ecn_routing_operations row. Idempotency key prevents
+        duplicates on retry: PDS002MI.{ADD|UPDATE}Operation:{ecn_id}:{op_id}.
+        Called at dc_approve alongside _queue_drawing_outbox.
+        """
+        rows = await self._session.execute(
+            sa.text(
+                "SELECT r.id, r.ecn_item_id, r.operation_number, r.operation_description, "
+                "r.work_centre, r.run_time, r.setup_time, r.change_type "
+                "FROM ecn_routing_operations r "
+                "JOIN ecn_items i ON i.id = r.ecn_item_id "
+                "WHERE i.ecn_id = :ecn_id"
+            ),
+            {"ecn_id": ecn_id},
+        )
+        _mi_verb = {"ADD": "Add", "UPDATE": "Update"}
+        for op_id, item_id, opno, opds, plgr, piti, seti, change_type in rows:
+            mi_tx = f"PDS002MI.{_mi_verb[change_type]}Operation"
+            idempotency_key = f"{mi_tx}:{ecn_id}:{op_id}"
+            mi_params: dict = {
+                "operation_number": opno,
+                "operation_description": opds,
+                "work_centre": plgr,
+                "run_time": float(piti),
+            }
+            if seti is not None:
+                mi_params["setup_time"] = float(seti)
+            await self._session.execute(
+                sa.text(
+                    "INSERT INTO movex_outbox "
+                    "(id, ecn_id, ecn_item_id, mi_transaction, mi_params, idempotency_key) "
+                    "VALUES (:id, :ecn_id, :item_id, :mi_tx, :mi_params::jsonb, :ikey) "
+                    "ON CONFLICT (idempotency_key) DO NOTHING"
+                ),
+                {
+                    "id": str(uuid.uuid4()), "ecn_id": ecn_id, "item_id": str(item_id),
+                    "mi_tx": mi_tx,
+                    "mi_params": json.dumps(mi_params),
                     "ikey": idempotency_key,
                 },
             )

@@ -6,6 +6,7 @@ that all existing imports (routers, tasks, tests) continue to work unchanged.
 """
 
 from src.services.ecn.models import (
+    VALID_CHANGE_TYPES,
     VALID_FACILITIES,
     VALID_ROLE_IDS,
     ApprovalStep,
@@ -24,10 +25,13 @@ from src.services.ecn.models import (
     ECNValidationError,
     RoleAssignment,
     RoleAssignmentResult,
+    RoutingOperationRequest,
+    RoutingOperationResponse,
 )
 from src.services.ecn.service import ECNService
 
 __all__ = [
+    "VALID_CHANGE_TYPES",
     "VALID_FACILITIES",
     "VALID_ROLE_IDS",
     "ApprovalStep",
@@ -46,5 +50,7 @@ __all__ = [
     "ECNValidationError",
     "RoleAssignment",
     "RoleAssignmentResult",
+    "RoutingOperationRequest",
+    "RoutingOperationResponse",
     "ECNService",
 ]

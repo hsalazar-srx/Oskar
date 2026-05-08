@@ -1,7 +1,7 @@
 # OSKAR — Sprint Backlog
 # Source of truth for all work status.
 # oskar-state.md (gitignored) is for next-session notes only — not for tracking status.
-# Last synced: 2026-05-05 (Sprint 3 added — 820-min scope gaps H-1/H-2/H-3; MPN extended fields added to Sprint 2)
+# Last synced: 2026-05-08 (Sprint 2 — S2-19 through S2-23 complete; routing ops CRUD + outbox + migration 0009; LstOperation added to PDS002MI.json)
 
 ---
 
@@ -76,8 +76,8 @@
 | G-1 | `facility` column on `ecn_instances` (default `'L'` = Melbourne) | F-1 | ✅ included in 0001_initial_schema.py |
 | G-2 | `next_action_users[]` on ECN list response | Sprint 1 | ✅ 2026-04-21 |
 | G-3 | ECN list filters: status, overdue, assignee, facility, age_days | Sprint 1 | ✅ 2026-04-21 |
-| G-4 | Celery beat task `tasks/ecn_digest.py` — daily HTML email | Sprint 2 | ⏳ |
-| G-5 | `POST /api/v1/admin/ecn-digest` — on-demand digest trigger | Sprint 2 | ⏳ |
+| G-4 | Celery beat task `tasks/ecn_digest.py` — daily HTML email | Sprint 2 | ✅ `src/tasks/ecn_notifications.py:288-347` |
+| G-5 | `POST /api/v1/admin/ecn-digest` — on-demand digest trigger | Sprint 2 | ✅ `src/routers/admin.py:24-43` |
 | G-6 | Go-live: disable `DBCHK_OpenECN` SQL Server Agent job on DBSRV | Go-live | ⏳ |
 
 ---
@@ -130,29 +130,45 @@
 - [ ] MPDDOC drawing creation added to movex-rest-api (@developer-dotnet)
 - [ ] Sprint 1 complete
 
+**Routing operations ground truth (2026-05-08, verified):**
+- MI program: `PDS002MI.AddOperation` / `UpdateOperation` → MPDOPE (`MVXCDTA`)
+- `LstOperation` works correctly when called without `FDAT`/`OPNO` (4-field key, confirmed by RPG source + live MITEST)
+- Pre-flight read must use direct DB2 query against MPDOPE (safer for automated calls — no cursor seek risk)
+- Product `LFRMR241-7278` ground truth: 2 ops in Movex (SMTTS/50, MANASY/100) vs 8 in Labour Routing template → 6 × AddOperation + 2 × UpdateOperation required
+- Full analysis: `movex-rest-api/analysis/PDS002MI-routing-analysis.md`
+
 **Sprint 2 pre-gate design decisions (completed before code):**
 - ✅ **ADR-009** (2026-05-01): DC single gate — SUBMITTED+DC_REVIEW removed; DC_APPROVED (25) added before Movex write; IMPLEMENTED→CLOSED automatic. `decisions/ADR-009-dc-single-gate-role-customisation.md`
 - ✅ **Migration 0006** (2026-05-01): `ecn_items.item_group VARCHAR(3)` + `ecn_items.customer_alias VARCHAR(30)` promoted from JSONB; `ecn_instances` CHECK constraint updated for ADR-009.
 - ✅ **Risk R-19** (2026-05-01): BOM-level IP inference via DigiKey/Octopart API query patterns. Scanfil management approval gate required before Stage 3 BOM tools. `ai/memory/09-known-risks-and-pitfalls.md`.
 
-**Sprint 2 scope (all ⏳):**
-- **Optimistic locking (ADR-008):** `If-Unmodified-Since` check in `ECNService.update_ecn` + `transition_ecn`; 428 if header absent, 409 if stale; OQ-40 through OQ-45 ✅ 2026-04-24
-- **Transactional Outbox:** `src/tasks/celery_app.py` + `src/tasks/movex_outbox.py`; retry 30s → 5min → 30min; DC alert attempt 3; ABANDONED + EM alert attempt 10; `advance_ecn_to_implemented` task; 23 tests ✅ 2026-04-24
-- ECN write gate: DB-layer `oskar_worker` REVOKE INSERT on `movex_outbox` + RLS on `ecn_instances` ✅ 2026-04-24 (migration 0005 — HMAC token approach superseded)
-- **Workflow machine update (ADR-009):** remove SUBMITTED/DC_REVIEW from ECNStatus; add DC_APPROVED=25; update _TRANSITIONS (remove accept/pass_to_engineering; add dc_approve + auto_close); update all guard conditions and tests ✅ 2026-05-04
-- **Per-ECN role customisation (ADR-009):** `POST /api/v1/ecn/{id}/role-assignments`; DC-authority guard; supersede-and-insert pattern; transition history record ✅ 2026-05-04
-- Rejection flows: restart vs proceed
-- Drawing number workflow: DC confirmation at DC_APPROVED gate (replaces DC_REVIEW gate)
-- MPN alias: automatic `MMS025MI.AddAlias` at IMPLEMENTED (uses `ecn_items.customer_alias` + `ecn_items.item_group` as ALWQ)
-- **MPN extended fields (820-min scope — Nick, 2026-04-29):** `ecn_mpns` columns for `lifecycle` (active/eol/nrnd), `eol_date`, `lead_time_weeks`, `msl_level` (1–6), `packaging_type`, `do_not_buy`, `alt_mpn`; surfaced in ECN item UI. Schema pre-created in migration 0007 (AI/Agent groundwork plan). Blocker for Iteration 1 sign-off — Nick explicitly requested these fields.
-- Parallel approval block: Management Review (EM + PM + QM + SC + FN simultaneous)
-- Overdue escalation: 48h → role + manager; 96h → EM added (DC escalation now triggers at DC_APPROVED, not SUBMITTED)
-- DC recovery UI: Movex Write Status Panel
-- Effectivity date fields on ECNItems
-- BOM concurrency detection before Movex write
-- Email notifications via `get_email()` + SMTP (10.10.0.155, port 25)
-- ECN version/revision lineage on rejection+resubmit
-- DBCHK replacement: G-4 Celery digest + G-5 on-demand endpoint
+### Sprint 2 Tasks
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| S2-1 | Optimistic locking (ADR-008) — `If-Unmodified-Since`; 428 if absent, 409 if stale | `src/services/ecn/helpers.py:322-346` | ✅ 2026-04-24 |
+| S2-2 | Transactional Outbox — retry 30s→5min→30min; DC alert attempt 3; ABANDONED+EM attempt 10; 23 tests | `src/tasks/movex_outbox.py` | ✅ 2026-04-24 |
+| S2-3 | ECN write gate — `oskar_worker` REVOKE INSERT on `movex_outbox` + RLS on `ecn_instances` | migration 0005 | ✅ 2026-04-24 |
+| S2-4 | Workflow machine (ADR-009) — SUBMITTED/DC_REVIEW removed; DC_APPROVED=25; guards + tests updated | `src/workflow/machine.py` | ✅ 2026-05-04 |
+| S2-5 | Per-ECN role customisation (ADR-009) — `POST /api/v1/ecn/{id}/role-assignments`; DC-authority guard; supersede-and-insert | `src/services/ecn/workflow.py:555-645` | ✅ 2026-05-04 |
+| S2-6 | Rejection flows — `reject` trigger → REJECTED; `resubmit` → ENGINEERING_REVIEW; originator-only guard | `src/workflow/machine.py:250-266` | ✅ |
+| S2-7 | MPN alias — `_queue_alias_outbox()` at IMPLEMENTED→CLOSED; `MMS025MI.AddAlias` with `customer_alias`+`item_group` as ALWQ | `src/services/ecn/workflow.py:526-551` | ✅ |
+| S2-8 | Parallel approval block — `approve_role` per-role; `complete_management_review` auto-advances when all required roles approved | `src/workflow/machine.py:206-222` | ✅ |
+| S2-9 | Overdue escalation — Celery beat 6h; 48h → assignee+EM email; 96h → DC added | `src/tasks/ecn_notifications.py:124-285` | ✅ |
+| S2-10 | Email notifications — `ECNEmailService` async SMTP (10.10.0.155:25); digest + escalation + rejection | `src/tasks/ecn_notifications.py:53-88` | ✅ |
+| S2-11 | Effectivity date fields on ECNItems — `effectivity_type` + `effectivity_from` | migration 0001 | ✅ |
+| S2-12 | DBCHK replacement G-4 — `send_ecn_digest()` Celery beat daily | `src/tasks/ecn_notifications.py:288-347` | ✅ |
+| S2-13 | DBCHK replacement G-5 — `POST /api/v1/admin/ecn-digest` (DC-only, 202 Accepted) | `src/routers/admin.py:24-43` | ✅ |
+| S2-14 | Drawing number workflow — `_queue_drawing_outbox()` at DC_APPROVED; guard on `is_new_item=TRUE` items | `src/services/ecn/workflow.py:501-524` | ⚠️ OSKAR done — blocked on MPDDOC endpoint (@developer-dotnet) |
+| S2-15 | MPN extended fields (Nick, 2026-04-29) — schema: `lifecycle`, `eol_date`, `lead_time_weeks`, `msl_level`, `packaging_type`, `do_not_buy`, `alt_mpn` | migration 0007 | ⚠️ Schema ✅ — Pydantic models + ECN item UI pending |
+| S2-16 | DC recovery UI — Movex Write Status Panel | `src/routers/sse.py` + migration 0007 | ⚠️ SSE infra + pg_notify ✅ — display logic pending |
+| S2-17 | ECN version/revision lineage — SHA-256 audit chain per transition; revision_number preserved on resubmit | `src/services/ecn/helpers.py:138-192` | ⚠️ Audit chain ✅ — UI lineage display pending |
+| S2-18 | BOM concurrency detection before Movex write — delta detection at DC_APPROVED gate | `src/services/ecn/workflow.py` | ⚠️ Schema ✅ — delta logic pending |
+| S2-19 | Routing ops — `ecn_routing_operations` migration (0009) — `ecn_item_id FK`, `operation_number`, `operation_description`, `work_centre`, `run_time` (POPITI), `setup_time` (POSETI), `change_type` (ADD/UPDATE), `movex_snapshot JSONB` | `alembic/versions/0009_ecn_routing_operations.py` | ✅ 2026-05-08 |
+| S2-20 | Routing ops — DTO models — `RoutingOperationRequest` + `RoutingOperationResponse`; mirror MPDOPE key fields | `src/services/ecn/models.py` | ✅ 2026-05-08 |
+| S2-21 | Routing ops — ERP adapter pre-flight read — `get_routing_operations(item, faci, strt)` abstract + movex impl; `PDS002MI.LstOperation` GET (no FDAT/OPNO — 4-field key confirmed) | `src/adapters/erp/base.py` + `movex.py` | ✅ 2026-05-08 |
+| S2-22 | Routing ops — outbox queue method — `_queue_routing_operations_outbox()`; `PDS002MI.AddOperation` or `UpdateOperation` per row at DC_APPROVED gate; `_mi_verb` maps ADD/UPDATE → Add/Update | `src/services/ecn/workflow.py` | ✅ 2026-05-08 |
+| S2-23 | Routing ops — items service CRUD — `GET/POST/PATCH/DELETE /api/v1/ecn/{id}/items/{item_id}/routing`; 15 tests passing | `src/routers/ecn.py` + `src/services/ecn/items.py` + `tests/routers/test_routing_operations.py` | ✅ 2026-05-08 |
 
 ---
 
@@ -166,13 +182,15 @@
 - [ ] Sprint 2 complete
 - [x] Nick's methodology documentation received ✅ — `context/ecn-history/Initial_Meeting_Nick_and_Branko_290426/`
 
-| # | Task | Source | Status |
-|---|------|--------|--------|
-| H-1 | **Part number lookup UI** — alias check against Movex on ECN item entry: full match / partial match / no match result surfaced to engineer. Replaces manual MOVEX search (Step 4 — identified by Hector as single biggest time sink: 30 min on tasks that should take seconds, 1:01:32). | Nick 42:56–44:27 | ⏳ |
-| H-2 | **Auto SRX part number generation** — "no match" path: generate new SRX PN using Nick's methodology (`LF` + customer code + commodity code + next available 4-digit sequence from `MITMAS`). Commodity→Proc/Prod Group lookup from Nick's matrix (50 rows). Calls `PDS001MI.AddProduct` via outbox. **Methodology doc received** — `context/ecn-history/Initial_Meeting_Nick_and_Branko_290426/ecn xxxx_item_upload_v13_ecn_item_upload.csv` + `_Proc_Prod_Grp_Matrix.csv`. | Nick 42:56–44:27 | ⏳ | 
-| H-3 | **Stock code population** — auto-populate `ecn_items` stock code fields from Movex lookup result on full/partial match. Eliminates manual copy-paste from MOVEX screens. | Hector 1:01:32 | ⏳ |
-| H-4 | **Proc & Product Group auto-population** — on new item entry, derive `procurement_group` + `product_group` from MPN commodity type using Nick's matrix (currently 120 min manual lookup). Matrix is fully documented in `_Proc_Prod_Grp_Matrix.csv` (50 commodity rows). Exposed as dropdown + auto-suggest in ECN item UI. | VSM p.6, Nick matrix | ⏳ |
-| H-5 | **SRX item description normalisation** — enforce ≤30 char limit (Movex hard constraint); propose standard description from Nick's template names (e.g. "RESISTOR SMD", "IC TH"); pull candidate from DigiKey description and truncate/map. Eliminates 120-min manual sanitisation task. | VSM p.6 + template | ⏳ |
+### Sprint 3 Tasks
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| S3-1 | Part number lookup UI — alias check against Movex on ECN item entry; full/partial/no-match surfaced to engineer. Replaces manual MOVEX search (30 min → seconds). Source: Nick 42:56–44:27. | `src/routers/ecn.py` + `src/services/ecn/items.py` | ⏳ |
+| S3-2 | Auto SRX part number generation — "no match" path: `LF` + customer code + commodity code + next 4-digit seq from MITMAS; Proc/Prod Group from Nick's matrix (50 rows). Queues `PDS001MI.AddProduct` via outbox. Methodology: `context/ecn-history/Initial_Meeting_Nick_and_Branko_290426/`. Source: Nick 42:56–44:27. | `src/services/ecn/items.py` + outbox | ⏳ |
+| S3-3 | Stock code population — auto-populate `ecn_items` stock code fields from Movex lookup on full/partial match. Eliminates copy-paste from MOVEX screens. Source: Hector 1:01:32. | `src/services/ecn/items.py` | ⏳ |
+| S3-4 | Proc & Product Group auto-population — derive `procurement_group` + `product_group` from MPN commodity type using Nick's matrix (50 rows, `_Proc_Prod_Grp_Matrix.csv`); dropdown + auto-suggest in ECN item UI. Source: VSM p.6, Nick matrix. | `src/services/ecn/items.py` + frontend | ⏳ |
+| S3-5 | SRX item description normalisation — enforce ≤30 char (Movex hard limit); propose standard description from Nick's template names; pull from DigiKey description and truncate/map. Source: VSM p.6. | `src/services/ecn/items.py` | ⏳ |
 
 **Explicitly out of scope for Iteration 1 (Karen, 1:10:42):**
 - BOM scrubbing as standalone tool (Nick 24:33) — Iteration 3
@@ -203,7 +221,7 @@
 |------|-------|--------|-------|
 | ~~Project name confirmation~~ | ✅ Resolved | — | Confirmed **OSKAR** 2026-04-21 |
 | IQ/OQ/PQ sign-off per section | Karen / Divya / Manal | C-2 | Karen=system, Divya=quality, Manal=infra |
-| LDAPS confirmation | Manal | S1-9 live test | Not a priority; expected ~2026-05-08 |
+| LDAPS confirmation | Manal | S1-9 live test | Expected 2026-05-08 — confirm with Manal |
 | Harbor hostname (final) | Lead Engineer (Manal provides hostname) | `scripts/push-image.sh` | Blocked on Docker install |
 | Linux VM provisioned | ✅ Resolved 2026-05-01 | — | 4 CPUs / 16 GB RAM / 100 GB storage. Docker + Harbor install: Lead Engineer. |
 | ~~movex-rest-api: MMS025MI.AddAlias~~ | ✅ Resolved 2026-05-01 | — | MMS025MI.json present; generic routing sufficient. No dotnet work needed. |

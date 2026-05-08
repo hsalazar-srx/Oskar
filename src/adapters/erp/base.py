@@ -68,6 +68,23 @@ class ERPAdapter(ABC):
         ...
 
     @abstractmethod
+    async def get_routing_operations(
+        self, item_number: str, facility: str, structure_type: str = "001"
+    ) -> list[dict[str, Any]]:
+        """Fetch all active routing operations for a product (PDS002MI.LstOperation).
+
+        Pre-flight read before any AddOperation / UpdateOperation write.
+        Call without OPNO or FDAT — uses the 4-field key (CONO+FACI+PRNO+STRT) so
+        all operations are returned from the start of the index (confirmed 2026-05-08,
+        see movex-rest-api/analysis/PDS002MI-routing-analysis.md).
+        Returns a list of MPDOPE row dicts. Each dict has at minimum:
+          OPNO (int), OPDS (str), PLGR (str), PITI (float), SETI (float),
+          FDAT (int YYYYMMDD), TDAT (int YYYYMMDD).
+        Raises on connection failure. Returns [] if no operations exist.
+        """
+        ...
+
+    @abstractmethod
     async def search_items(self, query: str, limit: int = 50) -> list[dict[str, Any]]:
         """Search item master by description or item number prefix (MMS200MI.GetItmBasic).
 
