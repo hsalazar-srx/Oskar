@@ -1,7 +1,7 @@
 # OSKAR — Sprint Backlog
 # Source of truth for all work status.
 # oskar-state.md (gitignored) is for next-session notes only — not for tracking status.
-# Last synced: 2026-05-08 (Sprint 2 — S2-19 through S2-23 complete; routing ops CRUD + outbox + migration 0009; LstOperation added to PDS002MI.json)
+# Last synced: 2026-05-11 (MCP Server moved to Future Improvements — BOM + Supplier Intelligence take priority as Iterations 2 & 3)
 
 ---
 
@@ -180,13 +180,21 @@
 
 **Pre-conditions:**
 - [ ] Sprint 2 complete
-- [x] Nick's methodology documentation received ✅ — `context/ecn-history/Initial_Meeting_Nick_and_Branko_290426/`
+- [x] Engineering Team's methodology documentation received ✅ — `context/ecn-history/Initial_Meeting_Nick_and_Branko_290426/`
+- [ ] movex-rest-api: `GET /api/mitpop/search` custom DB2 endpoint deployed (@developer-dotnet) — **S3-1 blocker**
+
+**Key finding (2026-05-11):** No M3 MI program supports reverse alias lookup (POPN→ITNO).
+MMS025MI.GetAlias requires CONO+ALWT+ITNO+ALWQ+E0PA+VFDT (ITNO-first). MMS025MI.LstAlias
+requires CONO+ITNO (also ITNO-first). MMS001MI not enabled at Scanfil APAC.
+Stargile never solved this — `RequestECNDBHelper.java:313` has a TODO comment from 2008.
+Solution: custom parameterised DB2 query against `MVXCDTA.MITPOP WHERE MPPOPN=@popn`.
+Full endpoint spec in `ai/memory/02-movex-erp-authority.md §7`.
 
 ### Sprint 3 Tasks
 
 | # | Task | File | Status |
 |---|------|------|--------|
-| S3-1 | Part number lookup UI — alias check against Movex on ECN item entry; full/partial/no-match surfaced to engineer. Replaces manual MOVEX search (30 min → seconds). Source: Nick 42:56–44:27. | `src/routers/ecn.py` + `src/services/ecn/items.py` | ⏳ |
+| S3-1 | Part number reverse alias lookup — `GET /api/v1/parts/alias?popn=&cuno=`; queries `MVXCDTA.MITPOP` via custom DB2 endpoint on movex-rest-api; returns `full_match`/`partial_match`/`no_match`. `app.state.erp_adapter` lifespan wired. 34 tests passing. Replaces manual MOVEX search (30 min → seconds). Source: Nick 42:56–44:27. | `src/routers/parts.py` + `src/adapters/erp/movex.py` + `src/adapters/erp/base.py` + `src/main.py` | ✅ 2026-05-11 — awaiting `GET /api/mitpop/search` from @developer-dotnet to go live |
 | S3-2 | Auto SRX part number generation — "no match" path: `LF` + customer code + commodity code + next 4-digit seq from MITMAS; Proc/Prod Group from Nick's matrix (50 rows). Queues `PDS001MI.AddProduct` via outbox. Methodology: `context/ecn-history/Initial_Meeting_Nick_and_Branko_290426/`. Source: Nick 42:56–44:27. | `src/services/ecn/items.py` + outbox | ⏳ |
 | S3-3 | Stock code population — auto-populate `ecn_items` stock code fields from Movex lookup on full/partial match. Eliminates copy-paste from MOVEX screens. Source: Hector 1:01:32. | `src/services/ecn/items.py` | ⏳ |
 | S3-4 | Proc & Product Group auto-population — derive `procurement_group` + `product_group` from MPN commodity type using Nick's matrix (50 rows, `_Proc_Prod_Grp_Matrix.csv`); dropdown + auto-suggest in ECN item UI. Source: VSM p.6, Nick matrix. | `src/services/ecn/items.py` + frontend | ⏳ |
@@ -228,3 +236,38 @@
 | movex-rest-api: MPDDOC drawing creation | @developer-dotnet | Sprint 2 design | |
 | DBCHK_OpenECN disable at go-live | Infrastructure | G-6 | |
 | MPDDOC — MI program or direct DB2? | @developer-dotnet | Sprint 2 design | |
+
+---
+
+## Future Improvements — Oskar MCP Server (Engineering Intelligence Layer)
+
+> **Decision:** 2026-05-11. Deferred from active sprint planning — BOM (Iteration 2) and Supplier
+> Intelligence (Iteration 3) take priority. MCP layer is a post-production enhancement, not a
+> core iteration deliverable.
+> Full analysis and council report: `ai/council-transcript-20260511-103622.md`
+
+**Architecture decision (locked):** MCP Apps are a complementary intelligence layer on top of the
+web UI — not a replacement. Write operations (approvals, ECN creation, status transitions) must
+remain web-UI-only for LDAP auth, SHA-256 audit chain, and IQ/OQ/PQ compliance reasons.
+
+**Pre-conditions before picking this up:**
+- Production stable ≥ 30 days post go-live
+- Iterations 2 (BOM) and 3 (Supplier Intelligence) complete or in steady state
+- Scanfil group AI policy confirmed (required for multi-user rollout)
+- Lead Engineer Claude Code usage can start earlier without policy gate (internal only)
+
+| # | Task | Notes |
+|---|------|-------|
+| MCP-1 | MCP server scaffold — `mcp/` folder in monorepo; FastMCP; internal HTTP to Oskar FastAPI; read-only tools only | `mcp/server.py` |
+| MCP-2 | `get_ecn_status` tool — ECN header, current status, pending approvers, overdue flag; wraps `GET /api/v1/ecn/{id}` | `mcp/tools/ecn.py` |
+| MCP-3 | `list_ecns` tool — filterable by status, assignee, overdue, facility; wraps `GET /api/v1/ecn/` | `mcp/tools/ecn.py` |
+| MCP-4 | `get_outbox_status` tool — DC recovery diagnostics; surfaces failed Movex writes with retry count + last error | `mcp/tools/outbox.py` |
+| MCP-5 | `lookup_part` tool — alias + stock code check against Movex; wraps Sprint 3 part lookup logic for Claude Code context | `mcp/tools/parts.py` |
+| MCP-6 | MCP App — ECN status dashboard; workflow state + approval timeline inline in Claude/VS Code; read-only; `ui://` resource | `mcp/apps/ecn-status/` |
+| MCP-7 | MCP App — DC recovery panel; live-updating outbox error display for incident response in Claude Code | `mcp/apps/dc-recovery/` |
+| MCP-8 | MCP server Docker service — `mcp-server` container; internal network only; auth via API key to Oskar FastAPI | `docker/docker-compose.prod.yml` |
+| MCP-9 | Claude Code MCP config — `.mcp.json` in repo root; enables Lead Engineer to query Oskar from Claude Code | `.mcp.json` |
+
+**Permanently out of scope for MCP layer:**
+- Write operations (approvals, ECN creation, status transitions) — web UI only
+- External / supplier-facing MCP exposure — security review required separately

@@ -35,6 +35,13 @@ class IFSAdapter(ERPAdapter):
     # Read methods
     # ------------------------------------------------------------------
 
+    async def lookup_by_alias(
+        self,
+        popn: str,
+        cuno: str | None = None,
+    ) -> list[dict[str, Any]]:
+        raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
+
     async def get_item(self, item_number: str) -> dict[str, Any]:
         raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
 

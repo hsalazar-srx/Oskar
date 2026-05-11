@@ -3,10 +3,12 @@
 # Uses skill: architecture/audit-logging-framework v1.0
 
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.adapters.erp.movex import MovexRestAdapter
 from src.logging_config import configure_logging
 from src.middleware.correlation import CorrelationIdMiddleware
 from src.routers import v1_router
@@ -15,12 +17,24 @@ from src.routers.health import health_router
 # Configure structlog before any other module emits a log record
 configure_logging()
 
+
+@asynccontextmanager
+async def _lifespan(application: FastAPI):
+    """Open/close the shared MovexRestAdapter connection pool."""
+    adapter = MovexRestAdapter()
+    await adapter.open()
+    application.state.erp_adapter = adapter
+    yield
+    await adapter.close()
+
+
 app = FastAPI(
     title="OSKAR Engineering Intelligence Platform",
     description="ECN workflow, BOM management, and Supplier Intelligence for Scanfil APAC",
     version="0.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=_lifespan,
 )
 
 # ── Middleware (order matters: correlation ID first, then CORS) ───────────────

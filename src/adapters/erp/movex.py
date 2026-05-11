@@ -153,6 +153,29 @@ class MovexRestAdapter(ERPAdapter):
     # Read methods
     # ------------------------------------------------------------------
 
+    async def lookup_by_alias(
+        self,
+        popn: str,
+        cuno: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Reverse alias lookup via custom DB2 endpoint GET /api/mitpop/search.
+
+        No M3 MI program supports POPN→ITNO direction (confirmed 2026-05-11).
+        movex-rest-api queries MVXCDTA.MITPOP directly:
+          SELECT TRIM(MPITNO), TRIM(MPPOPN), TRIM(MPALWT), TRIM(MPALWQ), TRIM(MPE0PA)
+          FROM MVXCDTA.MITPOP
+          WHERE MPCONO=@cono AND MPPOPN=@popn [AND MPE0PA=@e0pa]
+        """
+        params: dict[str, str] = {
+            "cono": self.cono,
+            "popn": popn.strip(),
+        }
+        if cuno:
+            params["e0pa"] = cuno.strip()
+        resp = await self._get("/mitpop/search", params=params)
+        payload = resp.json()
+        return payload.get("data", {}).get("records", [])
+
     async def get_item(self, item_number: str) -> dict[str, Any]:
         resp = await self._get(f"/items/{item_number}")
         return resp.json()

@@ -85,6 +85,33 @@ class ERPAdapter(ABC):
         ...
 
     @abstractmethod
+    async def lookup_by_alias(
+        self,
+        popn: str,
+        cuno: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Reverse alias lookup: customer P/N → SRX ITNO(s) via MVXCDTA.MITPOP.
+
+        No M3 MI program supports this direction (MMS025MI.GetAlias/LstAlias both
+        require ITNO as input — confirmed 2026-05-11). Implemented as a custom
+        parameterised DB2 endpoint on movex-rest-api: GET /api/mitpop/search.
+
+        Args:
+            popn: Customer/manufacturer part number (MITPOP.MPPOPN). Stripped before call.
+            cuno: Optional customer/partner code (MITPOP.MPE0PA). Narrows results.
+
+        Returns:
+            List of MITPOP row dicts, each with: ITNO, POPN, ALWT, ALWQ, E0PA.
+            Returns [] when POPN has no alias in MITPOP — this is the no_match case,
+            not an error. Caller maps list length to full_match / partial_match / no_match.
+
+        Raises:
+            httpx.HTTPStatusError: on non-transient 4xx/5xx from movex-rest-api.
+            pybreaker.CircuitBreakerError: when the circuit breaker is open.
+        """
+        ...
+
+    @abstractmethod
     async def search_items(self, query: str, limit: int = 50) -> list[dict[str, Any]]:
         """Search item master by description or item number prefix (MMS200MI.GetItmBasic).
 

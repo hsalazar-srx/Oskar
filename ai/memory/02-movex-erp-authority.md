@@ -329,7 +329,55 @@ WHERE T1.DOCONO = @cono
 
 ---
 
-## 7. SSoT Rules for AI Suggestions
+## 7. MITPOP Reverse Alias Lookup — Custom DB2 Endpoint (Sprint 3, S3-1)
+
+**Finding (2026-05-11):** No M3 MI program supports reverse alias lookup (POPN → ITNO).
+- `MMS025MI.GetAlias` input: CONO + ALWT + ITNO + ALWQ + E0PA + VFDT — ITNO-first, not usable.
+- `MMS025MI.LstAlias` input: CONO + ITNO — also ITNO-first.
+- `MMS001MI` not enabled at Scanfil APAC.
+- Stargile never implemented reverse lookup either — `RequestECNDBHelper.java:313` comment from 2008: *"So far, this value is not retrieved."*
+
+**Solution:** Custom parameterised DB2 endpoint on movex-rest-api, same pattern as `POST /api/ecn/drawing`.
+
+### Endpoint Spec for @developer-dotnet (Sprint 3 pre-condition)
+
+**`GET /api/mitpop/search`**
+
+```
+Query params:
+  cono  int     required  Company number (from MOVEX_CONO env var)
+  popn  string  required  Customer/manufacturer part number — max 30 chars
+  e0pa  string  optional  Customer/partner code — narrows results when provided
+```
+
+**SQL to execute** (parameterised — never string-concatenated):
+
+```sql
+SELECT TRIM(MPITNO) AS ITNO,
+       TRIM(MPPOPN) AS POPN,
+       TRIM(MPALWT) AS ALWT,
+       TRIM(MPALWQ) AS ALWQ,
+       TRIM(MPE0PA)  AS E0PA
+FROM MVXCDTA.MITPOP
+WHERE MPCONO = @cono
+  AND MPPOPN = @popn
+  AND (@e0pa IS NULL OR MPE0PA = @e0pa)
+ORDER BY MPITNO
+```
+
+**Response:** `{ "data": { "records": [ { "ITNO": "...", "POPN": "...", "ALWT": "...", "ALWQ": "...", "E0PA": "..." } ] } }`
+
+Empty `records: []` when POPN has no alias — never a 404. HTTP 500 on DB2 error with detail.
+
+**OSKAR consumption:** `MovexRestAdapter.lookup_by_alias()` → `src/adapters/erp/movex.py`.
+Response mapped to `full_match` / `partial_match` / `no_match` in `src/routers/parts.py`.
+Endpoint: `GET /api/v1/parts/alias?popn=&cuno=`. 34 tests passing as of 2026-05-11.
+
+**Pre-condition check** (startup): confirm `MVXCDTA.MITPOP` is accessible from the DB2 connection.
+
+---
+
+## 8. SSoT Rules for AI Suggestions
 
 When an AI agent makes a suggestion that involves item data, BOM data, or supplier data:
 

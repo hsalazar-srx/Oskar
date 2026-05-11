@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Council Report — Oskar Frontend Stack</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8f9fa; color: #1a1a1a; line-height: 1.6; }
+  .header { background: #1e293b; color: #f8fafc; padding: 2rem 2.5rem; }
+  .header h1 { font-size: 1.4rem; font-weight: 600; margin-bottom: 0.4rem; }
+  .header .question { font-size: 0.95rem; color: #94a3b8; max-width: 800px; }
+  .header .meta { font-size: 0.8rem; color: #64748b; margin-top: 0.6rem; }
+  .container { max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem; }
+
+  /* Verdict */
+  .verdict { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 2rem; margin-bottom: 2rem; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  .verdict h2 { font-size: 0.7rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: #64748b; margin-bottom: 1.4rem; }
+  .section { margin-bottom: 1.6rem; }
+  .section h3 { font-size: 1rem; font-weight: 700; color: #0f172a; margin-bottom: 0.6rem; display: flex; align-items: center; gap: 0.5rem; }
+  .section h3 .pill { font-size: 0.7rem; font-weight: 600; padding: 0.15rem 0.5rem; border-radius: 999px; text-transform: uppercase; letter-spacing: .05em; }
+  .pill-agree { background: #dcfce7; color: #15803d; }
+  .pill-clash { background: #fef9c3; color: #92400e; }
+  .pill-blind { background: #fee2e2; color: #b91c1c; }
+  .pill-rec { background: #dbeafe; color: #1d4ed8; }
+  .pill-next { background: #f3e8ff; color: #7c3aed; }
+  .section p { font-size: 0.93rem; color: #374151; margin-bottom: 0.6rem; }
+  .section ul { margin: 0.4rem 0 0.6rem 1.2rem; }
+  .section ul li { font-size: 0.93rem; color: #374151; margin-bottom: 0.3rem; }
+  .highlight-box { background: #f0f9ff; border-left: 4px solid #0ea5e9; border-radius: 4px; padding: 1rem 1.2rem; margin-top: 0.8rem; }
+  .highlight-box p { font-size: 0.93rem; color: #0c4a6e; margin: 0; }
+  .action-box { background: #faf5ff; border: 2px solid #a855f7; border-radius: 8px; padding: 1.2rem 1.4rem; margin-top: 0.8rem; }
+  .action-box p { font-size: 0.95rem; color: #3b0764; margin: 0; font-weight: 500; }
+
+  /* Agreement grid */
+  .agreement-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.8rem; margin-bottom: 2rem; }
+  .advisor-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem; text-align: center; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+  .advisor-card .name { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #475569; margin-bottom: 0.5rem; }
+  .advisor-card .stance { font-size: 0.78rem; color: #1e293b; margin-bottom: 0.5rem; }
+  .advisor-card .badge { display: inline-block; font-size: 0.68rem; font-weight: 600; padding: 0.2rem 0.5rem; border-radius: 999px; }
+  .badge-shadcn { background: #dbeafe; color: #1d4ed8; }
+  .badge-antd { background: #fef9c3; color: #854d0e; }
+  .badge-separate { background: #fee2e2; color: #991b1b; }
+
+  /* Collapsible */
+  details { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 0.8rem; overflow: hidden; }
+  summary { padding: 1rem 1.2rem; cursor: pointer; font-size: 0.9rem; font-weight: 600; color: #1e293b; list-style: none; display: flex; align-items: center; justify-content: space-between; user-select: none; }
+  summary::-webkit-details-marker { display: none; }
+  summary::after { content: "▸"; font-size: 0.8rem; color: #94a3b8; transition: transform .2s; }
+  details[open] summary::after { transform: rotate(90deg); }
+  summary:hover { background: #f8fafc; }
+  .details-body { padding: 1rem 1.4rem 1.2rem; border-top: 1px solid #f1f5f9; font-size: 0.88rem; color: #374151; line-height: 1.7; }
+  .advisor-tag { display: inline-block; font-size: 0.68rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 4px; text-transform: uppercase; letter-spacing: .05em; margin-right: 0.5rem; vertical-align: middle; }
+  .tag-contrarian { background: #fef2f2; color: #dc2626; }
+  .tag-firstprinciples { background: #f0f9ff; color: #0369a1; }
+  .tag-expansionist { background: #f0fdf4; color: #16a34a; }
+  .tag-outsider { background: #fdf4ff; color: #9333ea; }
+  .tag-executor { background: #fff7ed; color: #c2410c; }
+  .tag-review { background: #f8fafc; color: #475569; }
+
+  .section-label { font-size: 0.75rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #94a3b8; margin: 1.5rem 0 0.7rem; }
+  footer { text-align: center; font-size: 0.78rem; color: #94a3b8; padding: 2rem; border-top: 1px solid #e2e8f0; margin-top: 1rem; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>LLM Council Report — Oskar Frontend Stack</h1>
+  <div class="question">Is Vite + React + TypeScript + Tailwind CSS the right stack for Oskar, or is there a meaningfully better alternative?</div>
+  <div class="meta">Scanfil APAC · Project Oskar · 2026-05-11 · 5 advisors · 5 peer reviews · 1 chairman</div>
+</div>
+
+<div class="container">
+
+  <!-- Advisor alignment grid -->
+  <div class="section-label">Advisor Positions</div>
+  <div class="agreement-grid">
+    <div class="advisor-card">
+      <div class="name">Contrarian</div>
+      <div class="stance">Stack: ✓ confirmed<br>Library: Ant Design</div>
+      <span class="badge badge-antd">Ant Design</span>
+    </div>
+    <div class="advisor-card">
+      <div class="name">First Principles</div>
+      <div class="stance">Stack: ✓ confirmed<br>App: SM-Portal module</div>
+      <span class="badge badge-separate">Fold in</span>
+    </div>
+    <div class="advisor-card">
+      <div class="name">Expansionist</div>
+      <div class="stance">Stack: ✓ confirmed<br>Library: shadcn/ui</div>
+      <span class="badge badge-shadcn">shadcn/ui</span>
+    </div>
+    <div class="advisor-card">
+      <div class="name">Outsider</div>
+      <div class="stance">Stack: ✓ confirmed<br>Library: Ant Design</div>
+      <span class="badge badge-antd">Ant Design</span>
+    </div>
+    <div class="advisor-card">
+      <div class="name">Executor</div>
+      <div class="stance">Stack: ✓ confirmed<br>Library: shadcn/ui</div>
+      <span class="badge badge-shadcn">shadcn/ui</span>
+    </div>
+  </div>
+
+  <!-- Chairman Verdict -->
+  <div class="verdict">
+    <h2>Chairman's Verdict</h2>
+
+    <div class="section">
+      <h3><span class="pill pill-agree">Agrees</span> Where the Council Agrees</h3>
+      <p>The stack is not the question. Every advisor converged: <strong>Vite + React + TypeScript is settled by SM-Portal's existence</strong>. The live system next door made the decision. No advisor recommended a divergent framework, and on-premise static deployment sealed it — Next.js and Remix add SSR complexity with zero benefit on IIS or a Linux VM without a Node runtime.</p>
+      <p>SSE is not a stack decision. It is an afternoon of work with <code>useEffect</code> and <code>EventSource</code>.</p>
+      <p>The council also agrees: <strong>raw Tailwind alone is a trap for a solo backend-leaning developer.</strong> A component library is mandatory, not optional.</p>
+    </div>
+
+    <div class="section">
+      <h3><span class="pill pill-clash">Clashes</span> Where the Council Clashes</h3>
+      <p><strong>shadcn/ui vs. Ant Design.</strong> The real fault line.</p>
+      <p><em>For Ant Design (Contrarian + Outsider):</em> Table virtualization, multi-step forms, modal management, and approval workflow components ship out of the box. For an 8-week runway with one backend-leaning engineer, ready-made enterprise component density reduces risk against the June deadline. You don't have design time — Ant Design doesn't ask for it.</p>
+      <p><em>For shadcn/ui (Expansionist + Executor):</em> You own the source. No library API surface to fight when approval workflow logic needs non-standard behavior. Tailwind coherence with SM-Portal is structural, not cosmetic. Every component built for Oskar — the BOM line editor, the approval timeline, the outbox error panel — becomes a reusable asset for WMS and PLM.</p>
+      <p><strong>Separate app vs. SM-Portal module.</strong> First Principles argued Oskar should be a route namespace inside SM-Portal. Every peer review rejected this: Oskar deploys to a separate Linux VM, has a different release cadence, a different stakeholder group, and a Python/FastAPI backend rather than .NET. This question was closed by deployment reality.</p>
+    </div>
+
+    <div class="section">
+      <h3><span class="pill pill-blind">Blind Spots</span> What the Council Missed</h3>
+      <p><strong>1. Authentication integration cost.</strong> SM-Portal runs .NET JWT on SRXWEBAPP1. Oskar runs FastAPI issuing its own JWTs on a separate Linux VM. Two separate origins, on-premise, no API gateway. For an approval workflow with role-based action buttons — where the wrong token claim means the wrong user approves a BOM change — SSO or token-sharing strategy is a <em>day-one architectural decision</em>, not a polish item. Every advisor evaluated component libraries while ignoring the auth surface entirely.</p>
+      <p><strong>2. OpenAPI-to-TypeScript client generation.</strong> FastAPI auto-generates an OpenAPI schema. Tools like <code>orval</code> or <code>openapi-typescript</code> consume that schema and produce type-safe API clients, TanStack Query hooks, and Zod schemas automatically. For a solo backend-leaning developer, this eliminates an entire category of frontend bugs and reduces ongoing maintenance burden <em>more than any component library choice</em>. This is the highest-leverage tooling decision available — and it went unmentioned by all five advisors.</p>
+    </div>
+
+    <div class="section">
+      <h3><span class="pill pill-rec">Recommendation</span> The Recommendation</h3>
+      <p><strong>Confirm the stack: Vite + React + TypeScript + Tailwind CSS.</strong></p>
+      <p><strong>Choose shadcn/ui, not Ant Design.</strong> The June deadline is real, but it does not override the platform argument. Ant Design's density is appealing until the approval workflow needs behavior the library doesn't expect — and enterprise approval workflows always do. At that point, the time saved on initial scaffolding is consumed fighting the library's opinions. shadcn/ui components live in your repo; you fight nothing.</p>
+      <p>The mandatory additions — non-optional:</p>
+      <ul>
+        <li><strong>React Hook Form + Zod</strong> — nested BOM forms and MPN grids</li>
+        <li><strong>TanStack Query</strong> — SSE integration and optimistic updates on the approval panel</li>
+        <li><strong>Zustand or XState</strong> — approval workflow state machine. The Contrarian's warning here is the most important technical caution in the entire council. The state machine complexity will make or break month three regardless of component library.</li>
+      </ul>
+      <div class="highlight-box">
+        <p><strong>On auth:</strong> Before writing a single React component, define the JWT strategy. Options: shared signing key between FastAPI and SM-Portal's .NET backend (simple, fragile), a lightweight on-premise identity service (correct, more work), or accept separate sessions with explicit login per app (acceptable for v1, document the tradeoff). Pick one, write it down, build the API client layer against it.</p>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3><span class="pill pill-next">Next</span> The One Thing to Do First</h3>
+      <div class="action-box">
+        <p>Set up <code>orval</code> against FastAPI's <code>/openapi.json</code> before writing any component code. Configure it to generate TanStack Query hooks with Zod validation and commit the generated client to the repo. From that point forward, every API response the backend emits is automatically type-safe on the frontend, every breaking API change surfaces as a TypeScript compile error, and the solo backend-leaning developer can work in Python with confidence that the TypeScript layer stays synchronized. This single step — 2 hours to configure correctly — removes more frontend risk than any component library decision on the board.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Advisor responses -->
+  <div class="section-label">Full Advisor Responses</div>
+
+  <details>
+    <summary><span class="advisor-tag tag-contrarian">Contrarian</span> State architecture is the real decision</summary>
+    <div class="details-body">
+      <p>The "visual coherence with SM-Portal" constraint is doing a lot of heavy lifting here, and nobody is questioning it hard enough. SM-Portal is already in production. That's a sunk cost argument dressed up as a technical requirement. The real question is: how much does cross-app visual coherence actually matter when engineers are the users? They navigate between tools constantly. They don't care if the table borders match.</p>
+      <p>Now for the actual flaw in the proposal: <strong>Tailwind without a component library is a trap for a solo backend-leaning dev.</strong> Raw Tailwind for complex approval workflows, nested BOM form grids, and multi-state filter panels will consume weeks of a backend dev's time reinventing wheels. You will build a bad Ant Design from scratch.</p>
+      <p>The honest answer: if you're picking Vite + React + TypeScript, you must commit to Ant Design or shadcn/ui on day one, not optionally. Ant Design wins for this use case — it ships table virtualization, form validation, multi-step workflows, and modal management out of the box. A backend-leaning dev can be productive in days.</p>
+      <p>The deeper risk nobody is naming: the approval workflow state machine. React alone doesn't save you here. Without a proper state management approach (Zustand, TanStack Query, or XState), the approval screen will become unmaintainable by month three regardless of which CSS framework you pick. <strong>Stack choice is the wrong obsession. State architecture is the real decision.</strong></p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="advisor-tag tag-firstprinciples">First Principles</span> Why does Oskar need a custom frontend at all?</summary>
+    <div class="details-body">
+      <p>The framing assumes the decision is "which frontend stack." It isn't. The real question is: <strong>why does Oskar need a custom frontend at all?</strong></p>
+      <p>SM-Portal already exists, is in production, and is built on exactly the stack being evaluated. Oskar's screens — filtered lists, complex forms, approval workflows, SSE updates — are not novel UI problems. They are solved problems within SM-Portal's existing architecture. The team is one backend-leaning engineer with a finite runway.</p>
+      <p>The first-principles answer: Oskar should be a module inside SM-Portal, not a separate application. Two separate frontends means two build pipelines, two deployment targets, two authentication integration points, two places to maintain shared components, and doubled cognitive overhead for a solo developer. That is not a tradeoff — it is pure waste.</p>
+      <p>The stack question only becomes real if there is a firm organizational reason Oskar must be a separate application — political boundary, different deployment server, separate release cadence. If any of those exist, state them explicitly. If none exist, the council is being asked to evaluate paint colors for a house that should share a wall with the one already built.</p>
+      <p><em>Note: peer reviews unanimously rejected this position — deployment reality (separate Linux VM, separate FastAPI backend, separate release cadence) closes this question before it can be strategic.</em></p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="advisor-tag tag-expansionist">Expansionist</span> Oskar is Scanfil APAC's frontend platform seed</summary>
+    <div class="details-body">
+      <p>The question is wrong. The real question is: <strong>what stack makes Oskar extensible enough to become the foundation for Scanfil APAC's entire modernisation programme?</strong></p>
+      <p>Confirm the React + Vite + Tailwind stack. That's not the interesting decision. The interesting decision is <strong>shadcn/ui over Ant Design</strong>, and the reason isn't aesthetics — it's ownership. shadcn/ui gives you the component source code. Every table, every modal, every form field lives in your repo. When Oskar evolves from ECN workflow into PLM integration, WMS handoffs, and eventually supplier-facing portals, you're not negotiating with an opinionated library's API surface. You own the primitives.</p>
+      <p>The upside everyone's undervaluing: Oskar isn't just an ECN tool. It's the React component foundation for every future Scanfil APAC internal app. The BOM line editor, the approval timeline component, the outbox error panel — these are reusable enterprise building blocks. Build them as clean, composable shadcn/ui components from day one and you're simultaneously building the design system for WMS, PLM, and whatever comes after IFS migration.</p>
+      <p>TanStack Query deserves a specific callout for SSE + optimistic updates. Combined with Zod + React Hook Form for the complex nested BOM forms, the "solo backend-leaning dev" problem largely disappears. Skip Next.js — Vite + static build is a single <code>dist/</code> folder. Deploy anywhere. No runtime to maintain.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="advisor-tag tag-outsider">Outsider</span> You're choosing what matches the portal, not the problem</summary>
+    <div class="details-body">
+      <p>The framing of this question already reveals the answer you're going to choose, which is the problem. "Visual coherence with SM-Portal is required" is doing enormous hidden work here. That's not a technical constraint — it's a social one. Challenge that assumption before it locks you in.</p>
+      <p>What an outsider sees immediately: you have one backend-focused engineer building complex approval workflows, nested BOM forms, and real-time panels. The bottleneck is not the framework — <strong>it's component density.</strong> Ant Design with plain React solves this faster than any combination involving "assemble your own component system with shadcn/ui and Tailwind."</p>
+      <p>shadcn/ui is an excellent choice when you have design time. You don't. The curse of knowledge here is that "Tailwind is simple" feels true to people who already know it. To a backend-leaning developer building a multi-step approval form with dynamic BOM line items, Tailwind means writing layout CSS from scratch, just with different names. Ant Design's Table, Form, Modal, Steps components are immediately usable with zero styling decisions.</p>
+      <p>The on-premise deployment constraint eliminates the actual advantages of Next.js and Remix. You'd be adopting their complexity with none of their benefits. Ant Design + React + TypeScript + Vite gives you 80% of your screens out of the box. The "visual coherence" concern can be addressed with a shared color palette — not a shared component system.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="advisor-tag tag-executor">Executor</span> Use what SM-Portal uses. The only question is which library.</summary>
+    <div class="details-body">
+      <p><strong>Use what SM-Portal already uses. Full stop.</strong> The stack is already decided by the production system sitting next to this one. The only real question is which component library to drop on top.</p>
+      <p>Monday morning action: Install shadcn/ui. Run <code>npx shadcn-ui@latest init</code>. Done in 20 minutes.</p>
+      <p>Why shadcn wins: shadcn components are copy-paste into your codebase — no version conflicts, no fighting the library's opinions when your approval workflow needs non-standard behaviour. Tailwind is already there, so styling coherence with SM-Portal is automatic, not a negotiation. React Hook Form + Zod integrations are documented.</p>
+      <p>What you don't do: Not Next.js (no SSR needed, IIS complexity, zero benefit). Not Remix (same problem, unfamiliar). Not SvelteKit (forces a parallel ecosystem, doubles maintenance).</p>
+      <p>SSE in React is three lines. <code>useEffect</code> + <code>EventSource</code>. No library needed. The actual bottleneck is the approval workflow state machine and nested form validation — not the framework. React Hook Form with <code>useFieldArray</code> handles BOM lines directly.</p>
+      <p><strong>First step after shadcn init:</strong> scaffold the ECN list page using shadcn DataTable with TanStack Table. That's your proof-of-concept, built in a day.</p>
+    </div>
+  </details>
+
+  <!-- Peer reviews -->
+  <div class="section-label">Peer Review Highlights</div>
+
+  <details>
+    <summary><span class="advisor-tag tag-review">Reviews 1–5</span> Key findings from peer review round</summary>
+    <div class="details-body">
+      <p><strong>Strongest response (unanimous, all 5 reviews):</strong> The Expansionist (C). Reasons: answers the actual question, commits to a specific recommendation with concrete strategic reasoning (ownership vs. API surface lock-in), frames Oskar correctly as a platform foundation, and names TanStack Query + Zod + React Hook Form as the real productivity enablers rather than re-litigating framework choice.</p>
+      <p><strong>Biggest blind spot (unanimous, all 5 reviews):</strong> The First Principles Thinker (B). The "fold into SM-Portal" argument ignores three hard constraints already in place: Oskar's separate deployment target (Linux VM), separate release cadence, and Python/FastAPI backend vs. SM-Portal's .NET backend. Coupling at the UI layer would create a different problem, not eliminate waste.</p>
+      <p><strong>What all five missed — two independent gaps caught in review:</strong></p>
+      <ul>
+        <li><strong>JWT auth across origins:</strong> Raised by Reviews 1 and 2. No advisor addressed how a standalone Oskar frontend authenticates against FastAPI JWT on a separate origin from SM-Portal's .NET JWT, on-premise with no API gateway. For role-based approval workflows this is a day-one architectural decision.</li>
+        <li><strong>OpenAPI-to-TypeScript client generation:</strong> Raised by Reviews 4 and 5. FastAPI auto-generates an OpenAPI schema. Tools like <code>orval</code> or <code>openapi-typescript</code> produce type-safe TanStack Query hooks and Zod schemas automatically. For a solo backend-leaning developer this is the highest-leverage tooling decision on the table — and it went unmentioned by all five advisors.</li>
+        <li><strong>June deadline vs. component library risk:</strong> Raised by Review 3. The Ant Design vs. shadcn tradeoff is real but none of the advisors quantified it against actual sprint capacity. ~8 weeks, one engineer.</li>
+      </ul>
+    </div>
+  </details>
+
+</div>
+
+<footer>
+  Council convened 2026-05-11 · Oskar Project · Scanfil APAC · 5 advisors · 5 peer reviews · 1 chairman synthesis
+</footer>
+
+</body>
+</html>
