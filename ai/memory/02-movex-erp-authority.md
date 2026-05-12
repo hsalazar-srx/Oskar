@@ -377,7 +377,47 @@ Endpoint: `GET /api/v1/parts/alias?popn=&cuno=`. 34 tests passing as of 2026-05-
 
 ---
 
-## 8. SSoT Rules for AI Suggestions
+## 8. MITMAS Next Sequence — Custom DB2 Endpoint (Sprint 3, S3-2)
+
+Required for auto part number generation. OSKAR generates: `LF{CUNO}{commodity}{seq:04d}`.
+The sequence is the next unused slot for items starting with a given 6-char prefix.
+
+**`GET /api/mitmas/next-sequence`**
+
+```
+Query params:
+  cono    int     required  Company number (from MOVEX_CONO env var)
+  prefix  string  required  6-char PN prefix, e.g. LFLM05 (LF + 2-char CUNO + 2-digit commodity)
+```
+
+**SQL to execute** (parameterised — never string-concatenated):
+
+```sql
+SELECT COALESCE(MAX(CAST(TRIM(SUBSTR(MMITNO, 7)) AS INTEGER)), 0) + 1 AS next_seq
+FROM MVXCDTA.MITMAS
+WHERE MMCONO = @cono
+  AND MMITNO LIKE @prefix || '%'
+  AND LENGTH(TRIM(MMITNO)) = 10
+```
+
+**Response:** `{ "data": { "next_seq": 42 } }` — integer. Returns 1 when no items exist with this prefix.
+HTTP 500 on DB2 error with detail.
+
+**Notes:**
+- The 6-char prefix is `LF` + 2-char CUNO + 2-digit commodity code. Total PN = 10 chars.
+- `LF` is the company prefix (legacy Startronics/SRXGlobal identifier) — not a lead-free marker.
+  Lead Free Code (BBB=Non-RoHS / PBF=RoHS) is a separate MITMAS field, not encoded in ITNO.
+- The sequence returned is advisory — the engineer confirms before the item is created in Movex
+  via `PDS001MI.AddProduct`. OSKAR does not commit the PN to Movex in this call.
+- `TEM/TEMP` has 4 valid commodity codes: 66, 76, 81, 90.
+- `PLA/INJEC` and `PLA/PLAMC` each have 2 codes: 65 and 67.
+
+**OSKAR consumption:** `MovexRestAdapter.get_next_itno_sequence(prefix)` → `src/adapters/erp/movex.py`.
+Endpoint: `GET /api/v1/parts/suggest-pn`. 50 tests passing as of 2026-05-12.
+
+---
+
+## 9. SSoT Rules for AI Suggestions
 
 When an AI agent makes a suggestion that involves item data, BOM data, or supplier data:
 

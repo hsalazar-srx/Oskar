@@ -42,6 +42,9 @@ class IFSAdapter(ERPAdapter):
     ) -> list[dict[str, Any]]:
         raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
 
+    async def get_next_itno_sequence(self, prefix: str) -> int:
+        raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
+
     async def get_item(self, item_number: str) -> dict[str, Any]:
         raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
 

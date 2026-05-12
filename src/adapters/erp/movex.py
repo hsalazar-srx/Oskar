@@ -176,6 +176,20 @@ class MovexRestAdapter(ERPAdapter):
         payload = resp.json()
         return payload.get("data", {}).get("records", [])
 
+    async def get_next_itno_sequence(self, prefix: str) -> int:
+        """Next available sequence via GET /api/mitmas/next-sequence.
+
+        movex-rest-api queries MAX(TRIM(MMITNO)) FROM MVXCDTA.MITMAS
+        WHERE MMCONO=@cono AND MMITNO LIKE @prefix||'%', returns next_seq integer.
+        Returns 1 when no items with this prefix exist.
+        """
+        resp = await self._get(
+            "/mitmas/next-sequence",
+            params={"cono": self.cono, "prefix": prefix},
+        )
+        payload = resp.json()
+        return int(payload.get("data", {}).get("next_seq", 1))
+
     async def get_item(self, item_number: str) -> dict[str, Any]:
         resp = await self._get(f"/items/{item_number}")
         return resp.json()

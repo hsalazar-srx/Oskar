@@ -112,6 +112,30 @@ class ERPAdapter(ABC):
         ...
 
     @abstractmethod
+    async def get_next_itno_sequence(
+        self,
+        prefix: str,
+    ) -> int:
+        """Return the next available 4-digit sequence number for an item number prefix.
+
+        Queries MVXCDTA.MITMAS for the highest MMITNO matching '{prefix}%' via
+        custom DB2 endpoint GET /api/mitmas/next-sequence, then returns max_seq + 1.
+        CONO is injected by the adapter from its own configuration — callers must not pass it.
+
+        Args:
+            prefix: 6-char prefix, e.g. 'LFLM05' (LF + 2-char CUNO + 2-digit commodity).
+
+        Returns:
+            Next integer sequence number (1-based). Caller zero-pads to 4 digits.
+            Returns 1 when no items with this prefix exist yet.
+
+        Raises:
+            httpx.HTTPStatusError: on non-transient 4xx/5xx from movex-rest-api.
+            pybreaker.CircuitBreakerError: when the circuit breaker is open.
+        """
+        ...
+
+    @abstractmethod
     async def search_items(self, query: str, limit: int = 50) -> list[dict[str, Any]]:
         """Search item master by description or item number prefix (MMS200MI.GetItmBasic).
 
