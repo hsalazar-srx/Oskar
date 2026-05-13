@@ -191,8 +191,22 @@ class MovexRestAdapter(ERPAdapter):
         return int(payload.get("data", {}).get("next_seq", 1))
 
     async def get_item(self, item_number: str) -> dict[str, Any]:
-        resp = await self._get(f"/items/{item_number}")
-        return resp.json()
+        """Fetch item master record via MMS200MI.GetItmBasic (generic MI transaction route).
+
+        Returns a dict with keys: STAT, ITNO, ITDS (item name ≤30 chars), ITTY, UNMS.
+        Returns {} when the item is not found (HTTP 404 from movex-rest-api).
+        """
+        try:
+            resp = await self._get(
+                "/MMS200MI/GetItmBasic",
+                params={"CONO": self.cono, "ITNO": item_number.strip()},
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return {}
+            raise
+        payload = resp.json()
+        return payload.get("data", payload)
 
     async def get_item_facility(self, item_number: str, facility: str) -> dict[str, Any]:
         resp = await self._get(f"/items/{item_number}/facility/{facility}")

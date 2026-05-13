@@ -1,13 +1,17 @@
 """
 OSKAR — Part number intelligence endpoints (Sprint 3)
 
-GET /api/v1/parts/alias       Reverse alias lookup: customer P/N → SRX ITNO via MVXCDTA.MITPOP.
-                              Returns full_match / partial_match / no_match states.
-                              Replaces manual MOVEX search (~30 min → seconds). S3-1.
+GET  /api/v1/parts/alias       Reverse alias lookup: customer P/N → SRX ITNO via MVXCDTA.MITPOP.
+                               Returns full_match / partial_match / no_match states.
+                               Replaces manual MOVEX search (~30 min → seconds). S3-1.
 
-GET /api/v1/parts/suggest-pn  Auto-generate the next available Scanfil APAC part number.
-                              Format: LF + {2-char CUNO} + {2-digit commodity} + {4-digit seq}.
-                              'LF' is the company prefix (not a lead-free marker). S3-2.
+GET  /api/v1/parts/suggest-pn  Auto-generate the next available Scanfil APAC part number.
+                               Format: LF + {2-char CUNO} + {2-digit commodity} + {4-digit seq}.
+                               'LF' is the company prefix (not a lead-free marker). S3-2.
+
+POST /api/v1/parts/autofill    Enrich an ecn_items row from DigiKey → Nexar → Movex.
+                               Sets item_name (from supplier description, ≤30 chars) and
+                               unit_of_measure (from MMS200MI.GetItmBasic). S3-3.
 """
 
 from __future__ import annotations
@@ -16,20 +20,30 @@ from typing import Annotated, Literal
 
 import httpx
 import pybreaker
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.adapters.ai.base import sanitize_for_prompt
+from src.adapters.ai.factory import get_ai_provider
 from src.adapters.erp.movex import MovexRestAdapter
+from src.adapters.suppliers.chain import SupplierChain
 from src.auth.dependencies import CurrentUser, get_current_user
+from src.db import get_session
+from src.services.ecn import ECNNotFound, ECNService
 from src.services.ecn.commodity_codes import VALID_PROCUREMENT_GROUPS, VALID_PRODUCT_GROUPS, get_commodity_code
 
 parts_router = APIRouter(prefix="/parts", tags=["parts"])
 
 
-# ── ERP adapter dependency ────────────────────────────────────────────────────
+# ── Dependencies ─────────────────────────────────────────────────────────────
 
 def _get_erp_adapter(request: Request) -> MovexRestAdapter:
     return request.app.state.erp_adapter
+
+
+def _get_supplier_adapters(request: Request) -> list:
+    return getattr(request.app.state, "supplier_adapters", [])
 
 
 # ── Response models ───────────────────────────────────────────────────────────
@@ -228,3 +242,138 @@ async def suggest_pn(
         commodity_code=code,
         sequence=seq,
     )
+
+
+# ── S3-3: Stock code autofill ─────────────────────────────────────────────────
+
+class AutofillRequest(BaseModel):
+    ecn_id: str = Field(..., min_length=1)
+    item_id: str = Field(..., min_length=1, description="OSKAR UUID — ecn_items.id")
+    item_number: str = Field(
+        ..., min_length=1, max_length=15,
+        description="Movex stock code — MITMAS.MMITNO",
+    )
+
+
+class AutofillResponse(BaseModel):
+    id: str
+    ecn_id: str
+    line_number: int
+    is_new_item: bool
+    item_number: str
+    item_name: str | None
+    description_2: str | None
+    drawing_number: str | None
+    drawing_created: bool
+    procurement_group: str | None
+    product_group: str | None
+    unit_of_measure: str | None
+    item_group: str | None
+    customer_alias: str | None
+    effectivity_type: str
+    effectivity_from: str | None
+    created_at: str
+    updated_at: str
+    mpns: list = []
+
+
+def _item_to_response(item: object) -> AutofillResponse:
+    return AutofillResponse(
+        id=str(item.id),
+        ecn_id=str(item.ecn_id),
+        line_number=item.line_number,
+        is_new_item=item.is_new_item,
+        item_number=item.item_number,
+        item_name=item.item_name,
+        description_2=item.description_2,
+        drawing_number=item.drawing_number,
+        drawing_created=item.drawing_created,
+        procurement_group=item.procurement_group,
+        product_group=item.product_group,
+        unit_of_measure=item.unit_of_measure,
+        item_group=item.item_group,
+        customer_alias=item.customer_alias,
+        effectivity_type=item.effectivity_type,
+        effectivity_from=item.effectivity_from,
+        created_at=str(item.created_at),
+        updated_at=str(item.updated_at),
+        mpns=item.mpns,
+    )
+
+
+@parts_router.post(
+    "/autofill",
+    response_model=AutofillResponse,
+    summary="Enrich ecn_items from supplier chain + Movex (S3-3)",
+)
+async def autofill_item(
+    body: AutofillRequest,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    erp: Annotated[MovexRestAdapter, Depends(_get_erp_adapter)],
+    supplier_adapters: Annotated[list, Depends(_get_supplier_adapters)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> AutofillResponse:
+    """Enrich an ecn_items row with description and unit of measure.
+
+    Lookup order:
+      1. Supplier chain (DigiKey → Nexar → stubs) via the item's default MPN.
+         Raw description passed through AIProvider.suggest_description() — smart
+         summarisation when a real AI provider is configured, plain truncation via
+         NoOpAIProvider when not (AI_PROVIDER_CLASS not set).
+      2. MMS200MI.GetItmBasic via item_number → unit_of_measure (UNMS).
+         Skipped for new items (is_new_item=True) — item not yet in Movex.
+
+    Both steps are best-effort: a supplier miss or absent UNMS leaves that field
+    unchanged. item_number is always confirmed regardless.
+    """
+    svc = ECNService(session)
+
+    try:
+        current_item = await svc.get_item(body.ecn_id, body.item_id)
+    except ECNNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+
+    updates: dict = {"item_number": body.item_number}
+
+    # ── Supplier chain → item_name (via AI smart truncation) ─────────────────
+    default_mpn = next((m.mpn for m in current_item.mpns if m.is_default), None)
+    if default_mpn:
+        chain = SupplierChain(session, supplier_adapters)
+        supplier_data = await chain.get_part(default_mpn)
+        raw_description = supplier_data.get("description", "")
+        if raw_description:
+            ai = get_ai_provider()
+            safe = sanitize_for_prompt(raw_description)
+            updates["item_name"] = ai.suggest_description(safe, max_len=30).content
+
+    # ── Movex GetItmBasic → unit_of_measure ───────────────────────────────────
+    if not current_item.is_new_item:
+        try:
+            movex_item = await erp.get_item(body.item_number)
+        except pybreaker.CircuitBreakerError:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="ERP system unavailable (circuit breaker open). Try again shortly.",
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Item {body.item_number!r} not found in Movex.",
+                )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"ERP returned unexpected status {exc.response.status_code}.",
+            )
+        except (httpx.ConnectError, httpx.TimeoutException):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="ERP connection failed after retries.",
+            )
+
+        unms = movex_item.get("UNMS", "").strip()
+        if unms:
+            updates["unit_of_measure"] = unms
+
+    updated = await svc.update_item(body.ecn_id, body.item_id, **updates)
+    return _item_to_response(updated)

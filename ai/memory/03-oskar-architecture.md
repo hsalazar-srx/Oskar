@@ -51,7 +51,7 @@ graph TB
 
   MOVEX[("Movex / M3<br/>─────────────────<br/>ERP — Single Source of Truth<br/>IBM i · DB2 · CONO 100<br/>MVXCOBJ")]:::external
   AD["Active Directory<br/>─────────────────<br/>On-prem LDAP<br/>Engineer authentication"]:::external
-  SUPPLIERS["Supplier APIs<br/>─────────────────<br/>DigiKey (Phase 1 — real)<br/>Mouser · RS · Arrow · Avnet<br/>(Phase 3 — stubs)"]:::external
+  SUPPLIERS["Supplier APIs<br/>─────────────────<br/>DigiKey · Nexar (Phase 1 — real)<br/>Mouser · RS · Arrow · Avnet<br/>(Phase 3 — stubs)"]:::external
 
   E -->|"ECN workflow, BOM, Supplier signals<br/>HTTPS / JWT"| OSKAR
   E -->|"M3 data, invoices, exchange rates<br/>HTTPS / Windows Auth"| SMP
@@ -80,6 +80,7 @@ config:
 graph TB
   subgraph Internet["External"]
     digikey["DigiKey API<br/>api.digikey.com"]
+    nexar["Nexar API<br/>api.nexar.com"]
     suppliers_ext["Supplier APIs x5<br/>(Phase 3 stubs)"]
   end
 
@@ -128,7 +129,8 @@ graph TB
 
   oskar_app -->|"LDAPS bind :636"| AD
   oskar_app -->|"HTTP/JSON"| movexapi_svc
-  oskar_worker -->|"OAuth2 / REST"| digikey
+  oskar_app -->|"OAuth2 / REST (S3-3 autofill)"| digikey
+  oskar_app -->|"OAuth2 / GraphQL (S3-3 autofill)"| nexar
   oskar_worker -.->|"stubs — Phase 3"| suppliers_ext
 
   smportal_be -->|"HTTP/JSON"| movexapi_svc
@@ -340,13 +342,15 @@ graph TB
 
   trigger --> worker
 
-  worker -->|"OAuth2 — Phase 1 real"| dk["DigiKeyAdapter<br/>api.digikey.com"]
+  worker -->|"OAuth2 — Phase 1 real (S3-3)"| dk["DigiKeyAdapter<br/>api.digikey.com"]
+  worker -->|"OAuth2/GraphQL — Phase 1 real (S3-3)"| nx["NexarAdapter<br/>api.nexar.com"]
   worker -.->|"stub — Phase 3"| mo["MouserAdapter<br/>api.mouser.com"]
   worker -.->|"stub — Phase 3"| rs["RSComponentsAdapter<br/>api.rs-online.com"]
   worker -.->|"stub — Phase 3"| ar["ArrowAdapter<br/>api.arrow.com"]
   worker -.->|"stub — Phase 3"| av["AvnetAdapter<br/>api.avnet.com"]
 
   dk --> agg["Result aggregation<br/>(Celery task)"]
+  nx --> agg
   mo --> agg
   rs --> agg
   ar --> agg
@@ -370,7 +374,7 @@ graph TB
 | Task broker | Celery + PostgreSQL (`celery[sqlalchemy]`) | Supplier fan-out (6+ APIs), retry, aggregation — PostgreSQL broker adequate at this volume; Redis eliminated |
 | Auth | JWT + `IdentityProvider` protocol | `LDAPIdentityProvider` (on-prem AD); `EntraIDProvider` stub |
 | Frontend | React / TypeScript — **standalone** | Separate IIS vhost; incompatible auth with SM-Portal |
-| Supplier adapters | `SupplierAdapter` ABC | Per-adapter circuit breaker; 1 real + 5 stubs in Phase 1 |
+| Supplier adapters | `SupplierAdapter` ABC | Per-adapter circuit breaker; 2 real (DigiKey + Nexar) + stubs in Phase 1; `supplier_part_cache` PostgreSQL table (30-day TTL, migration 0010) |
 | ERP adapters | `ERPAdapter` ABC | `MovexRestAdapter` (prod); `IFSAdapter` (stub, v1 only) |
 | Deployment | Docker Compose on Linux VM (VMware, Ubuntu 24.04 LTS) | VMware confirmed — 2 vCPU / 4 GB |
 | Container registry | Harbor (self-hosted on OSKAR VM) — Manal owns | Provisioned by 2026-04-17 |
@@ -1195,7 +1199,7 @@ graph TB
 
   subgraph Adapters["Adapter Layer"]
     erp["ERPAdapter\nMovexRestAdapter · IFSAdapter stub"]:::existing
-    sup["SupplierAdapter\nDigiKey · 5 stubs"]:::existing
+    sup["SupplierAdapter\nDigiKey · Nexar · stubs"]:::existing
     ai["AIProvider\nNoOpAIProvider (Stage 1)\nOllama · Anthropic (Stage 2)"]:::sprint2
   end
 

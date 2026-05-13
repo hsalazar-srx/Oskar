@@ -1,11 +1,15 @@
 """
 OSKAR Supplier Adapter Stubs (PRE-5)
 
-Five stub adapters. Each raises NotImplementedError on real calls.
-Stubs satisfy the SupplierAdapter ABC so the adapter registry and
-asyncio.gather fan-out work in Phase 1 without wiring real APIs.
+Stub adapters for suppliers not yet integrated. Each raises NotImplementedError.
+Stubs satisfy the SupplierAdapter ABC so the Iteration 3 fan-out can be wired
+without changing call sites.
 
-Wire real implementations in Iteration 3 (Supplier Intelligence module).
+Production adapters already implemented (S3-3):
+  - DigiKeyAdapter  (src/adapters/suppliers/digikey.py)
+  - NexarAdapter    (src/adapters/suppliers/nexar.py)
+
+Remaining stubs — wire in Iteration 3 (Supplier Intelligence module).
 """
 
 from __future__ import annotations

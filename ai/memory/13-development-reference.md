@@ -97,13 +97,21 @@ if not result.success:
     await ecn_error_log.record(ecn_id, result.errors)  # ecn_movex_errors table
 ```
 
-### 3. Supplier Adapter with Circuit Breaker
+### 3. Supplier Adapter with Circuit Breaker (S3-3)
+
+Two real adapters in Phase 1 — both use pybreaker + tenacity retry:
+
+- `DigiKeyAdapter` (`src/adapters/suppliers/digikey.py`) — OAuth2 client-credentials, REST
+- `NexarAdapter` (`src/adapters/suppliers/nexar.py`) — OAuth2, GraphQL (api.nexar.com)
+
+`SupplierChain` (`src/adapters/suppliers/chain.py`) runs them serially (DigiKey → Nexar → stubs)
+with a PostgreSQL `supplier_part_cache` table (30-day TTL, migration 0010) in front.
+Adapters are optional at startup: wired in lifespan only when `CLIENT_ID` env var is set.
 
 ```python
 # Uses skill: architecture/resilience-patterns v1.9
 class DigiKeyAdapter(SupplierAdapter):
-    def __init__(self):
-        self.circuit_breaker = CircuitBreaker(failure_threshold=5, recovery_timeout=60)
+    _circuit_breaker = pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60)
 ```
 
 ### 4. New Adapter / Provider Pattern (ADR-010)
