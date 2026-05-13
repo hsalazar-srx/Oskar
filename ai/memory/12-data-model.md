@@ -3,12 +3,12 @@
 > **PROVIDER-AGNOSTIC — Non-Negotiable #12**
 > No tool-specific syntax. Readable by any LLM tool or none.
 
-**Version:** 1.4
-**Date:** 2026-05-01
-**Phase:** Sprint 1 — active implementation
+**Version:** 1.7
+**Date:** 2026-05-13
+**Phase:** Sprint 3 — active implementation
 **Status:** Authoritative — migrations applied via `alembic upgrade head`
 **Reviewed by:** architect + security + manufacturing domain agents (2026-04-15)
-**Last updated:** ER diagram added (§5); status table updated to reflect `ECNStatus` IntEnum; section numbering shifted
+**Last updated:** migrations 0008–0010 added; `supplier_part_cache`, `ecn_routing_operations`, `legacy_ecn_history`, `audit_checkpoints` documented
 
 **Sources:**
 - `ai/memory/03-oskar-architecture.md` §12 — 13-table schema overview
@@ -93,14 +93,19 @@ Tables must be created in this order to satisfy FK constraints:
 13. `ecn_training_acknowledgements`
 14. `ai_suggestions` ← requires ecn_instances (FK) and ecn_items (FK)
 15. `agent_actions` ← requires ecn_instances (FK)
+16. `ecn_routing_operations` ← requires ecn_items (FK) — migration 0009
+17. `legacy.legacy_ecn_history` ← separate schema, no FK — migration 0008
+18. `audit_checkpoints` ← no FK — migration 0008
+19. `supplier_part_cache` ← no FK (standalone cache) — migration 0010
 
 ---
 
 ## 5. Entity-Relationship Diagram
 
 > Generated from the authoritative schema below. FK relationships are exact.
-> `updated_at` trigger columns omitted from diagram for readability; present on `ecn_instances`, `ecn_items`, `movex_outbox`.
-> Version: 1.4 — 2026-05-01 — ai_suggestions, agent_actions tables added; ecn_mpns extended (migration 0007).
+> `updated_at` trigger columns omitted from diagram for readability; present on `ecn_instances`, `ecn_items`, `movex_outbox`, `ecn_routing_operations`.
+> `legacy.legacy_ecn_history` and `audit_checkpoints` (migration 0008) omitted — no FK relationships to ECN tables.
+> Version: 1.7 — 2026-05-13 — ecn_routing_operations (0009), supplier_part_cache (0010) added.
 
 ```mermaid
 ---
@@ -369,6 +374,31 @@ erDiagram
         TIMESTAMPTZ created_at
     }
 
+    ecn_routing_operations {
+        UUID        id                    PK
+        UUID        ecn_item_id           FK
+        INTEGER     operation_number
+        VARCHAR30   operation_description
+        VARCHAR8    work_centre
+        NUMERIC103  run_time
+        NUMERIC103  setup_time
+        VARCHAR10   change_type
+        JSONB       movex_snapshot
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
+
+    supplier_part_cache {
+        TEXT        mpn            PK
+        TEXT        supplier_id
+        TEXT        description
+        TEXT        manufacturer
+        TEXT        category
+        TEXT        lifecycle
+        JSONB       raw_json
+        TIMESTAMPTZ cached_at
+    }
+
     %% ── Relationships ───────────────────────────────────────────────────
     %%   Left side = parent (one), right side = child (many)
 
@@ -387,6 +417,7 @@ erDiagram
     ecn_items               ||--o{ ecn_mpns                     : "has MPN aliases"
     ecn_items               ||--o{ ecn_bom_changes              : "has BOM changes"
     ecn_items               |o--o{ movex_outbox                 : "targeted by outbox (nullable)"
+    ecn_items               ||--o{ ecn_routing_operations       : "has routing op deltas"
 
     movex_outbox            ||--o{ ecn_movex_errors             : "logged in errors"
 ```
@@ -404,9 +435,11 @@ erDiagram
 | `ecn_items` → `ecn_mpns` | 1:N | Unique on (ecn_item_id, mpn); partial unique on ecn_item_id WHERE is_default=TRUE |
 | `ecn_items` → `ecn_bom_changes` | 1:N | No duplicate constraint — multiple change types per component allowed |
 | `ecn_items` → `movex_outbox` | 0..1:N | `ecn_item_id` nullable — header-level ops have NULL |
+| `ecn_items` → `ecn_routing_operations` | 1:N | Unique on (ecn_item_id, operation_number) — one delta row per op per item |
 | `movex_outbox` → `ecn_movex_errors` | 1:N | One error row per retry attempt |
 | `system_role_users` | standalone | Unique on (facility, role_id, username) — no FK into ecn_instances |
 | `ecn_step_conditions` | standalone | Unique on (facility, stage, role_id, condition_field) — no FK into ecn_instances |
+| `supplier_part_cache` | standalone | Keyed by MPN; no FK — shared cache across all ECNs; 30-day TTL enforced in application layer |
 
 ### Tables with No FK to ecn_instances
 
@@ -1128,10 +1161,83 @@ GRANT SELECT, INSERT         ON ecn_step_conditions TO oskar_app;
 GRANT SELECT, INSERT, UPDATE ON ecn_training_acknowledgements TO oskar_app;
 GRANT SELECT, INSERT, UPDATE ON jti_blocklist                TO oskar_app;
 GRANT SELECT, INSERT, UPDATE ON refresh_tokens               TO oskar_app;
+GRANT SELECT, INSERT, UPDATE ON ecn_routing_operations       TO oskar_app;
+GRANT SELECT, INSERT, UPDATE ON supplier_part_cache          TO oskar_app;
 
 -- oskar_readonly: SELECT only (for reporting)
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO oskar_readonly;
 ```
+
+---
+
+## 11b. Sprint 2–3 Tables (migrations 0008–0010)
+
+### `ecn_routing_operations` (migration 0009 — S2-19)
+
+Stores engineer-authored routing operation deltas for an ECN item. At DC_APPROVED the outbox
+worker compares these rows against the live MPDOPE snapshot and issues `PDS002MI.AddOperation`
+or `PDS002MI.UpdateOperation` MI calls.
+
+```sql
+CREATE TABLE ecn_routing_operations (
+    id                   UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    ecn_item_id          UUID         NOT NULL REFERENCES ecn_items(id) ON DELETE CASCADE,
+    operation_number     INTEGER      NOT NULL,          -- POOPNO — Movex op sequence
+    operation_description VARCHAR(30) NOT NULL,          -- POOPDS — 30-char Movex hard limit
+    work_centre          VARCHAR(8)   NOT NULL,           -- POPLGR
+    run_time             NUMERIC(10,3) NOT NULL,          -- POPITI — minutes
+    setup_time           NUMERIC(10,3),                   -- POSETI — minutes, nullable
+    change_type          VARCHAR(10)  NOT NULL,           -- 'ADD' | 'UPDATE'
+    movex_snapshot       JSONB,                           -- live MPDOPE row at pre-flight read
+    created_at           TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    updated_at           TIMESTAMPTZ  NOT NULL DEFAULT now(),
+
+    CONSTRAINT uq_routing_op UNIQUE (ecn_item_id, operation_number),
+    CONSTRAINT chk_routing_change_type CHECK (change_type IN ('ADD', 'UPDATE'))
+);
+```
+
+---
+
+### `supplier_part_cache` (migration 0010 — S3-3)
+
+Local PostgreSQL cache for supplier API responses. Keyed by MPN. Eliminates redundant API calls
+across ECNs — a 30-day cache hit costs zero API calls regardless of which supplier originally
+found the part. Used by `SupplierChain` (DigiKey → Nexar → stubs).
+
+TTL enforced in the application layer via `SUPPLIER_CACHE_TTL_DAYS` env var (default: 30 days).
+
+```sql
+CREATE TABLE supplier_part_cache (
+    mpn         TEXT         PRIMARY KEY,           -- manufacturer part number (lookup key)
+    supplier_id TEXT         NOT NULL,               -- 'digikey' | 'nexar' | future suppliers
+    description TEXT         NOT NULL,               -- product description → ecn_items.item_name
+    manufacturer TEXT        NOT NULL DEFAULT '',
+    category    TEXT         NOT NULL DEFAULT '',
+    lifecycle   TEXT         NOT NULL DEFAULT '',
+    raw_json    JSONB,                               -- full API response retained for Iteration 3
+    cached_at   TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_supplier_part_cache_cached_at ON supplier_part_cache(cached_at);
+```
+
+**Upsert pattern:** `ON CONFLICT (mpn) DO UPDATE SET ...` — resets `cached_at` on refresh so
+TTL is always relative to the most recent successful lookup.
+
+**Grants:** `oskar_app` requires SELECT, INSERT, UPDATE. `oskar_readonly` SELECT only.
+
+---
+
+### `legacy.legacy_ecn_history` + `audit_checkpoints` (migration 0008 — ADR-004)
+
+`legacy.legacy_ecn_history` — separate schema (`CREATE SCHEMA legacy`). Stargile audit records
+imported at go-live via admin script. `oskar_app`: SELECT only. Explicitly excluded from the
+OSKAR SHA-256 chain — no `sha256_self`/`sha256_prev` columns.
+
+`audit_checkpoints` — stores daily manifest hashes computed by the Celery checkpoint task.
+One row per daily run: `checkpoint_at`, `ecn_count`, `manifest_hash` (SHA-256 of all ECN tail
+hashes in ECN-number order). `oskar_worker`: INSERT + SELECT.
 
 ---
 
@@ -1143,6 +1249,12 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO oskar_readonly;
 | `0002_seed_step_conditions.py` | 7 seed rows in `ecn_step_conditions` for facility `'L'` |
 | `0003_rls_policies.py` | RLS + REVOKE on `ecn_role_assignments` and `ecn_transition_history` |
 | `0004_auth_tables.py` | `jti_blocklist` + `refresh_tokens` tables; indexes; grants (ADR-007) |
+| `0005_movex_outbox_permissions.py` | REVOKE INSERT on `movex_outbox` for `oskar_worker`; RLS on `ecn_instances` (ADR-005 write gate) |
+| `0006_ecn_items_columns_dc_single_gate.py` | `ecn_items.item_group VARCHAR(3)` + `ecn_items.customer_alias VARCHAR(30)`; `ecn_instances` CHECK constraint updated for ADR-009 (DC_APPROVED=25) |
+| `0007_ai_agent_schema_mpn_extended.py` | `ai_suggestions`, `agent_actions` tables; `ecn_mpns` extended columns (`lifecycle`, `eol_date`, `lead_time_weeks`, `msl_level`, `packaging_type`, `do_not_buy`, `alt_mpn`); pg_notify trigger on `ecn_instances` |
+| `0008_legacy_ecn_history_and_audit_checkpoints.py` | `legacy` schema + `legacy.legacy_ecn_history` (Stargile import target); `audit_checkpoints` table (ADR-004 daily SHA-256 manifest) |
+| `0009_ecn_routing_operations.py` | `ecn_routing_operations` table (S2-19); UQ on (ecn_item_id, operation_number) |
+| `0010_supplier_part_cache.py` | `supplier_part_cache` table (S3-3); PK on mpn; index on `cached_at` for TTL expiry queries |
 
 - **Tool:** Alembic with `asyncpg`
 - **Convention:** `NNNN_snake_case_description.py`
