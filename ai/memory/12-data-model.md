@@ -3,12 +3,12 @@
 > **PROVIDER-AGNOSTIC — Non-Negotiable #12**
 > No tool-specific syntax. Readable by any LLM tool or none.
 
-**Version:** 1.7
-**Date:** 2026-05-13
+**Version:** 1.8
+**Date:** 2026-05-14
 **Phase:** Sprint 3 — active implementation
 **Status:** Authoritative — migrations applied via `alembic upgrade head`
 **Reviewed by:** architect + security + manufacturing domain agents (2026-04-15)
-**Last updated:** migrations 0008–0010 added; `supplier_part_cache`, `ecn_routing_operations`, `legacy_ecn_history`, `audit_checkpoints` documented
+**Last updated:** migration 0011 — `ecn_mpns.manufacturer` widened to VARCHAR(60), `ecn_mpns.notes` TEXT added, `ecn_items.customer_part_number` VARCHAR(50) added
 
 **Sources:**
 - `ai/memory/03-oskar-architecture.md` §12 — 13-table schema overview
@@ -105,7 +105,7 @@ Tables must be created in this order to satisfy FK constraints:
 > Generated from the authoritative schema below. FK relationships are exact.
 > `updated_at` trigger columns omitted from diagram for readability; present on `ecn_instances`, `ecn_items`, `movex_outbox`, `ecn_routing_operations`.
 > `legacy.legacy_ecn_history` and `audit_checkpoints` (migration 0008) omitted — no FK relationships to ECN tables.
-> Version: 1.7 — 2026-05-13 — ecn_routing_operations (0009), supplier_part_cache (0010) added.
+> Version: 1.8 — 2026-05-14 — migration 0011: ecn_mpns.manufacturer widened, ecn_mpns.notes added, ecn_items.customer_part_number added.
 
 ```mermaid
 ---
@@ -263,6 +263,7 @@ erDiagram
         DECIMAL176  wapc
         BOOLEAN     alias_written
         VARCHAR30   customer_alias
+        VARCHAR50   customer_part_number
         VARCHAR10   effectivity_type
         DATE        effectivity_from
         JSONB       questionnaire_data
@@ -274,7 +275,7 @@ erDiagram
         UUID        id              PK
         UUID        ecn_item_id     FK
         VARCHAR30   mpn
-        VARCHAR30   manufacturer
+        VARCHAR60   manufacturer
         BOOLEAN     is_default
         BOOLEAN     alias_written
         SMALLINT    msl_level
@@ -283,8 +284,9 @@ erDiagram
         SMALLINT    lead_time_weeks
         VARCHAR50   packaging_type
         BOOLEAN     do_not_buy
-        TIMESTAMPTZ supplier_data_at
         VARCHAR100  alt_mpn
+        TIMESTAMPTZ supplier_data_at
+        TEXT        notes
         TIMESTAMPTZ created_at
     }
 
@@ -849,6 +851,10 @@ CREATE TABLE ecn_items (
     -- Movex write tracking
     alias_written        BOOLEAN     NOT NULL DEFAULT FALSE,
 
+    -- Customer reference fields
+    customer_alias       VARCHAR(30),            -- Written to Movex via MMS025MI.AddAlias — do not conflate with customer_part_number
+    customer_part_number VARCHAR(50),            -- Customer's internal stock code (e.g. Compumedics CMP PN, Axxin PN); migration 0011
+
     -- Effectivity — ISO 13485 mandatory (ai/memory/06 §5)
     effectivity_type     VARCHAR(10) NOT NULL,   -- 'DATE' | 'ECN' | 'IMMEDIATE'
     effectivity_from     DATE,                   -- Required when effectivity_type='DATE'
@@ -887,13 +893,27 @@ MPN aliases. Multiple MPNs per ECN item. `ecn_id` removed — join through `ecn_
 
 ```sql
 CREATE TABLE ecn_mpns (
-    id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    ecn_item_id   UUID        NOT NULL REFERENCES ecn_items(id) ON DELETE RESTRICT,
-    mpn           VARCHAR(30) NOT NULL,       -- Manufacturer part number (CMZMPNN)
-    manufacturer  VARCHAR(30),               -- Manufacturer name (CMZMFNM)
-    is_default    BOOLEAN     NOT NULL DEFAULT FALSE,  -- CMZDEFFL equivalent; surfaced in UI
-    alias_written BOOLEAN     NOT NULL DEFAULT FALSE,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    ecn_item_id      UUID        NOT NULL REFERENCES ecn_items(id) ON DELETE RESTRICT,
+    mpn              VARCHAR(30) NOT NULL,       -- Manufacturer part number (CMZMPNN)
+    manufacturer     VARCHAR(60),               -- Manufacturer name (CMZMFNM); widened 30→60 in migration 0011
+    is_default       BOOLEAN     NOT NULL DEFAULT FALSE,  -- CMZDEFFL equivalent; surfaced in UI
+    alias_written    BOOLEAN     NOT NULL DEFAULT FALSE,
+
+    -- Extended fields — migration 0007
+    msl_level        SMALLINT,                  -- Moisture Sensitivity Level 1–6
+    lifecycle        VARCHAR(20),               -- 'active' | 'eol' | 'nrnd'
+    eol_date         DATE,
+    lead_time_weeks  SMALLINT,
+    packaging_type   VARCHAR(50),               -- 'tape_reel' | 'tray' | 'tube' | 'cut_tape'
+    do_not_buy       BOOLEAN     NOT NULL DEFAULT FALSE,
+    alt_mpn          VARCHAR(100),              -- Alternate part number string (see notes for rationale)
+    supplier_data_at TIMESTAMPTZ,               -- When supplier data was last fetched
+
+    -- ISO 13485 traceability — migration 0011
+    notes            TEXT,                      -- Human rationale for alt_mpn usage (e.g. "Use MPN2 for AX8 Core only — NRND")
+
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- No duplicate MPNs per item
@@ -1255,6 +1275,7 @@ hashes in ECN-number order). `oskar_worker`: INSERT + SELECT.
 | `0008_legacy_ecn_history_and_audit_checkpoints.py` | `legacy` schema + `legacy.legacy_ecn_history` (Stargile import target); `audit_checkpoints` table (ADR-004 daily SHA-256 manifest) |
 | `0009_ecn_routing_operations.py` | `ecn_routing_operations` table (S2-19); UQ on (ecn_item_id, operation_number) |
 | `0010_supplier_part_cache.py` | `supplier_part_cache` table (S3-3); PK on mpn; index on `cached_at` for TTL expiry queries |
+| `0011_mpn_manufacturer_width_notes_customer_part_number.py` | `ecn_mpns.manufacturer` widened VARCHAR(30)→VARCHAR(60); `ecn_mpns.notes TEXT` added (ISO 13485 alt-MPN rationale); `ecn_items.customer_part_number VARCHAR(50)` added (customer's internal stock code, distinct from `customer_alias`) |
 
 - **Tool:** Alembic with `asyncpg`
 - **Convention:** `NNNN_snake_case_description.py`

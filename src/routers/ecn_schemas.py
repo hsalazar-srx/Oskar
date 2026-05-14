@@ -168,6 +168,7 @@ class CreateItemBody(BaseModel):
     unit_of_measure: str | None = Field(None, max_length=3)
     item_group: str | None = Field(None, max_length=3)
     customer_alias: str | None = Field(None, max_length=30)
+    customer_part_number: str | None = Field(None, max_length=50)
     effectivity_type: str = Field(..., description="DATE | ECN | IMMEDIATE")
     effectivity_from: str | None = None
 
@@ -188,6 +189,7 @@ class UpdateItemBody(BaseModel):
     unit_of_measure: str | None = Field(None, max_length=3)
     item_group: str | None = Field(None, max_length=3)
     customer_alias: str | None = Field(None, max_length=30)
+    customer_part_number: str | None = Field(None, max_length=50)
     effectivity_type: str | None = None
     effectivity_from: str | None = None
     is_new_item: bool | None = None
@@ -202,7 +204,7 @@ class UpdateItemBody(BaseModel):
 
 class CreateMPNBody(BaseModel):
     mpn: str = Field(..., min_length=1, max_length=30)
-    manufacturer: str | None = Field(None, max_length=30)
+    manufacturer: str | None = Field(None, max_length=60)
     is_default: bool = False
     msl_level: int | None = Field(None, ge=1, le=6)
     lifecycle: str | None = None
@@ -211,6 +213,7 @@ class CreateMPNBody(BaseModel):
     packaging_type: str | None = None
     do_not_buy: bool = False
     alt_mpn: str | None = Field(None, max_length=100)
+    notes: str | None = None
 
     @field_validator("lifecycle")
     @classmethod
@@ -229,7 +232,7 @@ class CreateMPNBody(BaseModel):
 
 class UpdateMPNBody(BaseModel):
     mpn: str | None = Field(None, min_length=1, max_length=30)
-    manufacturer: str | None = Field(None, max_length=30)
+    manufacturer: str | None = Field(None, max_length=60)
     is_default: bool | None = None
     msl_level: int | None = Field(None, ge=1, le=6)
     lifecycle: str | None = None
@@ -238,6 +241,7 @@ class UpdateMPNBody(BaseModel):
     packaging_type: str | None = None
     do_not_buy: bool | None = None
     alt_mpn: str | None = Field(None, max_length=100)
+    notes: str | None = None
 
     @field_validator("lifecycle")
     @classmethod
@@ -371,6 +375,7 @@ class MPNOut(BaseModel):
     packaging_type: str | None
     do_not_buy: bool
     alt_mpn: str | None
+    notes: str | None
     supplier_data_at: datetime | None
     created_at: datetime
 
@@ -392,6 +397,7 @@ class ECNItemOut(BaseModel):
     unit_of_measure: str | None
     item_group: str | None
     customer_alias: str | None
+    customer_part_number: str | None
     effectivity_type: str
     effectivity_from: str | None
     created_at: datetime
@@ -510,6 +516,7 @@ def mpn_out(m: ECNMPNDetail) -> MPNOut:
         packaging_type=m.packaging_type,
         do_not_buy=m.do_not_buy,
         alt_mpn=m.alt_mpn,
+        notes=m.notes,
         supplier_data_at=m.supplier_data_at,
         created_at=m.created_at,
     )
@@ -531,6 +538,7 @@ def item_out(i: ECNItemDetail) -> ECNItemOut:
         unit_of_measure=i.unit_of_measure,
         item_group=i.item_group,
         customer_alias=i.customer_alias,
+        customer_part_number=i.customer_part_number,
         effectivity_type=i.effectivity_type,
         effectivity_from=i.effectivity_from,
         created_at=i.created_at,

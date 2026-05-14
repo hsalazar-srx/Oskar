@@ -99,7 +99,7 @@ class ApprovalStep:
 
 @dataclass
 class ECNMPNDetail:
-    """One row from ecn_mpns, including extended fields from migration 0007."""
+    """One row from ecn_mpns, including extended fields from migrations 0007 and 0011."""
     id: str
     ecn_item_id: str
     mpn: str
@@ -113,6 +113,7 @@ class ECNMPNDetail:
     packaging_type: str | None
     do_not_buy: bool
     alt_mpn: str | None
+    notes: str | None
     supplier_data_at: datetime | None
     created_at: datetime
 
@@ -134,6 +135,7 @@ class ECNItemDetail:
     unit_of_measure: str | None
     item_group: str | None
     customer_alias: str | None
+    customer_part_number: str | None
     effectivity_type: str
     effectivity_from: str | None
     created_at: datetime

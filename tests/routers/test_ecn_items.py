@@ -21,6 +21,10 @@ MPN extended fields (migration 0007, Nick 2026-04-29):
   alt_mpn          VARCHAR(100)
   supplier_data_at TIMESTAMPTZ
 
+MPN + item fields (migration 0011, 2026-05-14):
+  ecn_mpns.notes              TEXT (nullable) — ISO 13485 traceability for alt-MPN usage rationale
+  ecn_items.customer_part_number  VARCHAR(50) (nullable) — customer's internal stock code, distinct from customer_alias
+
 Strategy:
 - FastAPI TestClient against real app.
 - ECNService methods patched at the method level — no DB.
@@ -75,6 +79,7 @@ _MPN_DETAIL = ECNMPNDetail(
     packaging_type="tape_reel",
     do_not_buy=False,
     alt_mpn=None,
+    notes=None,
     supplier_data_at=None,
     created_at=_NOW,
 )
@@ -94,6 +99,7 @@ _ITEM_DETAIL = ECNItemDetail(
     unit_of_measure="PCE",
     item_group="ELE",
     customer_alias="ACME-001",
+    customer_part_number=None,
     effectivity_type="IMMEDIATE",
     effectivity_from=None,
     created_at=_NOW,
@@ -264,6 +270,43 @@ class TestGetECNItem:
         assert mpn["do_not_buy"] is False
         assert mpn["eol_date"] == "2029-12-31"
 
+    def test_item_exposes_customer_part_number(self):
+        detail = dataclasses.replace(_ITEM_DETAIL, customer_part_number="CMP-PN-001")
+        with patch.object(ECNService, "get_item", new_callable=AsyncMock) as mock:
+            mock.return_value = detail
+            client = _make_client(_ENGINEER)
+            resp = client.get(f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}")
+        assert resp.json()["customer_part_number"] == "CMP-PN-001"
+
+    def test_item_customer_part_number_null_when_not_set(self):
+        with patch.object(ECNService, "get_item", new_callable=AsyncMock) as mock:
+            mock.return_value = _ITEM_DETAIL
+            client = _make_client(_ENGINEER)
+            resp = client.get(f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}")
+        assert resp.json()["customer_part_number"] is None
+
+    def test_mpn_exposes_notes_field(self):
+        mpn_with_notes = dataclasses.replace(
+            _MPN_DETAIL,
+            alt_mpn="PN-ACME-002",
+            notes="Use PN-ACME-002 for AX8 Core only — NRND",
+        )
+        detail = dataclasses.replace(_ITEM_DETAIL, mpns=[mpn_with_notes])
+        with patch.object(ECNService, "get_item", new_callable=AsyncMock) as mock:
+            mock.return_value = detail
+            client = _make_client(_ENGINEER)
+            resp = client.get(f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}")
+        mpn = resp.json()["mpns"][0]
+        assert mpn["notes"] == "Use PN-ACME-002 for AX8 Core only — NRND"
+        assert mpn["alt_mpn"] == "PN-ACME-002"
+
+    def test_mpn_notes_null_when_not_set(self):
+        with patch.object(ECNService, "get_item", new_callable=AsyncMock) as mock:
+            mock.return_value = _ITEM_DETAIL
+            client = _make_client(_ENGINEER)
+            resp = client.get(f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}")
+        assert resp.json()["mpns"][0]["notes"] is None
+
 
 # ── PATCH /ecn/{ecn_id}/items/{item_id} ──────────────────────────────────────
 
@@ -366,7 +409,28 @@ class TestCreateMPN:
         assert "packaging_type" in body
         assert "do_not_buy" in body
         assert "alt_mpn" in body
+        assert "notes" in body
         assert "supplier_data_at" in body
+
+    def test_create_with_notes(self):
+        mpn_with_notes = dataclasses.replace(
+            _MPN_DETAIL,
+            alt_mpn="PN-ACME-ALT",
+            notes="Use alt only for Rev B boards",
+        )
+        with patch.object(ECNService, "create_mpn", new_callable=AsyncMock) as mock:
+            mock.return_value = mpn_with_notes
+            client = _make_client(_ENGINEER)
+            resp = client.post(
+                f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/mpns",
+                json={
+                    "mpn": "PN-ACME-001",
+                    "alt_mpn": "PN-ACME-ALT",
+                    "notes": "Use alt only for Rev B boards",
+                },
+            )
+        assert resp.status_code == 201
+        assert resp.json()["notes"] == "Use alt only for Rev B boards"
 
     def test_missing_mpn_field_returns_422(self):
         client = _make_client(_ENGINEER)
@@ -470,6 +534,34 @@ class TestUpdateMPN:
             )
         assert resp.status_code == 200
         assert resp.json()["alt_mpn"] == "PN-ACME-002"
+
+    def test_patch_notes(self):
+        updated = dataclasses.replace(
+            _MPN_DETAIL,
+            alt_mpn="PN-ACME-002",
+            notes="NRND — use alt for new designs only",
+        )
+        with patch.object(ECNService, "update_mpn", new_callable=AsyncMock) as mock:
+            mock.return_value = updated
+            client = _make_client(_ENGINEER)
+            resp = client.patch(
+                f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/mpns/{_MPN_ID}",
+                json={"notes": "NRND — use alt for new designs only"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["notes"] == "NRND — use alt for new designs only"
+
+    def test_patch_customer_part_number_on_item(self):
+        updated = dataclasses.replace(_ITEM_DETAIL, customer_part_number="CMP-8509G-001")
+        with patch.object(ECNService, "update_item", new_callable=AsyncMock) as mock:
+            mock.return_value = updated
+            client = _make_client(_ENGINEER)
+            resp = client.patch(
+                f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}",
+                json={"customer_part_number": "CMP-8509G-001"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["customer_part_number"] == "CMP-8509G-001"
 
     def test_patch_lead_time_weeks(self):
         updated = dataclasses.replace(_MPN_DETAIL, lead_time_weeks=12)

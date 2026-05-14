@@ -44,8 +44,9 @@ class ECNItemsMixin:
             packaging_type=row[10],
             do_not_buy=bool(row[11]),
             alt_mpn=row[12],
-            supplier_data_at=row[13],
-            created_at=row[14],
+            notes=row[13],
+            supplier_data_at=row[14],
+            created_at=row[15],
         )
 
     def _row_to_item(self, row: Any, mpns: list[ECNMPNDetail]) -> ECNItemDetail:
@@ -67,8 +68,9 @@ class ECNItemsMixin:
             customer_alias=row[13],
             effectivity_type=row[15],
             effectivity_from=eff_raw.isoformat() if eff_raw else None,
-            created_at=row[16],
-            updated_at=row[17],
+            customer_part_number=row[16],
+            created_at=row[17],
+            updated_at=row[18],
             mpns=mpns,
         )
 
@@ -79,7 +81,7 @@ class ECNItemsMixin:
             sa.text(
                 "SELECT id, ecn_item_id, mpn, manufacturer, is_default, alias_written, "
                 "msl_level, lifecycle, lead_time_weeks, eol_date, packaging_type, "
-                "do_not_buy, alt_mpn, supplier_data_at, created_at "
+                "do_not_buy, alt_mpn, notes, supplier_data_at, created_at "
                 "FROM ecn_mpns WHERE ecn_item_id = :item_id ORDER BY is_default DESC, created_at"
             ),
             {"item_id": item_id},
@@ -91,7 +93,7 @@ class ECNItemsMixin:
             sa.text(
                 "SELECT id, ecn_item_id, mpn, manufacturer, is_default, alias_written, "
                 "msl_level, lifecycle, lead_time_weeks, eol_date, packaging_type, "
-                "do_not_buy, alt_mpn, supplier_data_at, created_at "
+                "do_not_buy, alt_mpn, notes, supplier_data_at, created_at "
                 "FROM ecn_mpns WHERE id = :mpn_id"
             ),
             {"mpn_id": mpn_id},
@@ -118,6 +120,7 @@ class ECNItemsMixin:
         unit_of_measure: str | None = None,
         item_group: str | None = None,
         customer_alias: str | None = None,
+        customer_part_number: str | None = None,
         effectivity_type: str = "IMMEDIATE",
         effectivity_from: str | None = None,
     ) -> ECNItemDetail:
@@ -134,10 +137,12 @@ class ECNItemsMixin:
                 "INSERT INTO ecn_items "
                 "(id, ecn_id, line_number, is_new_item, item_number, item_name, "
                 "description_2, drawing_number, procurement_group, product_group, "
-                "unit_of_measure, item_group, customer_alias, effectivity_type, effectivity_from) "
+                "unit_of_measure, item_group, customer_alias, customer_part_number, "
+                "effectivity_type, effectivity_from) "
                 "VALUES (:id, :ecn_id, :line_number, :is_new_item, :item_number, :item_name, "
                 ":description_2, :drawing_number, :procurement_group, :product_group, "
-                ":unit_of_measure, :item_group, :customer_alias, :effectivity_type, :effectivity_from)"
+                ":unit_of_measure, :item_group, :customer_alias, :customer_part_number, "
+                ":effectivity_type, :effectivity_from)"
             ),
             {
                 "id": item_id, "ecn_id": ecn_id, "line_number": line_number,
@@ -146,6 +151,7 @@ class ECNItemsMixin:
                 "drawing_number": drawing_number, "procurement_group": procurement_group,
                 "product_group": product_group, "unit_of_measure": unit_of_measure,
                 "item_group": item_group, "customer_alias": customer_alias,
+                "customer_part_number": customer_part_number,
                 "effectivity_type": effectivity_type, "effectivity_from": effectivity_from,
             },
         )
@@ -157,7 +163,7 @@ class ECNItemsMixin:
                 "SELECT id, ecn_id, line_number, is_new_item, item_number, item_name, "
                 "description_2, drawing_number, drawing_created, procurement_group, product_group, "
                 "unit_of_measure, item_group, customer_alias, effectivity_from, effectivity_type, "
-                "created_at, updated_at "
+                "customer_part_number, created_at, updated_at "
                 "FROM ecn_items WHERE ecn_id = :ecn_id ORDER BY line_number"
             ),
             {"ecn_id": ecn_id},
@@ -174,7 +180,7 @@ class ECNItemsMixin:
                 "SELECT id, ecn_id, line_number, is_new_item, item_number, item_name, "
                 "description_2, drawing_number, drawing_created, procurement_group, product_group, "
                 "unit_of_measure, item_group, customer_alias, effectivity_from, effectivity_type, "
-                "created_at, updated_at "
+                "customer_part_number, created_at, updated_at "
                 "FROM ecn_items WHERE id = :item_id AND ecn_id = :ecn_id"
             ),
             {"item_id": item_id, "ecn_id": ecn_id},
@@ -190,7 +196,7 @@ class ECNItemsMixin:
         allowed = {
             "item_name", "description_2", "drawing_number", "procurement_group",
             "product_group", "unit_of_measure", "item_group", "customer_alias",
-            "effectivity_type", "effectivity_from", "is_new_item",
+            "customer_part_number", "effectivity_type", "effectivity_from", "is_new_item",
         }
         updates = {k: v for k, v in fields.items() if k in allowed}
         if updates:
@@ -239,6 +245,7 @@ class ECNItemsMixin:
         packaging_type: str | None = None,
         do_not_buy: bool = False,
         alt_mpn: str | None = None,
+        notes: str | None = None,
     ) -> ECNMPNDetail:
         item_row = await self._session.execute(
             sa.text("SELECT id FROM ecn_items WHERE id = :item_id AND ecn_id = :ecn_id"),
@@ -252,16 +259,17 @@ class ECNItemsMixin:
             sa.text(
                 "INSERT INTO ecn_mpns "
                 "(id, ecn_item_id, mpn, manufacturer, is_default, msl_level, lifecycle, "
-                "eol_date, lead_time_weeks, packaging_type, do_not_buy, alt_mpn) "
+                "eol_date, lead_time_weeks, packaging_type, do_not_buy, alt_mpn, notes) "
                 "VALUES (:id, :item_id, :mpn, :manufacturer, :is_default, :msl_level, "
-                ":lifecycle, :eol_date, :lead_time_weeks, :packaging_type, :do_not_buy, :alt_mpn)"
+                ":lifecycle, :eol_date, :lead_time_weeks, :packaging_type, :do_not_buy, "
+                ":alt_mpn, :notes)"
             ),
             {
                 "id": mpn_id, "item_id": item_id, "mpn": mpn,
                 "manufacturer": manufacturer, "is_default": is_default,
                 "msl_level": msl_level, "lifecycle": lifecycle, "eol_date": eol_date,
                 "lead_time_weeks": lead_time_weeks, "packaging_type": packaging_type,
-                "do_not_buy": do_not_buy, "alt_mpn": alt_mpn,
+                "do_not_buy": do_not_buy, "alt_mpn": alt_mpn, "notes": notes,
             },
         )
         return await self._get_mpn(mpn_id)
@@ -279,7 +287,7 @@ class ECNItemsMixin:
             raise ECNNotFound(mpn_id)
         allowed = {
             "mpn", "manufacturer", "is_default", "msl_level", "lifecycle",
-            "eol_date", "lead_time_weeks", "packaging_type", "do_not_buy", "alt_mpn",
+            "eol_date", "lead_time_weeks", "packaging_type", "do_not_buy", "alt_mpn", "notes",
         }
         updates = {k: v for k, v in fields.items() if k in allowed}
         if updates:
