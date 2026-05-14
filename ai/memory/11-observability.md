@@ -130,7 +130,7 @@ Already implemented: `GET /api/v1/health` returns `200 OK`.
 | Endpoint | Checks | Used by |
 |----------|--------|---------|
 | `GET /api/v1/health/live` | Service process is running | Docker `HEALTHCHECK` |
-| `GET /api/v1/health/ready` | PostgreSQL reachable + Redis reachable + LDAP reachable | IIS reverse proxy (before routing traffic) |
+| `GET /api/v1/health/ready` | PostgreSQL reachable + LDAP reachable | IIS reverse proxy (before routing traffic) |
 
 **Ready endpoint response (JSON):**
 ```json
@@ -138,7 +138,6 @@ Already implemented: `GET /api/v1/health` returns `200 OK`.
   "status": "ready",
   "checks": {
     "postgres": "ok",
-    "redis": "ok",
     "ldap": "ok"
   }
 }

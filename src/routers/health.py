@@ -2,7 +2,7 @@
 # Implements: ai/memory/11-observability.md §6
 #
 # GET /api/v1/health/live   — liveness: process is running (Docker HEALTHCHECK)
-# GET /api/v1/health/ready  — readiness: PG + Redis + LDAP reachable (IIS routing guard)
+# GET /api/v1/health/ready  — readiness: PG + LDAP reachable (IIS routing guard)
 #
 # Registered in src/routers/__init__.py on v1_router.
 
@@ -32,7 +32,7 @@ async def liveness() -> dict:
 async def readiness() -> JSONResponse:
     """Readiness probe — confirms all dependencies are reachable.
 
-    Checks: PostgreSQL, Redis, LDAP.
+    Checks: PostgreSQL, LDAP.
     Returns 200 {"status": "ready"} when all pass.
     Returns 503 {"status": "degraded"} with failing check identified.
 
@@ -59,24 +59,6 @@ async def readiness() -> JSONResponse:
     except Exception as exc:
         log.warning("health_check_postgres_failed", error=str(exc))
         checks["postgres"] = f"error: {type(exc).__name__}"
-        failed = True
-
-    # ── Redis ─────────────────────────────────────────────────────────────────
-    try:
-        import redis.asyncio as aioredis
-
-        r = aioredis.Redis(
-            host=os.getenv("REDIS_HOST", "localhost"),
-            port=int(os.getenv("REDIS_PORT", "6379")),
-            password=os.getenv("REDIS_PASSWORD") or None,
-            socket_connect_timeout=3,
-        )
-        await r.ping()
-        await r.aclose()
-        checks["redis"] = "ok"
-    except Exception as exc:
-        log.warning("health_check_redis_failed", error=str(exc))
-        checks["redis"] = f"error: {type(exc).__name__}"
         failed = True
 
     # ── LDAP ──────────────────────────────────────────────────────────────────

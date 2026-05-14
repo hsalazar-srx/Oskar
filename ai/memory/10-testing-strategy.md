@@ -6,7 +6,7 @@
 **Version:** 1.1
 **Date:** 2026-05-04
 **Phase:** Phase 1 Track E deliverable
-**Stack:** Python 3.12, FastAPI, PostgreSQL 16, Redis 7, Celery, `transitions` library
+**Stack:** Python 3.12, FastAPI, PostgreSQL 16, Celery, `transitions` library
 
 ---
 
@@ -14,7 +14,6 @@
 
 - **≥80% line coverage** on all business logic (state machine, RBAC, outbox, audit chain). Coverage gate enforced in CI.
 - **Real PostgreSQL in integration tests** — no mocks for the database. Test database is a separate Docker service (`oskar-test-db`) running in the same Compose network.
-- **Real Redis in integration tests** — Redis mock libraries are forbidden. Use `oskar-test-redis` Docker service.
 - **Mock `movex-rest-api`** in unit and integration tests — the ERP adapter is the boundary. `httpx.MockTransport` or `respx` for HTTP-level mocking.
 - **No test that requires a real Movex connection** — all Movex interactions go through the adapter; tests mock at the adapter boundary.
 - **Audit chain tests are mandatory** — SHA-256 chain integrity must be verified in every test that writes a transition.
@@ -27,7 +26,7 @@
          ┌──────────────────────────────┐
          │   E2E / IQ/OQ/PQ (manual)   │  ~10 tests — validation protocol (ai/memory/07)
          ├──────────────────────────────┤
-         │   Integration tests          │  ~40% of suite — real PG + Redis, mock ERP adapter
+│   Integration tests          │  ~40% of suite — real PG, mock ERP adapter
          ├──────────────────────────────┤
          │   Unit tests                 │  ~60% of suite — state machine, guard conditions, RBAC logic
          └──────────────────────────────┘
@@ -100,7 +99,7 @@ test_celery_acks_late                      task not acked until completion (no m
 
 ## 4. Integration Tests
 
-Run against `oskar-test-db` (PostgreSQL 16) and `oskar-test-redis` (Redis 7). ERP adapter mocked at HTTP boundary.
+Run against `oskar-test-db` (PostgreSQL 16). ERP adapter mocked at HTTP boundary.
 
 **Fixtures:** `pytest-postgresql` or plain Docker Compose test profile. Test DB is created fresh per test session; migrations applied via Alembic before tests run.
 
@@ -186,7 +185,6 @@ jobs:
   test:
     services:
       oskar-test-db:   postgres:16
-      oskar-test-redis: redis:7
 
     steps:
       - gitleaks scan           (secret detection — blocks on any finding)

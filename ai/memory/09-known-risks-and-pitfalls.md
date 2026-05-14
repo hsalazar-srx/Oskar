@@ -182,12 +182,9 @@ OSKAR production on OSKAR VM (Linux, Docker). Covers: service down, data integri
 2. Check PostgreSQL:
    docker exec oskar-db psql -U oskar -c "SELECT now();"
 
-3. Check Redis:
-   docker exec oskar-redis redis-cli -a $REDIS_PASSWORD ping
-
-4. Check Movex outbox (stuck entries):
+3. Check Movex outbox (stuck entries):
    docker exec oskar-db psql -U oskar -c \
-     "SELECT ecn_id, state, attempt_count FROM movex_outbox WHERE state IN ('failed','abandoned');"
+      "SELECT ecn_id, state, attempt_count FROM movex_outbox WHERE state IN ('failed','abandoned');"
 ```
 
 ### Rollback (within 30-day window)

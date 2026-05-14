@@ -13,6 +13,7 @@ from src.adapters.suppliers.digikey import DigiKeyAdapter
 from src.adapters.suppliers.nexar import NexarAdapter
 from src.logging_config import configure_logging
 from src.middleware.correlation import CorrelationIdMiddleware
+from src.middleware.origin import OriginCheckMiddleware
 from src.routers import v1_router
 from src.routers.health import health_router
 
@@ -54,9 +55,20 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 
-# ── Middleware (order matters: correlation ID first, then CORS) ───────────────
+# ── Middleware (order matters: correlation ID first, then origin check, then CORS) ───────────────
+def _parse_origins(raw: str) -> list[str]:
+    return [
+        o.strip().rstrip("/").lower()
+        for o in raw.split(",")
+        if o.strip()
+    ]
+
+
 app.add_middleware(CorrelationIdMiddleware)
-_cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",") if o.strip()]
+_cors_origins = _parse_origins(
+    os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
+)
+app.add_middleware(OriginCheckMiddleware, allowed_origins=_cors_origins)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
