@@ -3,7 +3,7 @@ OSKAR — Alias lookup endpoint tests (S3-1)
 
 GET /api/v1/parts/alias?popn=...&cuno=...
 
-Reverse lookup: customer P/N (POPN) → SRX ITNO via MVXCDTA.MITPOP.
+Reverse lookup: customer P/N (POPN) → Scanfil APAC ITNO via MVXCDTA.MITPOP.
 No M3 MI program supports this direction — implemented as a custom DB2
 endpoint on movex-rest-api (GET /api/mitpop/search).
 

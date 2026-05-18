@@ -8,10 +8,10 @@ Auto-generates the next available Scanfil APAC part number on the no_match path.
 Format: LF + {2-char CUNO} + {2-digit commodity} + {4-digit zero-padded seq}
 Example: LFAA120023  (customer=AA, commodity=12=RES SMD, seq=23)
 
-'LF' is the company prefix (legacy Startronics/SRXGlobal identifier). It does NOT
+'LF' is the company prefix (legacy Startronics/Scanfil APAC identifier). It does NOT
 encode lead-free status — that is a separate MITMAS field (BBB/PBF).
 
-Key design facts from Nick's template (ecn_item_upload_v13, 2026-04-29):
+Key design facts from Engineering Team's template (ecn_item_upload_v13, 2026-04-29):
   - Both procurement_group AND product_group are required to resolve the commodity code.
   - Multiple commodity codes can map to the same (prgp, itcl) pair.
     e.g. PAS/RES → [11 TH, 12 SMD, 13 ResNet, 14 Varistor]

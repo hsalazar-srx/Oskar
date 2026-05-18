@@ -90,7 +90,7 @@ class ERPAdapter(ABC):
         popn: str,
         cuno: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Reverse alias lookup: customer P/N → SRX ITNO(s) via MVXCDTA.MITPOP.
+        """Reverse alias lookup: customer P/N → Scanfil APAC ITNO(s) via MVXCDTA.MITPOP.
 
         No M3 MI program supports this direction (MMS025MI.GetAlias/LstAlias both
         require ITNO as input — confirmed 2026-05-11). Implemented as a custom

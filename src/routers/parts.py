@@ -1,7 +1,7 @@
 """
 OSKAR — Part number intelligence endpoints (Sprint 3)
 
-GET  /api/v1/parts/alias       Reverse alias lookup: customer P/N → SRX ITNO via MVXCDTA.MITPOP.
+GET  /api/v1/parts/alias       Reverse alias lookup: customer P/N → Scanfil APAC ITNO via MVXCDTA.MITPOP.
                                Returns full_match / partial_match / no_match states.
                                Replaces manual MOVEX search (~30 min → seconds). S3-1.
 
@@ -31,7 +31,14 @@ from src.adapters.suppliers.chain import SupplierChain
 from src.auth.dependencies import CurrentUser, get_current_user
 from src.db import get_session
 from src.services.ecn import ECNNotFound, ECNService
-from src.services.ecn.commodity_codes import VALID_PROCUREMENT_GROUPS, VALID_PRODUCT_GROUPS, get_commodity_code
+from src.services.ecn.commodity_codes import (
+    COMMODITY_MAP,
+    VALID_PROCUREMENT_GROUPS,
+    VALID_PRODUCT_GROUPS,
+    get_commodity_code,
+    get_description_templates,
+    validate_description,
+)
 
 parts_router = APIRouter(prefix="/parts", tags=["parts"])
 
@@ -65,8 +72,8 @@ class AliasLookupResponse(BaseModel):
 # ── Match state logic ─────────────────────────────────────────────────────────
 
 _MESSAGES = {
-    "full_match":    "Part number resolved to one SRX item. Review and confirm.",
-    "partial_match": "Multiple SRX items share this alias. Select the correct one.",
+    "full_match":    "Part number resolved to one Scanfil APAC item. Review and confirm.",
+    "partial_match": "Multiple Scanfil APAC items share this alias. Select the correct one.",
     "no_match":      "No alias found in Movex. If this is a new part, set is_new_item=True.",
 }
 
@@ -103,7 +110,7 @@ def _build_response(popn: str, records: list[dict]) -> AliasLookupResponse:
 @parts_router.get(
     "/alias",
     response_model=AliasLookupResponse,
-    summary="Reverse alias lookup: customer P/N → SRX ITNO via MITPOP (S3-1)",
+    summary="Reverse alias lookup: customer P/N → Scanfil APAC ITNO via MITPOP (S3-1)",
 )
 async def lookup_alias(
     popn: Annotated[str, Query(min_length=1, max_length=30, description="Customer part number (MITPOP.MPPOPN)")],
@@ -111,7 +118,7 @@ async def lookup_alias(
     erp: Annotated[MovexRestAdapter, Depends(_get_erp_adapter)],
     cuno: Annotated[str | None, Query(max_length=10, description="Customer/partner code (MITPOP.MPE0PA) — optional filter")] = None,
 ) -> AliasLookupResponse:
-    """Look up which SRX internal item number(s) a customer part number maps to.
+    """Look up which Scanfil APAC internal item number(s) a customer part number maps to.
 
     Queries MVXCDTA.MITPOP via a custom DB2 endpoint on movex-rest-api.
     No M3 MI program supports this reverse direction (confirmed 2026-05-11).
@@ -178,7 +185,7 @@ async def suggest_pn(
     engineer confirms the suggestion before creating the item in Movex.
 
     PN format: LF + {CUNO 2 chars} + {commodity 2 digits} + {seq 4 digits zero-padded}
-    'LF' is the company prefix (Startronics/SRXGlobal legacy), not a lead-free marker.
+    'LF' is the company prefix (Startronics/Scanfil APAC legacy), not a lead-free marker.
     """
     prgp = procurement_group.upper().strip()
     itcl = product_group.upper().strip()
@@ -377,3 +384,206 @@ async def autofill_item(
 
     updated = await svc.update_item(body.ecn_id, body.item_id, **updates)
     return _item_to_response(updated)
+
+
+# ── S3-4: Proc & Product Group dropdown data ──────────────────────────────────
+
+class GroupEntry(BaseModel):
+    procurement_group: str
+    product_group: str
+    commodity_codes: list[str]
+
+
+@parts_router.get(
+    "/groups",
+    response_model=list[GroupEntry],
+    summary="All valid (procurement_group, product_group) pairs for ECN item dropdowns (S3-4)",
+)
+async def list_groups(
+    prgp: Annotated[str | None, Query(max_length=10, description="Filter by procurement group (case-insensitive)")] = None,
+    itcl: Annotated[str | None, Query(max_length=10, description="Filter by product group (case-insensitive)")] = None,
+) -> list[GroupEntry]:
+    """Return all valid (procurement_group, product_group) pairs from the Engineering Team's commodity matrix.
+
+    Drives the proc/prod group dropdowns in the ECN item UI, eliminating the manual
+    lookup of commodity codes from datasheets (VSM p.6, ~30 min per new part type).
+    No authentication required — this is read-only reference data.
+
+    Optional filters ?prgp= and ?itcl= narrow the list for responsive dropdowns.
+    """
+    prgp_filter = prgp.upper() if prgp else None
+    itcl_filter = itcl.upper() if itcl else None
+
+    results = []
+    for (p, i), codes in sorted(COMMODITY_MAP.items()):
+        if prgp_filter and p != prgp_filter:
+            continue
+        if itcl_filter and i != itcl_filter:
+            continue
+        results.append(GroupEntry(procurement_group=p, product_group=i, commodity_codes=codes))
+    return results
+
+
+# ── S3-4: Autofill proc/prod group onto an ECN item ──────────────────────────
+
+class AutofillGroupsRequest(BaseModel):
+    ecn_id: str = Field(..., min_length=1)
+    item_id: str = Field(..., min_length=1)
+    procurement_group: str = Field(..., min_length=1, max_length=10)
+    product_group: str = Field(..., min_length=1, max_length=10)
+
+
+class AutofillGroupsResponse(AutofillResponse):
+    commodity_codes: list[str] = []
+
+
+@parts_router.post(
+    "/autofill-groups",
+    response_model=AutofillGroupsResponse,
+    summary="Write procurement_group + product_group onto an ECN item (S3-4)",
+)
+async def autofill_groups(
+    body: AutofillGroupsRequest,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> AutofillGroupsResponse:
+    """Persist the engineer's proc/prod group selection onto an ecn_items row.
+
+    Validates the (procurement_group, product_group) pair against the Engineering Team's commodity
+    matrix before writing — rejects unknown pairs with 422 so bad data never reaches
+    the suggest-pn endpoint (S3-2) or Movex.
+
+    Returns the updated item plus the commodity_codes list for the written pair
+    so the UI can immediately show which codes are available for suggest-pn.
+    """
+    prgp = body.procurement_group.upper().strip()
+    itcl = body.product_group.upper().strip()
+
+    codes = COMMODITY_MAP.get((prgp, itcl))
+    if codes is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Unknown (procurement_group, product_group) pair: ({prgp}, {itcl}). "
+                   "Check Proc & Prod Group Matrix.",
+        )
+
+    svc = ECNService(session)
+    try:
+        await svc.get_item(body.ecn_id, body.item_id)
+    except ECNNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+
+    updated = await svc.update_item(
+        body.ecn_id, body.item_id,
+        procurement_group=prgp,
+        product_group=itcl,
+    )
+
+    base = _item_to_response(updated)
+    return AutofillGroupsResponse(**base.model_dump(), commodity_codes=codes)
+
+
+# ── S3-5: Suggest canonical description template ──────────────────────────────
+
+class SuggestDescriptionResponse(BaseModel):
+    procurement_group: str
+    product_group: str
+    commodity_code: str
+    templates: list[str]
+
+
+@parts_router.get(
+    "/suggest-description",
+    response_model=SuggestDescriptionResponse,
+    summary="Suggest canonical Movex item description templates for a commodity (S3-5)",
+)
+async def suggest_description(
+    procurement_group: Annotated[str, Query(min_length=1, max_length=10)],
+    product_group: Annotated[str, Query(min_length=1, max_length=10)],
+    commodity_code: Annotated[str, Query(min_length=1, max_length=2)],
+) -> SuggestDescriptionResponse:
+    """Return the Engineering Team's canonical template name(s) for a given (prgp, itcl, code) triple.
+
+    All returned names are pre-validated ≤30 chars (Movex hard limit). Engineers
+    start from these and append specifics (e.g. "RESISTOR SMD 10K 1% 0402").
+
+    When multiple templates exist for the same code (e.g. HWR/HARDW/69 → SCREW,
+    WASHER, NUT, CRIMP / RIVET / SPACER), all are returned for the UI to present
+    as a pick-list.
+
+    Returns an empty templates list when the triple is not in the matrix — the
+    engineer falls back to free-text entry and should use validate-description
+    to check the 30-char limit before saving.
+
+    No authentication required — reference data.
+    """
+    prgp = procurement_group.upper().strip()
+    itcl = product_group.upper().strip()
+    code = commodity_code.upper().strip()
+    templates = get_description_templates(prgp, itcl, code)
+    return SuggestDescriptionResponse(
+        procurement_group=prgp,
+        product_group=itcl,
+        commodity_code=code,
+        templates=templates,
+    )
+
+
+# ── S3-5: Validate description and optionally write to ecn_items ──────────────
+
+class ValidateDescriptionRequest(BaseModel):
+    item_name: str = Field(..., min_length=1, max_length=500)
+    ecn_id: str | None = Field(default=None, min_length=1)
+    item_id: str | None = Field(default=None, min_length=1)
+
+
+class ValidateDescriptionResponse(BaseModel):
+    item_name: str
+    is_valid: bool
+    char_count: int
+    truncated: str
+    issues: list[str]
+
+
+@parts_router.post(
+    "/validate-description",
+    response_model=ValidateDescriptionResponse,
+    summary="Validate item_name against Movex 30-char limit and illegal characters (S3-5)",
+)
+async def validate_description_endpoint(
+    body: ValidateDescriptionRequest,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ValidateDescriptionResponse:
+    """Validate a proposed item_name for Movex MITMAS.MMITDS compatibility.
+
+    Enforces:
+      - Maximum 30 characters (Movex hard limit — rejection is silent without this check)
+      - No tab characters (break tab-delimited upload format)
+      - No pipe characters (Movex field delimiter)
+      - No null bytes or ASCII control characters \\x01–\\x1f
+
+    When ecn_id + item_id are both provided AND the name is valid, writes the
+    validated item_name onto the ecn_items row. Skips the write when either ID
+    is absent or when the name fails any check.
+
+    Always returns 200 with the validation result — invalid names are a result,
+    not an error condition. Returns 404 only when the write-back is requested
+    but the item does not exist.
+    """
+    is_valid, truncated, issues = validate_description(body.item_name)
+
+    if is_valid and body.ecn_id and body.item_id:
+        svc = ECNService(session)
+        try:
+            await svc.update_item(body.ecn_id, body.item_id, item_name=body.item_name)
+        except ECNNotFound:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
+
+    return ValidateDescriptionResponse(
+        item_name=body.item_name,
+        is_valid=is_valid,
+        char_count=len(body.item_name),
+        truncated=truncated,
+        issues=issues,
+    )

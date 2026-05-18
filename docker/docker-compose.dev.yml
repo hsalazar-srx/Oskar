@@ -3,12 +3,14 @@
 # Uses local build context, mounts src/ for hot-reload.
 #
 # ADR-007: Redis eliminated. Dev stack = oskar-db-dev · oskar-app-dev
-# Celery broker: PostgreSQL transport (DATABASE_URL)
+# AUTH_PROVIDER=dev bypasses LDAPS — uses DEV_USERS allowlist (see .env).
+# LDAP is not reachable from localhost; use dev bypass for local development.
 #
 # No read_only hardening here — src/ volume mount requires writable fs for hot-reload.
 #
 # Usage: docker compose -f docker/docker-compose.dev.yml up -d
-# Requires: .env file in project root (copy from .env.example)
+# Then:  docker compose -f docker/docker-compose.dev.yml exec oskar-app alembic upgrade head
+# Requires: .env file in project root (copy from .env.example, fill in values)
 
 services:
 
@@ -21,25 +23,37 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - MOVEX_API_URL=${MOVEX_API_URL:-http://host.docker.internal:5000/api}
+      - MOVEX_API_URL=${MOVEX_API_URL:-http://localhost:9999}
+      - MOVEX_API_KEY=${MOVEX_API_KEY:-dev-not-used}
       - MOVEX_CONO=${MOVEX_CONO:-300}
-      - DATABASE_URL=postgresql+asyncpg://oskar:devpassword@oskar-db-dev:5432/oskar_dev
-      - AUTH_PROVIDER=ldap
-      - LDAP_SERVER=${LDAP_SERVER}
-      - LDAP_BASE_DN=${LDAP_BASE_DN}
-      - LDAP_BIND_DN=${LDAP_BIND_DN}
-      - LDAP_BIND_PW=${LDAP_BIND_PW}
-      - JWT_SECRET_KEY=dev-secret-not-for-production-min-32-chars!!
-      - REFRESH_TOKEN_SECRET=dev-refresh-not-for-production-min-32!!
+      - DATABASE_URL=postgresql+asyncpg://oskar:oskar_dev@oskar-db-dev:5432/oskar
+      # Dev auth bypass — skip LDAP entirely (not reachable from localhost)
+      - AUTH_PROVIDER=dev
+      - DEV_USERS=${DEV_USERS:-hsalazar,testuser,dc_user,eng_user}
+      - SECURE_COOKIE=false
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-ebe708e2900192fddb0b554ced9c6d9f3c5d6d3badda1ad1e3df6b3aeb3a779f}
+      - REFRESH_TOKEN_SECRET=${REFRESH_TOKEN_SECRET:-ebe708e2900192fddb0b554ced9c6d9f3c5d6d3badda1ad1e3df6b3aeb3a779f}
       - JWT_ALGORITHM=HS256
       - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
       - JWT_REFRESH_TOKEN_EXPIRE_HOURS=8
-      - OSKAR_ENV=development
+      - SMTP_HOST=
+      - SMTP_PORT=25
+      - SMTP_SENDER=oskar-noreply@srxglobal.local
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
+      - ENVIRONMENT=development
     volumes:
-      - ../src:/app/src  # Hot-reload: src/ changes apply without rebuild
+      - ../src:/app/src:ro
+      - ../alembic:/app/alembic:ro
+      - ../alembic.ini:/app/alembic.ini:ro
     depends_on:
-      - oskar-db-dev
+      oskar-db-dev:
+        condition: service_healthy
     command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
   oskar-db-dev:
     image: postgres:16-alpine
@@ -47,11 +61,16 @@ services:
     ports:
       - "5432:5432"
     environment:
-      - POSTGRES_DB=oskar_dev
+      - POSTGRES_DB=oskar
       - POSTGRES_USER=oskar
-      - POSTGRES_PASSWORD=devpassword
+      - POSTGRES_PASSWORD=oskar_dev
     volumes:
       - oskar-db-dev-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oskar -d oskar"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
 volumes:
   oskar-db-dev-data:

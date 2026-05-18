@@ -11,7 +11,7 @@ POST   /api/v1/ecn/{ecn_id}/items/{item_id}/mpns            — Add MPN
 PATCH  /api/v1/ecn/{ecn_id}/items/{item_id}/mpns/{mpn_id}  — Update MPN (extended fields)
 DELETE /api/v1/ecn/{ecn_id}/items/{item_id}/mpns/{mpn_id}  — Remove MPN
 
-MPN extended fields (migration 0007, Nick 2026-04-29):
+MPN extended fields (migration 0007, Engineering Team 2026-04-29):
   msl_level        SMALLINT 1–6
   lifecycle        'active' | 'eol' | 'nrnd'
   eol_date         DATE (ISO string)
