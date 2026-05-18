@@ -229,15 +229,55 @@ class EntraIDProvider:
         )
 
 
+class DevIdentityProvider:
+    """Dev-only identity provider — bypasses LDAP entirely.
+
+    ONLY active when AUTH_PROVIDER=dev. Refuses to start if ENVIRONMENT is not
+    'development' to prevent accidental use in staging or production.
+
+    DEV_USERS env var: comma-separated list of allowed usernames (default: hsalazar).
+    Any username in the allowlist authenticates with any non-empty password.
+    Groups are returned as a fixed set covering all OSKAR roles for easy local testing.
+    """
+
+    def __init__(self) -> None:
+        env = os.getenv("ENVIRONMENT", "development").lower()
+        if env not in ("development", "dev"):
+            raise RuntimeError(
+                "AUTH_PROVIDER=dev is only permitted when ENVIRONMENT=development. "
+                f"Current ENVIRONMENT={env!r}. Set AUTH_PROVIDER=ldap for staging/production."
+            )
+        raw = os.getenv("DEV_USERS", "hsalazar")
+        self._allowed: set[str] = {u.strip().lower() for u in raw.split(",") if u.strip()}
+
+    def authenticate(self, username: str, password: str) -> bool:
+        return username.lower() in self._allowed and bool(password)
+
+    def get_groups(self, username: str) -> list[str]:
+        # Return all OSKAR groups so any dev user can exercise all workflow paths
+        return [
+            "OSKAR-Engineers",
+            "OSKAR-Approvers",
+            "OSKAR-Admins",
+            "OSKAR-DC",
+        ]
+
+    def get_email(self, username: str) -> str | None:
+        return f"{username}@srxglobal.local"
+
+
 def get_identity_provider() -> IdentityProvider:
     """Factory — returns the configured provider based on AUTH_PROVIDER env var.
 
     AUTH_PROVIDER=ldap   → LDAPIdentityProvider (default, production)
     AUTH_PROVIDER=entra  → EntraIDProvider (stub, will raise)
+    AUTH_PROVIDER=dev    → DevIdentityProvider (local dev only, no LDAP)
     """
     provider = os.getenv("AUTH_PROVIDER", "ldap").lower()
     if provider == "ldap":
         return LDAPIdentityProvider()
     if provider == "entra":
         return EntraIDProvider()
-    raise ValueError(f"Unknown AUTH_PROVIDER: {provider!r}. Valid values: ldap, entra")
+    if provider == "dev":
+        return DevIdentityProvider()
+    raise ValueError(f"Unknown AUTH_PROVIDER: {provider!r}. Valid values: ldap, entra, dev")

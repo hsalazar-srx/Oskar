@@ -195,15 +195,73 @@ Full endpoint spec in `ai/memory/02-movex-erp-authority.md §7`.
 | # | Task | File | Status |
 |---|------|------|--------|
 | S3-1 | Part number reverse alias lookup — `GET /api/v1/parts/alias?popn=&cuno=`; queries `MVXCDTA.MITPOP` via custom DB2 endpoint on movex-rest-api; returns `full_match`/`partial_match`/`no_match`. `app.state.erp_adapter` lifespan wired. 34 tests passing. Replaces manual MOVEX search (30 min → seconds). Source: Nick 42:56–44:27. | `src/routers/parts.py` + `src/adapters/erp/movex.py` + `src/adapters/erp/base.py` + `src/main.py` | ✅ 2026-05-11 — awaiting `GET /api/mitpop/search` from @developer-dotnet to go live |
-| S3-2 | Auto Scanfil APAC part number generation — `GET /api/v1/parts/suggest-pn?prgp=&itcl=&cuno=[&commodity_override=]`; resolves commodity code from Nick's full matrix (50 rows, 11 multi-code pairs); queries `MVXCDTA.MITMAS` for next sequence via `GET /api/mitmas/next-sequence`. 'LF' prefix is the company identifier (not lead-free marker). `TEM/TEMP`=4 codes (66/76/81/90), `PLA/INJEC`+`PLA/PLAMC`=2 codes (65/67) — corrected from initial spec after cross-check against CSV. 50 tests passing. | `src/routers/parts.py` + `src/services/ecn/commodity_codes.py` + `src/adapters/erp/` | ✅ 2026-05-12 — awaiting `GET /api/mitmas/next-sequence` from @developer-dotnet to go live |
+| S3-2 | Auto Scanfil APAC part number generation — `GET /api/v1/parts/suggest-pn?prgp=&itcl=&cuno=[&commodity_override=]`; resolves commodity code from Engineering Team's full matrix (50 rows, 11 multi-code pairs); queries `MVXCDTA.MITMAS` for next sequence via `GET /api/mitmas/next-sequence`. 'LF' prefix is the company identifier (not lead-free marker). `TEM/TEMP`=4 codes (66/76/81/90), `PLA/INJEC`+`PLA/PLAMC`=2 codes (65/67) — corrected from initial spec after cross-check against CSV. 50 tests passing. | `src/routers/parts.py` + `src/services/ecn/commodity_codes.py` + `src/adapters/erp/` | ✅ 2026-05-12 — awaiting `GET /api/mitmas/next-sequence` from @developer-dotnet to go live |
 | S3-3 | Stock code autofill — `POST /api/v1/parts/autofill`; enriches `ecn_items` row: (1) supplier chain DigiKey→Nexar→stubs → AI smart truncation (`AIProvider.suggest_description`) → `item_name` ≤30 chars; (2) `MMS200MI.GetItmBasic` → `unit_of_measure` (skipped for `is_new_item=True`). 26/26 tests passing. `supplier_part_cache` PostgreSQL cache (migration 0010, 30-day TTL). `DigiKeyAdapter` + `NexarAdapter` wired in lifespan (skip gracefully when `CLIENT_ID` unset). Source: Hector 1:01:32. | `src/routers/parts.py` + `src/adapters/suppliers/` + `src/adapters/erp/movex.py` + `alembic/versions/0010_supplier_part_cache.py` + `src/main.py` | ✅ 2026-05-13 |
-| S3-4 | Proc & Product Group auto-population — derive `procurement_group` + `product_group` from MPN commodity type using Nick's matrix (50 rows, `_Proc_Prod_Grp_Matrix.csv`); dropdown + auto-suggest in ECN item UI. Source: VSM p.6, Nick matrix. | `src/services/ecn/items.py` + frontend | ⏳ |
-| S3-5 | SRX item description normalisation — enforce ≤30 char (Movex hard limit); propose standard description from Nick's template names; pull from DigiKey description and truncate/map. Source: VSM p.6. | `src/services/ecn/items.py` | ⏳ |
+| S3-4 | Proc & Product Group auto-population — `GET /api/v1/parts/groups` returns all valid (prgp, itcl) pairs with commodity codes for ECN item dropdowns (no auth, filterable by ?prgp=&itcl=). `POST /api/v1/parts/autofill-groups` writes validated prgp+itcl onto ecn_items row, returns updated item + commodity_codes list for immediate suggest-pn wiring. Pair validated against Engineering Team's matrix before write — unknown pairs rejected 422. 31 tests passing. Eliminates manual datasheet lookup (~30 min/part, VSM p.6). | `src/routers/parts.py` + `tests/routers/test_proc_prod_groups.py` | ✅ 2026-05-15 |
+| S3-5 | Scanfil APAC item description normalisation — `GET /api/v1/parts/suggest-description?prgp=&itcl=&commodity_code=` returns Engineering Team's canonical template names (69 entries, all pre-validated ≤30 chars, multiple templates per code e.g. HWR/HARDW/69 → SCREW/WASHER/NUT/CRIMP). `POST /api/v1/parts/validate-description` enforces Movex MITMAS.MMITDS rules: ≤30 chars, no tab/pipe/null/control chars; optional write-back to ecn_items when valid. `DESCRIPTION_TEMPLATES` map added to `commodity_codes.py` with import-time length guard. 49 tests passing. Eliminates silent upload rejection from Stargile (VSM p.6). | `src/routers/parts.py` + `src/services/ecn/commodity_codes.py` + `tests/routers/test_description_normalisation.py` | ✅ 2026-05-15 |
 
 **Explicitly out of scope for Iteration 1 (Karen, 1:10:42):**
 - BOM scrubbing as standalone tool (Nick 24:33) — Iteration 3
 - Customer BOM vs Quoted BOM comparison (Nick 34:37) — Iteration 2/3
 - AI/MCP integration (Nick, Hector 54:40) — gated on Scanfil group AI policy
+
+---
+
+## Sprint 4 — Local Stand-Up + React Frontend (MVP for Branko/Nick UAT Demo)
+
+> **Target:** Late June 2026 (≈6 weeks). Nothing can be demoed until it runs locally.
+> **Goal:** Get the backend running end-to-end on a local machine, then build the 5 core
+> React screens required for Branko/Nick UAT. VM deployment follows after local validation.
+>
+> **PoC MVP scope decision (2026-05-18):**
+> The PoC demo requires a working UI. All backend development to date is tested only against
+> mocks. This sprint makes the system runnable and visible for the first time.
+
+### Local Backend Stand-Up
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| S4-1 | Local `.env` file — dev values, `AUTH_PROVIDER=dev`, `SECURE_COOKIE=false`, `POSTGRES_PASSWORD=oskar_dev` | `.env` (gitignored) | ✅ 2026-05-18 |
+| S4-2 | `docker-compose.dev.yml` — updated with `AUTH_PROVIDER=dev`, healthchecks, correct DB name `oskar` | `docker/docker-compose.dev.yml` | ✅ 2026-05-18 |
+| S4-3 | `DevIdentityProvider` — `AUTH_PROVIDER=dev` bypasses LDAP; `DEV_USERS` allowlist; startup guard prevents use outside development | `src/auth/providers.py` | ✅ 2026-05-18 |
+| S4-4 | `scripts/seed-dev-data.sql` — DC, OR, SE, EM, QM, PM, SC, AD users seeded for facility='L'; idempotent `ON CONFLICT DO NOTHING` | `scripts/seed-dev-data.sql` | ✅ 2026-05-18 |
+| S4-5 | Bring up Docker, run migrations (`alembic upgrade head`), run seed script | Local execution | ⏳ |
+| S4-6 | Smoke-test via Swagger UI: health, login, create ECN, submit, commodity matrix, suggest-description | Local execution | ⏳ |
+| S4-7 | Run full test suite against live DB (`pytest --cov=src --cov-fail-under=80`) | Local execution | ⏳ |
+
+### React Frontend — Core Screens
+
+Stack confirmed (PRE-6, Council 2026-05-11): **Vite + React 18 + TypeScript + Tailwind CSS + shadcn/ui**
+Mandatory additions: React Hook Form + Zod, TanStack Query, Zustand, orval (OpenAPI client gen).
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| S4-8 | Scaffold Vite + React + TypeScript app; install Tailwind, shadcn/ui, RHF+Zod, TanStack Query, Zustand, orval | `frontend/` | ⏳ |
+| S4-9 | Configure orval against `http://localhost:8000/openapi.json`; generate typed TanStack Query hooks + Zod schemas | `frontend/orval.config.ts` + `frontend/src/api/generated/` | ⏳ |
+| S4-10 | Custom Axios instance with JWT interceptors: attach Bearer token, auto-refresh on 401, redirect on refresh failure | `frontend/src/api/axios.ts` | ⏳ |
+| S4-11 | Zustand auth store: `{ accessToken, user, login, logout }` | `frontend/src/store/auth.ts` | ⏳ |
+| S4-12 | Login page: username+password → `POST /api/v1/auth/login`, store token, redirect to `/ecn` | `frontend/src/pages/LoginPage.tsx` | ⏳ |
+| S4-13 | ECN list page: shadcn DataTable + TanStack Table; columns: number, title, status badge, next action users, age; filters: status, overdue | `frontend/src/pages/ECNListPage.tsx` | ⏳ |
+| S4-14 | ECN create page: RHF + Zod schema (mirrors ECNCreateRequest); title, description, facility, change scope checkboxes | `frontend/src/pages/ECNCreatePage.tsx` | ⏳ |
+| S4-15 | ECN detail page: header with status badge, role-aware action bar (submit/approve/reject/hold), items list | `frontend/src/pages/ECNDetailPage.tsx` | ⏳ |
+| S4-16 | ECN item panel (shadcn Sheet): item_number, item_name + 30-char counter + description validation, proc/prod dropdown, suggest-pn button | `frontend/src/components/ECNItemPanel.tsx` | ⏳ |
+| S4-17 | Vite dev proxy: `/api` → `http://localhost:8000`; multi-stage Dockerfile (node build → nginx serve) | `frontend/vite.config.ts` + `frontend/Dockerfile` | ⏳ |
+
+### What's Deferred (Cut from PoC Demo Scope)
+
+| Feature | Reason |
+|---------|--------|
+| S2-14 Drawing outbox UI | Blocked on @developer-dotnet MPDDOC |
+| S2-15 MPN extended fields (UI) | Non-critical for demo |
+| S2-16 DC recovery SSE panel | Nice-to-have; backend infra done |
+| S2-17 Revision lineage UI | Non-critical |
+| S2-18 BOM concurrency delta | Non-critical |
+| S3-1 Alias lookup (live) | Blocked on @developer-dotnet |
+| S3-3 Stock code autofill (supplier chain) | DigiKey/Nexar creds not available for demo |
+| Routing operations UI | Post-UAT |
+| Email notifications | Need SMTP + VM; defer |
+| Celery worker/beat | Defer until VM deployment |
+| VM deployment | After local validation complete |
 
 ---
 
