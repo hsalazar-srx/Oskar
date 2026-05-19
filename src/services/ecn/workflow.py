@@ -513,7 +513,7 @@ class ECNWorkflowMixin:
                 sa.text(
                     "INSERT INTO movex_outbox "
                     "(id, ecn_id, ecn_item_id, mi_transaction, mi_params, idempotency_key) "
-                    "VALUES (:id, :ecn_id, :item_id, :mi_tx, :mi_params::jsonb, :ikey) "
+                    "VALUES (:id, :ecn_id, :item_id, :mi_tx, CAST(:mi_params AS jsonb), :ikey) "
                     "ON CONFLICT (idempotency_key) DO NOTHING"
                 ),
                 {
@@ -540,7 +540,7 @@ class ECNWorkflowMixin:
                 sa.text(
                     "INSERT INTO movex_outbox "
                     "(id, ecn_id, ecn_item_id, mi_transaction, mi_params, idempotency_key) "
-                    "VALUES (:id, :ecn_id, :item_id, :mi_tx, :mi_params::jsonb, :ikey) "
+                    "VALUES (:id, :ecn_id, :item_id, :mi_tx, CAST(:mi_params AS jsonb), :ikey) "
                     "ON CONFLICT (idempotency_key) DO NOTHING"
                 ),
                 {
@@ -584,7 +584,7 @@ class ECNWorkflowMixin:
                 sa.text(
                     "INSERT INTO movex_outbox "
                     "(id, ecn_id, ecn_item_id, mi_transaction, mi_params, idempotency_key) "
-                    "VALUES (:id, :ecn_id, :item_id, :mi_tx, :mi_params::jsonb, :ikey) "
+                    "VALUES (:id, :ecn_id, :item_id, :mi_tx, CAST(:mi_params AS jsonb), :ikey) "
                     "ON CONFLICT (idempotency_key) DO NOTHING"
                 ),
                 {

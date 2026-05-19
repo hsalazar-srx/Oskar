@@ -111,6 +111,7 @@ async def update_item(
 @ecn_items_router.delete(
     "/{ecn_id}/items/{item_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
 )
 async def delete_item(
     ecn_id: str,
@@ -177,6 +178,7 @@ async def update_mpn(
 @ecn_items_router.delete(
     "/{ecn_id}/items/{item_id}/mpns/{mpn_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
 )
 async def delete_mpn(
     ecn_id: str,

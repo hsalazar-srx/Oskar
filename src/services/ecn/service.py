@@ -123,7 +123,7 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
                 " :is_new_item, :routing_changes, :operation_changes, :new_parts, "
                 " :lead_time_changes, :change_to_documents, :wapc_delta_pct, "
                 " :wapc_threshold_override, :requires_customer_approval, "
-                " :customer_approval_reference, :regulatory_impact, :extra_data::jsonb)"
+                " :customer_approval_reference, :regulatory_impact, CAST(:extra_data AS jsonb))"
             ),
             {
                 "id": ecn_id, "ecn_number": ecn_number, "facility": facility,
@@ -216,7 +216,7 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
         _maybe("wapc_delta_pct", req.wapc_delta_pct)
         _maybe("customer_approval_reference", req.customer_approval_reference)
         if req.extra_data is not None:
-            set_parts.append("extra_data = :extra_data::jsonb")
+            set_parts.append("extra_data = CAST(:extra_data AS jsonb)")
             params["extra_data"] = str(req.extra_data).replace("'", '"')
 
         if not set_parts:

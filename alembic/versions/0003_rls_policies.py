@@ -28,6 +28,9 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Create oskar_app role if it doesn't exist (dev has only the 'oskar' superuser)
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='oskar_app') THEN CREATE ROLE oskar_app; END IF; END $$;")
+
     # ── ecn_role_assignments — INSERT-only for oskar_app ──────────────────
     # RLS is enabled; UPDATE and DELETE are revoked.
     # SELECT and INSERT remain (role assignments must be read and created by the app).
@@ -43,9 +46,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Restore full oskar_app access and disable RLS
-    op.execute("GRANT ALL ON ecn_transition_history TO oskar_app;")
+    # Restore full oskar_app access and disable RLS (no-op if role was never granted)
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='oskar_app') THEN GRANT ALL ON ecn_transition_history TO oskar_app; END IF; END $$;")
     op.execute("ALTER TABLE ecn_transition_history DISABLE ROW LEVEL SECURITY;")
 
-    op.execute("GRANT UPDATE, DELETE ON ecn_role_assignments TO oskar_app;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='oskar_app') THEN GRANT UPDATE, DELETE ON ecn_role_assignments TO oskar_app; END IF; END $$;")
     op.execute("ALTER TABLE ecn_role_assignments DISABLE ROW LEVEL SECURITY;")

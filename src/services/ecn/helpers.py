@@ -171,8 +171,8 @@ async def _write_transition_history(
             " actor_username, actor_role, notes, movex_payload, "
             " agent_provenance, sha256_self, sha256_prev, created_at) "
             "VALUES (:id, :ecn_id, :from_status, :to_status, :action, "
-            "        :actor_username, :actor_role, :notes, :movex_payload::jsonb, "
-            "        :agent_provenance::jsonb, :sha256_self, :sha256_prev, :created_at)"
+            "        :actor_username, :actor_role, :notes, CAST(:movex_payload AS jsonb), "
+            "        CAST(:agent_provenance AS jsonb), :sha256_self, :sha256_prev, :created_at)"
         ),
         {
             "id": record_id,

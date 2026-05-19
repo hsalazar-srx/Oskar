@@ -30,6 +30,10 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Create roles if they don't exist (dev uses a single 'oskar' superuser)
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='oskar_app') THEN CREATE ROLE oskar_app; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='oskar_worker') THEN CREATE ROLE oskar_worker; END IF; END $$;")
+
     # oskar_app: full read/write access (INSERT + SELECT + UPDATE + DELETE for cleanup)
     # REVOKE DELETE is intentionally omitted — the app may archive/purge old outbox rows.
     op.execute("GRANT INSERT, SELECT, UPDATE, DELETE ON movex_outbox TO oskar_app;")
@@ -61,11 +65,5 @@ def downgrade() -> None:
     op.execute("DROP POLICY IF EXISTS oskar_worker_status_update ON ecn_instances;")
     op.execute("ALTER TABLE ecn_instances DISABLE ROW LEVEL SECURITY;")
 
-    op.execute("REVOKE SELECT, UPDATE ON movex_outbox FROM oskar_worker;")
-    op.execute("REVOKE SELECT ON ecn_instances FROM oskar_worker;")
-    op.execute("REVOKE INSERT, SELECT ON ecn_movex_errors FROM oskar_worker;")
-    op.execute("REVOKE SELECT ON ecn_role_assignments FROM oskar_worker;")
-    op.execute("REVOKE SELECT ON system_role_users FROM oskar_worker;")
-    op.execute("REVOKE INSERT, SELECT ON ecn_transition_history FROM oskar_worker;")
-
-    op.execute("REVOKE INSERT, SELECT, UPDATE, DELETE ON movex_outbox FROM oskar_app;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='oskar_worker') THEN REVOKE SELECT, UPDATE ON movex_outbox FROM oskar_worker; REVOKE SELECT ON ecn_instances FROM oskar_worker; REVOKE INSERT, SELECT ON ecn_movex_errors FROM oskar_worker; REVOKE SELECT ON ecn_role_assignments FROM oskar_worker; REVOKE SELECT ON system_role_users FROM oskar_worker; REVOKE INSERT, SELECT ON ecn_transition_history FROM oskar_worker; END IF; END $$;")
+    op.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='oskar_app') THEN REVOKE INSERT, SELECT, UPDATE, DELETE ON movex_outbox FROM oskar_app; END IF; END $$;")
