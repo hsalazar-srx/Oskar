@@ -1207,13 +1207,13 @@ CREATE TABLE ecn_routing_operations (
     work_centre          VARCHAR(8)   NOT NULL,           -- POPLGR
     run_time             NUMERIC(10,3) NOT NULL,          -- POPITI — minutes
     setup_time           NUMERIC(10,3),                   -- POSETI — minutes, nullable
-    change_type          VARCHAR(10)  NOT NULL,           -- 'ADD' | 'UPDATE'
+    change_type          VARCHAR(10)  NOT NULL,           -- 'ADD' | 'UPDATE' | 'DELETE'
     movex_snapshot       JSONB,                           -- live MPDOPE row at pre-flight read
     created_at           TIMESTAMPTZ  NOT NULL DEFAULT now(),
     updated_at           TIMESTAMPTZ  NOT NULL DEFAULT now(),
 
     CONSTRAINT uq_routing_op UNIQUE (ecn_item_id, operation_number),
-    CONSTRAINT chk_routing_change_type CHECK (change_type IN ('ADD', 'UPDATE'))
+    CONSTRAINT chk_routing_change_type CHECK (change_type IN ('ADD', 'UPDATE', 'DELETE'))
 );
 ```
 

@@ -196,7 +196,7 @@ class ECNDetail:
 # Routing operation dataclasses (S2-20)
 # ---------------------------------------------------------------------------
 
-VALID_CHANGE_TYPES = {"ADD", "UPDATE"}
+VALID_CHANGE_TYPES = {"ADD", "UPDATE", "DELETE"}
 
 
 @dataclass

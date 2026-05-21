@@ -48,6 +48,7 @@ services:
       - ../alembic.ini:/app/alembic.ini:ro
       - ../tests:/app/tests:ro
       - ../pyproject.toml:/app/pyproject.toml:ro
+      - ../scripts:/app/scripts:ro
     depends_on:
       oskar-db-dev:
         condition: service_healthy
