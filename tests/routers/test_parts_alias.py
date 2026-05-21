@@ -210,6 +210,7 @@ class TestAliasLookupValidation:
 
     def test_unauthenticated_returns_401(self):
         # No dependency override — real auth dependency fires
+        app.dependency_overrides.clear()
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.get("/api/v1/parts/alias", params={"popn": "ACME-001"})
         assert resp.status_code == 401

@@ -61,7 +61,7 @@ def _client_with_auth() -> TestClient:
 
 
 def _client_no_auth() -> TestClient:
-    app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.clear()
     app.dependency_overrides[get_session] = lambda: None
     return TestClient(app, raise_server_exceptions=False)
 

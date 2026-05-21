@@ -27,6 +27,7 @@ services:
       - MOVEX_API_KEY=${MOVEX_API_KEY:-dev-not-used}
       - MOVEX_CONO=${MOVEX_CONO:-300}
       - DATABASE_URL=postgresql+asyncpg://oskar:oskar_dev@oskar-db-dev:5432/oskar
+      - TEST_DATABASE_URL=postgresql+asyncpg://oskar:oskar_dev@oskar-test-db:5432/oskar_test
       # Dev auth bypass — skip LDAP entirely (not reachable from localhost)
       - AUTH_PROVIDER=dev
       - DEV_USERS=${DEV_USERS:-hsalazar,testuser,dc_user,eng_user}
@@ -45,8 +46,12 @@ services:
       - ../src:/app/src:ro
       - ../alembic:/app/alembic:ro
       - ../alembic.ini:/app/alembic.ini:ro
+      - ../tests:/app/tests:ro
+      - ../pyproject.toml:/app/pyproject.toml:ro
     depends_on:
       oskar-db-dev:
+        condition: service_healthy
+      oskar-test-db:
         condition: service_healthy
     command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
     healthcheck:
@@ -68,6 +73,23 @@ services:
       - oskar-db-dev-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U oskar -d oskar"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  oskar-test-db:
+    image: postgres:16-alpine
+    container_name: oskar-test-db
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_DB=oskar_test
+      - POSTGRES_USER=oskar
+      - POSTGRES_PASSWORD=oskar_dev
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oskar -d oskar_test"]
       interval: 5s
       timeout: 3s
       retries: 10

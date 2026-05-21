@@ -23,7 +23,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.auth.jwt import TokenError, decode_access_token
 from src.db import get_session  # async session factory — defined in src/db.py
 
-_bearer = HTTPBearer(auto_error=True)
+_bearer = HTTPBearer(auto_error=False)
+
+_UNAUTHORIZED = HTTPException(
+    status_code=status.HTTP_401_UNAUTHORIZED,
+    detail="Invalid or expired credentials",
+    headers={"WWW-Authenticate": "Bearer"},
+)
 
 
 @dataclass(frozen=True)
@@ -36,7 +42,7 @@ class CurrentUser:
 
 
 async def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(_bearer)],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> CurrentUser:
     """Validate the Bearer JWT and check the JTI blocklist.
@@ -47,16 +53,13 @@ async def get_current_user(
     - alg:none or wrong token type
     - JTI is in the blocklist (user logged out)
     """
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid or expired credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    if credentials is None:
+        raise _UNAUTHORIZED
 
     try:
         payload = decode_access_token(credentials.credentials)
     except TokenError:
-        raise credentials_exception
+        raise _UNAUTHORIZED
 
     jti: str = payload["jti"]
     username: str = payload["sub"]
@@ -67,7 +70,7 @@ async def get_current_user(
         {"jti": jti},
     )
     if row.first() is not None:
-        raise credentials_exception
+        raise _UNAUTHORIZED
 
     return CurrentUser(
         username=username,

@@ -72,4 +72,8 @@ async def run_migrations_online() -> None:
 if context.is_offline_mode():
     run_migrations_offline()
 else:
-    asyncio.run(run_migrations_online())
+    injected = config.attributes.get("connection", None)
+    if injected is not None:
+        do_run_migrations(injected)
+    else:
+        asyncio.run(run_migrations_online())

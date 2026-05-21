@@ -184,7 +184,7 @@ class TestApproveRole:
         assert call.kwargs["notes"] is None
 
     def test_no_jwt_returns_401(self):
-        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.clear()
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.post(
             f"/api/v1/ecn/{_ECN_ID}/approve",

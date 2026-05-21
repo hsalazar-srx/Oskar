@@ -194,7 +194,7 @@ async def suggest_pn(
     # Validate groups exist in the commodity map
     if prgp not in VALID_PROCUREMENT_GROUPS or itcl not in VALID_PRODUCT_GROUPS:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Unknown (procurement_group, product_group) pair: ({prgp}, {itcl}). "
                    "Check Proc & Prod Group Matrix.",
         )
@@ -204,7 +204,7 @@ async def suggest_pn(
     # Pair exists but override not in valid list
     if code is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"No commodity code found for ({prgp}, {itcl}).",
         )
 
@@ -213,14 +213,14 @@ async def suggest_pn(
         override_norm = commodity_override.upper().zfill(2)
         if override_norm not in valid_codes:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={"commodity_options": valid_codes},
             )
 
     # Multiple codes and no override provided — prompt engineer to choose
     if len(valid_codes) > 1 and commodity_override is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"commodity_options": valid_codes},
         )
 
@@ -462,7 +462,7 @@ async def autofill_groups(
     codes = COMMODITY_MAP.get((prgp, itcl))
     if codes is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Unknown (procurement_group, product_group) pair: ({prgp}, {itcl}). "
                    "Check Proc & Prod Group Matrix.",
         )

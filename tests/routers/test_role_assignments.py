@@ -122,7 +122,7 @@ class TestPostRoleAssignment:
 
     def test_no_jwt_returns_401(self) -> None:
         # No get_current_user override — real dep requires a valid JWT
-        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.clear()
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.post(
             "/api/v1/ecn/ecn-0001/role-assignments",

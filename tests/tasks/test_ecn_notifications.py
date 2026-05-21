@@ -73,7 +73,9 @@ class TestECNEmailService:
         """send() dispatches via aiosmtplib.send with correct SMTP host/port."""
         from src.tasks.ecn_notifications import ECNEmailService
 
-        with patch("src.tasks.ecn_notifications.aiosmtplib.send", new_callable=AsyncMock) as mock_send:
+        with patch("src.tasks.ecn_notifications.aiosmtplib.send", new_callable=AsyncMock) as mock_send, \
+             patch("src.tasks.ecn_notifications._SMTP_HOST", "10.10.0.155"), \
+             patch("src.tasks.ecn_notifications._SMTP_PORT", 25):
             svc = ECNEmailService()
             await svc.send(
                 to=["eng@scanfil.com"],
@@ -323,7 +325,7 @@ class TestOnDemandDigestEndpoint:
         assert resp.status_code == 202
 
     def test_no_jwt_returns_401(self):
-        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.clear()
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.post("/api/v1/admin/ecn-digest")
         assert resp.status_code == 401

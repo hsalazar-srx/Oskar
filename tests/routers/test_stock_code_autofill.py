@@ -438,6 +438,7 @@ class TestStockCodeAutofillValidation:
 class TestStockCodeAutofillAuth:
 
     def test_unauthenticated_returns_401(self):
+        app.dependency_overrides.clear()
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.post("/api/v1/parts/autofill",
                            json={"ecn_id": _ECN_ID, "item_id": _ITEM_ID,

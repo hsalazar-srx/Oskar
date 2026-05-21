@@ -180,7 +180,7 @@ class TestCreateECNItem:
         assert resp.status_code == 422
 
     def test_no_jwt_returns_401(self):
-        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.clear()
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.post(
             f"/api/v1/ecn/{_ECN_ID}/items",
@@ -495,7 +495,7 @@ class TestCreateMPN:
         assert resp.status_code == 404
 
     def test_no_jwt_returns_401(self):
-        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.clear()
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.post(
             f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/mpns",

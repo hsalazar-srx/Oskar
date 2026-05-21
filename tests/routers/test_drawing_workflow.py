@@ -154,7 +154,7 @@ class TestSetDrawingNumber:
         assert call.kwargs["actor_role"] == "DC"
 
     def test_no_jwt_returns_401(self):
-        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.clear()
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.patch(
             f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/drawing",

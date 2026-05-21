@@ -279,7 +279,7 @@ async def _compute_next_action_users(
         r = row.first()
         return [r[0]] if r else []
 
-    if status in (ECNStatus.SUBMITTED, ECNStatus.DC_REVIEW, ECNStatus.IMPLEMENTED, ECNStatus.ON_HOLD):
+    if status in (ECNStatus.IMPLEMENTED, ECNStatus.ON_HOLD):
         rows = await session.execute(
             sa.text(
                 "SELECT username FROM ecn_role_assignments "

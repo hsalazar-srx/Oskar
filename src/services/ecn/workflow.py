@@ -251,7 +251,7 @@ class ECNWorkflowMixin:
                 sa.text(
                     "SELECT username FROM system_role_users "
                     "WHERE role_id = :role_id AND facility = :facility "
-                    "AND removed_at IS NULL ORDER BY created_at LIMIT 1"
+                    "AND removed_at IS NULL ORDER BY added_at LIMIT 1"
                 ),
                 {"role_id": role_id, "facility": facility},
             )
@@ -434,7 +434,7 @@ class ECNWorkflowMixin:
             await self._session.execute(
                 sa.text(
                     "UPDATE ecn_approval_steps "
-                    "SET step_status = 'pending', actor_username = NULL, acted_at = NULL "
+                    "SET status = 'pending', username = NULL, completed_at = NULL "
                     "WHERE ecn_id = :ecn_id"
                 ),
                 {"ecn_id": ecn_id},

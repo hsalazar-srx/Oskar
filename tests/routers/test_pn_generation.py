@@ -430,6 +430,7 @@ class TestSuggestPNValidation:
         assert resp.status_code == 422
 
     def test_unauthenticated_returns_401(self):
+        app.dependency_overrides.clear()
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.get("/api/v1/parts/suggest-pn",
                           params={"procurement_group": "PCA", "product_group": "PCBA", "cuno": "LM"})

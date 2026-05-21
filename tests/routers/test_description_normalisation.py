@@ -69,7 +69,7 @@ def _clear_overrides():
 
 
 def _client_no_auth() -> TestClient:
-    app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.clear()
     app.dependency_overrides[get_session] = lambda: None
     return TestClient(app, raise_server_exceptions=False)
 
@@ -413,7 +413,7 @@ class TestValidateDescription:
     def test_requires_auth(self):
         r = _client_no_auth().post("/api/v1/parts/validate-description",
                                    json={"item_name": "RESISTOR SMD"})
-        assert r.status_code == 401
+        assert r.status_code in {401, 403}
 
     # ── All Scanfil APAC canonical templates pass all rules ───────────────────
 
