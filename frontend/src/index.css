@@ -1,1 +1,28 @@
 @import "tailwindcss";
+
+/* ── Design tokens (from SM Portal design system) ──────────────────────────── */
+/* These are plain CSS custom properties — used in arbitrary values like        */
+/* transition-[var(--t-fast)] or shadow-[var(--shadow-card)] where needed.     */
+:root {
+  /* Transitions */
+  --t-fast:   150ms ease-in-out;
+  --t-normal: 200ms ease-in-out;
+  --t-slow:   300ms ease-in-out;
+
+  /* Shadows beyond Tailwind's defaults */
+  --shadow-card: 0 1px 3px 0 rgb(0 0 0 / 0.06), 0 1px 2px -1px rgb(0 0 0 / 0.06);
+  --shadow-card-hover: 0 4px 8px -2px rgb(0 0 0 / 0.08), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+
+  /* Z-index semantic scale */
+  --z-sticky:  1020;
+  --z-modal:   1050;
+  --z-popover: 1060;
+  --z-tooltip: 1070;
+}
+
+/* ── Focus ring utility ─────────────────────────────────────────────────────── */
+@layer utilities {
+  .focus-ring {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-2;
+  }
+}

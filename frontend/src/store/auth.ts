@@ -13,22 +13,58 @@ interface AuthState {
   logout: () => Promise<void>
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
-  accessToken: sessionStorage.getItem("access_token"),
-  user: null,
+/** Decode a JWT payload without verifying the signature (client-side only). */
+function parseJwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const [, payloadB64] = token.split(".")
+    const json = atob(payloadB64.replace(/-/g, "+").replace(/_/g, "/"))
+    return JSON.parse(json)
+  } catch {
+    return null
+  }
+}
+
+/** Returns a user object from a JWT payload, or null if the token is expired. */
+function userFromToken(token: string): AuthUser | null {
+  const payload = parseJwtPayload(token)
+  if (!payload) return null
+  // exp is in seconds; Date.now() is in ms
+  if (typeof payload.exp === "number" && payload.exp * 1000 < Date.now()) return null
+  return {
+    username: (payload.sub as string) ?? "",
+    groups: (payload.groups as string[]) ?? [],
+  }
+}
+
+// Rehydrate on startup — parse the stored token if it exists and isn't expired
+const storedToken = sessionStorage.getItem("access_token")
+const hydratedUser = storedToken ? userFromToken(storedToken) : null
+
+// If the stored token is expired, clear it now so ProtectedRoute sends to /login cleanly
+if (storedToken && !hydratedUser) {
+  sessionStorage.removeItem("access_token")
+}
+
+export const useAuthStore = create<AuthState>(() => ({
+  accessToken: hydratedUser ? storedToken : null,
+  user: hydratedUser,
 
   login: async (username, password) => {
-    const { data } = await axiosInstance.post("/auth/login", { username, password })
-    sessionStorage.setItem("access_token", data.access_token)
-    set({ accessToken: data.access_token, user: data.user ?? { username, groups: [] } })
+    const { data } = await axiosInstance.post("/api/v1/auth/login", { username, password })
+    const token: string = data.access_token
+    sessionStorage.setItem("access_token", token)
+    useAuthStore.setState({
+      accessToken: token,
+      user: userFromToken(token) ?? { username, groups: [] },
+    })
   },
 
   logout: async () => {
     try {
-      await axiosInstance.post("/auth/logout")
+      await axiosInstance.post("/api/v1/auth/logout")
     } finally {
       sessionStorage.removeItem("access_token")
-      set({ accessToken: null, user: null })
+      useAuthStore.setState({ accessToken: null, user: null })
     }
   },
 }))

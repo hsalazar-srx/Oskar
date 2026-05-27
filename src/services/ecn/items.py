@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from typing import Any
 
 import sqlalchemy as sa
@@ -131,6 +132,7 @@ class ECNItemsMixin:
         if not ecn_row.first():
             raise ECNNotFound(ecn_id)
 
+        eff_date = date.fromisoformat(effectivity_from) if effectivity_from else None
         item_id = str(uuid.uuid4())
         await self._session.execute(
             sa.text(
@@ -152,7 +154,7 @@ class ECNItemsMixin:
                 "product_group": product_group, "unit_of_measure": unit_of_measure,
                 "item_group": item_group, "customer_alias": customer_alias,
                 "customer_part_number": customer_part_number,
-                "effectivity_type": effectivity_type, "effectivity_from": effectivity_from,
+                "effectivity_type": effectivity_type, "effectivity_from": eff_date,
             },
         )
         return await self.get_item(ecn_id, item_id)
@@ -199,6 +201,8 @@ class ECNItemsMixin:
             "customer_part_number", "effectivity_type", "effectivity_from", "is_new_item",
         }
         updates = {k: v for k, v in fields.items() if k in allowed}
+        if "effectivity_from" in updates and isinstance(updates["effectivity_from"], str):
+            updates["effectivity_from"] = date.fromisoformat(updates["effectivity_from"])
         if updates:
             set_clause = ", ".join(f"{k} = :{k}" for k in updates)
             await self._session.execute(
