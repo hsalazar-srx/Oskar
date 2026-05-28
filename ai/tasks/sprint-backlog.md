@@ -1,7 +1,7 @@
 # OSKAR — Sprint Backlog
 # Source of truth for all work status.
 # oskar-state.md (gitignored) is for next-session notes only — not for tracking status.
-# Last synced: 2026-05-11 (MCP Server moved to Future Improvements — BOM + Supplier Intelligence take priority as Iterations 2 & 3)
+# Last synced: 2026-05-28 (Sprint 4 complete. Sprint 5: VM deployment. Frontend refactored.)
 
 ---
 
@@ -207,7 +207,7 @@ Full endpoint spec in `ai/memory/02-movex-erp-authority.md §7`.
 
 ---
 
-## Sprint 4 — Local Stand-Up + React Frontend ✅ COMPLETE (2026-05-27)
+## Sprint 4 — Local Stand-Up + React Frontend ✅ COMPLETE (2026-05-28)
 
 > **Result:** Backend running locally in Docker. Full React frontend built and working against live API.
 > ECN workflow demonstrated end-to-end: create → submit → eng review → approve → on hold → reject → resubmit.
@@ -254,6 +254,22 @@ Stack: Vite + React 18 + TypeScript + Tailwind v4 + shadcn/ui + React Hook Form 
 | "Transition failed" on Reject/Place on Hold — missing `rejection_reason` / `hold_reason` | `needsModal` pattern routes to structured modal dialogs |
 | Toast shown at bottom, 2s duration | Repositioned top-center fixed; increased to 5s |
 
+### Frontend Refactor (2026-05-28 — committed c1c0d20)
+
+| Component | Before | After |
+|-----------|--------|-------|
+| `pages/ECNDetailPage.tsx` | 873 lines | ~200 lines (container only) |
+| `components/ECNItemPanel.tsx` | 442 lines | 1-line shim |
+| `components/ecn/ECNItemPanel.tsx` | — | ~400 lines |
+| `components/ecn/WorkflowPanel.tsx` | — | ~220 lines |
+| `components/ecn/RoleRow.tsx` | — | ~80 lines |
+| `components/ecn/ActionModal.tsx` | — | ~120 lines |
+| `components/ecn/ECNCard.tsx` | — | ~80 lines |
+| `lib/ecn-workflow.ts` | — | ~90 lines (domain constants) |
+| `api/ecn.ts` | — | ~90 lines (all ECN API functions) |
+
+Also fixed: `ECNCreatePage` POST `/api/v1/ecn` missing trailing slash → 401 (FastAPI 307 redirect drops Auth header).
+
 ### What's Deferred Post-POC
 
 | Feature | Current state | Unblocked by |
@@ -265,9 +281,51 @@ Stack: Vite + React 18 + TypeScript + Tailwind v4 + shadcn/ui + React Hook Form 
 | DC recovery panel / Movex write status (S2-16) | SSE infra + pg_notify ✅ | Display panel UI build |
 | Drawing number outbox (S2-14) | Backend ✅ | MPDDOC endpoint from @developer-dotnet |
 | Routing operations UI | Schema + CRUD API ✅ | UI build |
-| Email notifications | `ECNEmailService` + digest ✅ | SMTP reachable from dev; needs VM deployment |
+| Email notifications | `ECNEmailService` + digest ✅ | SMTP reachable from VM; needs VM deployment |
 | Celery worker/beat | Code ✅ | VM deployment |
-| VM deployment | VM provisioned (2026-05-01) | Docker + Harbor install (Lead Engineer) |
+| VM deployment | VM provisioned (2026-05-01) | ➜ **Sprint 5** |
+
+---
+
+## Sprint 5 — VM Deployment (staging)
+
+> **Goal:** Get Oskar running on `apac-plm-ops.srxglobal.local` in staging mode so Karen and the
+> engineering team can access it from the network. Celery worker + email notifications go live here.
+> LDAP auth starts as dev bypass; switches to live LDAPS once Manal confirms the service account.
+
+**Pre-conditions:**
+- [x] VM provisioned (2026-05-01): 4 CPUs / 16 GB RAM / 100 GB storage ✅
+- [ ] Harbor installed on VM — `docs/runbooks/harbor-installation.md`
+- [ ] DNS A record `apac-plm-ops.srxglobal.local` → VM IP (Manal)
+- [ ] IIS reverse proxy rule on SRXWEBAPP1 for Oskar vhost (Lead Engineer)
+
+**Deployment runbook:** `docs/runbooks/vm-deployment.md`
+
+### Sprint 5 Tasks
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| S5-1 | Harbor install on VM — Docker Engine + TLS cert + offline installer + `oskar` project | `docs/runbooks/harbor-installation.md` | ⏳ Manal + Lead Engineer |
+| S5-2 | Build and push images to Harbor — `./scripts/push-image.sh v0.1.0` | `scripts/push-image.sh` | ⏳ After S5-1 |
+| S5-3 | Provision `/etc/oskar/secrets.env` on VM — `sudo bash scripts/setup-server-secrets.sh` | `scripts/setup-server-secrets.sh` | ⏳ After VM access |
+| S5-4 | Copy `docker-compose.staging.yml` + `.env.staging` to VM; run `docker compose up -d` | `docker/docker-compose.staging.yml` + `docs/runbooks/vm-deployment.md` | ⏳ After S5-2, S5-3 |
+| S5-5 | Run Alembic migrations on staging DB — `docker exec oskar-app-staging alembic upgrade head` | — | ⏳ After S5-4 |
+| S5-6 | Run demo seed on staging — `docker exec oskar-app-staging python scripts/seed_demo.py` | `scripts/seed_demo.py` | ⏳ After S5-5 |
+| S5-7 | Smoke test staging endpoint — health, login, ECN list, ECN detail | `docs/runbooks/vm-deployment.md` | ⏳ After S5-6 |
+| S5-8 | IIS reverse proxy: `oskar.srxglobal.local` → port 8001 (staging) | IIS config on SRXWEBAPP1 | ⏳ Lead Engineer |
+| S5-9 | Validate SMTP → 10.10.0.155:25 from staging container | — | ⏳ After S5-4 |
+| S5-10 | Switch `AUTH_PROVIDER=ldap` once Manal confirms LDAPS service account | `.env.staging` on VM | ⏳ Blocked on Manal |
+| S5-11 | distribute Harbor `ca.crt` to dev machine (this workstation) | `docs/runbooks/harbor-installation.md §2` | ⏳ After S5-1 |
+
+### Sprint 5 Acceptance Criteria
+
+- [ ] `https://apac-plm-ops.srxglobal.local` (Harbor UI) returns 200
+- [ ] `http://oskar-app-staging:8001/health` returns `{"status":"ok"}`
+- [ ] Login with `hsalazar` / demo password works from a browser on the LAN
+- [ ] ECN list loads with seed data (≥5 ECNs visible)
+- [ ] ECN workflow transition (Submit → Engineering Review) completes without error
+- [ ] Email digest fires to test inbox (SMTP smoke test)
+- [ ] Celery worker and beat containers both show `Up` in `docker ps`
 
 ---
 
