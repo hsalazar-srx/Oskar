@@ -78,6 +78,36 @@ async function assignRole(ecnId: string, roleId: string, username: string, actor
   return data
 }
 
+// ── Role + workflow metadata ──────────────────────────────────────────────────
+
+const ROLE_LABEL: Record<string, string> = {
+  OR: "Originator",
+  DC: "Document Controller",
+  SE: "Senior Engineer",
+  CE: "Chief Engineer",
+  EM: "Engineering Manager",
+  QM: "Quality Manager",
+  PM: "Production Manager",
+  SC: "Supply Chain",
+  FN: "Finance",
+  CA: "Cost Accountant",
+  AD: "Administrator",
+}
+
+// Ordered stages for the timeline — maps ECN status codes to stage definitions
+const TIMELINE_STAGES = [
+  { status: 0,    label: "Draft",              roleId: "OR", parallel: false },
+  { status: 30,   label: "Engineering Review", roleId: "SE", parallel: false },
+  { status: 40,   label: "Management Review",  roleId: null, parallel: true  },
+  { status: 25,   label: "DC Approval",        roleId: "DC", parallel: false },
+  { status: 50,   label: "Approved",           roleId: null, parallel: false },
+  { status: 60,   label: "Implemented",        roleId: null, parallel: false },
+  { status: 70,   label: "Closed",             roleId: null, parallel: false },
+]
+
+// Actions that belong in the header (non-contextual primary flow)
+const HEADER_ACTION_TRIGGERS = new Set(["submit", "dc_approve", "resubmit", "resume", "cancel"])
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const SCOPE_FLAGS: { key: string; label: string }[] = [
@@ -207,7 +237,7 @@ export default function ECNDetailPage() {
         </div>
         <div className="flex items-center gap-2 shrink-0 ml-4">
           {transition.isPending && <Spinner size="sm" />}
-          {actions.map((action) => (
+          {actions.filter((a) => HEADER_ACTION_TRIGGERS.has(a.trigger)).map((action) => (
             <Button
               key={action.trigger}
               size="sm"
@@ -257,43 +287,21 @@ export default function ECNDetailPage() {
           )}
         </div>
 
-        {/* Two-column: role assignments + approval steps */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {ecn.role_assignments?.length > 0 && (
-            <Section title="Role assignments">
-              <div className="grid grid-cols-2 gap-1.5">
-                {ecn.role_assignments.map((ra: { role_id: string; username: string }) => (
-                  <RoleRow
-                    key={ra.role_id}
-                    roleId={ra.role_id}
-                    username={ra.username}
-                    canEdit={userGroups.includes("OSKAR-DC") && ra.role_id !== "OR"}
-                    isSaving={roleAssign.isPending}
-                    onSave={(newUsername) =>
-                      roleAssign.mutate({ roleId: ra.role_id, username: newUsername, actorRole: "DC" })
-                    }
-                  />
-                ))}
-              </div>
-            </Section>
-          )}
-
-          {ecn.approval_steps?.length > 0 && (
-            <Section title="Approval steps">
-              <div className="space-y-1">
-                {ecn.approval_steps.map((step: { role_id: string; username: string; step_status: string; skipped: boolean }) => (
-                  <div key={step.role_id} className="flex items-center justify-between rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2">
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-xs text-neutral-400 w-8 shrink-0">{step.role_id}</span>
-                      <span className="text-xs text-neutral-600">{step.username ?? "—"}</span>
-                    </div>
-                    <StepBadge status={step.step_status} skipped={step.skipped} />
-                  </div>
-                ))}
-              </div>
-            </Section>
-          )}
-        </div>
+        {/* Workflow timeline */}
+        <WorkflowPanel
+          ecn={ecn}
+          currentUsername={user?.username ?? ""}
+          isUserDC={userGroups.includes("OSKAR-DC")}
+          roleAssignIsPending={roleAssign.isPending}
+          transitionIsPending={transition.isPending}
+          onRoleAssign={(roleId, username) =>
+            roleAssign.mutate({ roleId, username, actorRole: "DC" })
+          }
+          onApproveRole={(role) =>
+            transition.mutate({ trigger: "approve_role", role })
+          }
+          onAction={(action) => handleAction(action)}
+        />
 
         {/* Items */}
         <Section
@@ -451,9 +459,11 @@ function ErrorState({ onBack }: { onBack: () => void }) {
   )
 }
 
-function RoleRow({ roleId, username, canEdit, isSaving, onSave }: {
+function RoleRow({ roleId, roleName, username, isAutoAssigned, canEdit, isSaving, onSave }: {
   roleId: string
+  roleName?: string
   username: string | null
+  isAutoAssigned?: boolean
   canEdit: boolean
   isSaving: boolean
   onSave: (username: string) => void
@@ -481,7 +491,12 @@ function RoleRow({ roleId, username, canEdit, isSaving, onSave }: {
 
   return (
     <div className="flex items-center gap-2 rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2 group">
-      <span className="font-mono text-xs text-neutral-400 w-8 shrink-0">{roleId}</span>
+      <div className="shrink-0 w-28">
+        <span className="text-xs font-medium text-neutral-700 block leading-tight">
+          {roleName ?? roleId}
+        </span>
+        <span className="font-mono text-[10px] text-neutral-400 leading-tight">{roleId}</span>
+      </div>
       {editing ? (
         <div className="flex items-center gap-1 flex-1 min-w-0">
           <input
@@ -508,8 +523,11 @@ function RoleRow({ roleId, username, canEdit, isSaving, onSave }: {
         </div>
       ) : (
         <>
-          <span className="text-xs text-neutral-700 truncate flex-1">
+          <span className="text-xs text-neutral-600 truncate flex-1">
             {username ?? <em className="text-neutral-300">unassigned</em>}
+            {isAutoAssigned && (
+              <span className="ml-1.5 text-[10px] text-neutral-300" title="Auto-assigned from system roster">auto</span>
+            )}
           </span>
           {canEdit && (
             <button
@@ -521,6 +539,222 @@ function RoleRow({ roleId, username, canEdit, isSaving, onSave }: {
             </button>
           )}
         </>
+      )}
+    </div>
+  )
+}
+
+// ── WorkflowPanel ────────────────────────────────────────────────────────────
+
+type RoleAssignment = { role_id: string; username: string | null; is_auto_assigned: boolean }
+type ApprovalStep   = { role_id: string; username: string | null; status: string; skipped: boolean }
+
+function WorkflowPanel({
+  ecn,
+  currentUsername,
+  isUserDC,
+  roleAssignIsPending,
+  transitionIsPending,
+  onRoleAssign,
+  onApproveRole,
+  onAction,
+}: {
+  ecn: Record<string, unknown>
+  currentUsername: string
+  isUserDC: boolean
+  roleAssignIsPending: boolean
+  transitionIsPending: boolean
+  onRoleAssign: (roleId: string, username: string) => void
+  onApproveRole: (role: string) => void
+  onAction: (action: ActionDef) => void
+}) {
+  const currentStatus = ecn.status as number
+  const roleMap = Object.fromEntries(
+    ((ecn.role_assignments ?? []) as RoleAssignment[]).map((r) => [r.role_id, r])
+  )
+  // Which step in the timeline are we at?
+  const activeStageIdx = TIMELINE_STAGES.findIndex((s) => s.status === currentStatus)
+
+  // Contextual panel-level actions (reject / hold) live here not in the header
+  const panelActions = (ACTIONS_BY_STATUS[currentStatus] ?? []).filter(
+    (a) => !HEADER_ACTION_TRIGGERS.has(a.trigger)
+  )
+
+  // Whether the current user has a pending approval step at MANAGEMENT_REVIEW
+  const myPendingStep = currentStatus === 40
+    ? (ecn.approval_steps as ApprovalStep[] | undefined)?.find(
+        (s) => s.username === currentUsername && s.status === "pending" && !s.skipped
+      )
+    : undefined
+
+  return (
+    <div className="rounded-lg border bg-white shadow-sm hover:shadow-md transition-shadow duration-[200ms]">
+      {/* Panel header */}
+      <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b border-neutral-100">
+        <div>
+          <h2 className="text-sm font-semibold text-neutral-700">ECN Workflow</h2>
+          <p className="text-xs text-neutral-400 mt-0.5">
+            Who acts at each stage · DC may reassign roles
+          </p>
+        </div>
+        {myPendingStep && (
+          <Button
+            size="sm"
+            variant="default"
+            disabled={transitionIsPending}
+            onClick={() => onApproveRole(myPendingStep.role_id)}
+            className="shrink-0"
+          >
+            Approve as {ROLE_LABEL[myPendingStep.role_id] ?? myPendingStep.role_id}
+          </Button>
+        )}
+      </div>
+
+      {/* Timeline */}
+      <div className="px-5 py-4 space-y-0">
+        {TIMELINE_STAGES.map((stage, idx) => {
+          const isDone   = activeStageIdx > idx
+          const isActive = activeStageIdx === idx
+          const isFuture = activeStageIdx < idx
+
+          // Terminal statuses break the happy path — show them separately
+          if ([65, 80, 90].includes(currentStatus) && !isActive && isFuture) return null
+
+          const stageRa = stage.roleId ? roleMap[stage.roleId] : null
+
+          return (
+            <div key={stage.status} className="flex gap-3">
+              {/* Vertical connector + dot */}
+              <div className="flex flex-col items-center shrink-0 w-6">
+                <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center text-[10px] font-bold shrink-0 ${
+                  isDone   ? "border-green-500 bg-green-500 text-white" :
+                  isActive ? "border-neutral-900 bg-neutral-900 text-white" :
+                             "border-neutral-200 bg-white text-neutral-300"
+                }`}>
+                  {isDone ? "✓" : isActive ? "▶" : ""}
+                </div>
+                {idx < TIMELINE_STAGES.length - 1 && (
+                  <div className={`w-0.5 flex-1 min-h-[1.5rem] my-1 ${isDone ? "bg-green-300" : "bg-neutral-100"}`} />
+                )}
+              </div>
+
+              {/* Stage content */}
+              <div className={`flex-1 pb-4 min-w-0 ${idx < TIMELINE_STAGES.length - 1 ? "" : ""}`}>
+                <div className="flex items-start justify-between gap-2 min-w-0">
+                  <span className={`text-sm font-medium leading-6 ${
+                    isActive ? "text-neutral-900" : isDone ? "text-neutral-500" : "text-neutral-300"
+                  }`}>
+                    {stage.label}
+                  </span>
+                  {isDone && (
+                    <span className="text-xs text-green-600 font-medium shrink-0 mt-1">Done</span>
+                  )}
+                  {isActive && !stage.parallel && (
+                    <span className="text-xs font-medium text-neutral-900 bg-neutral-100 px-2 py-0.5 rounded-full shrink-0">
+                      In progress
+                    </span>
+                  )}
+                </div>
+
+                {/* Single-actor stage: role assignment row */}
+                {stage.roleId && stageRa && (
+                  <div className="mt-1.5">
+                    <RoleRow
+                      roleId={stage.roleId}
+                      roleName={ROLE_LABEL[stage.roleId] ?? stage.roleId}
+                      username={stageRa.username}
+                      isAutoAssigned={stageRa.is_auto_assigned}
+                      canEdit={isUserDC && stage.roleId !== "OR" && !isDone}
+                      isSaving={roleAssignIsPending}
+                      onSave={(u) => onRoleAssign(stage.roleId!, u)}
+                    />
+                  </div>
+                )}
+
+                {/* Parallel block: approval steps */}
+                {stage.parallel && (
+                  <div className="mt-1.5 space-y-1">
+                    {(ecn.approval_steps as ApprovalStep[] | undefined)?.length
+                      ? (ecn.approval_steps as ApprovalStep[]).map((step) => (
+                          <div
+                            key={step.role_id}
+                            className={`flex items-center justify-between rounded-md border px-3 py-2 ${
+                              step.skipped              ? "border-neutral-100 bg-neutral-50 opacity-50" :
+                              step.status === "approved" ? "border-green-100 bg-green-50" :
+                              step.status === "pending"  ? "border-amber-100 bg-amber-50" :
+                              step.status === "rejected" ? "border-red-100 bg-red-50" :
+                                                          "border-neutral-100 bg-neutral-50"
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="font-mono text-xs text-neutral-400 w-7 shrink-0">{step.role_id}</span>
+                              <span className="text-xs font-medium text-neutral-600 hidden sm:block">
+                                {ROLE_LABEL[step.role_id] ?? step.role_id}
+                              </span>
+                              <span className="text-xs text-neutral-400 truncate">
+                                {step.username ?? "—"}
+                              </span>
+                            </div>
+                            <StepBadge status={step.status} skipped={step.skipped} />
+                          </div>
+                        ))
+                      : isActive && (
+                          <p className="text-xs text-neutral-400 italic">
+                            Approval steps will appear here once the ECN enters Management Review.
+                          </p>
+                        )
+                    }
+                  </div>
+                )}
+
+              </div>
+            </div>
+          )
+        })}
+
+        {/* Special terminal states */}
+        {currentStatus === 65 && (
+          <div className="flex gap-3 items-start pt-1">
+            <div className="w-6 h-6 rounded-full border-2 border-red-400 bg-red-400 flex items-center justify-center text-[10px] text-white font-bold shrink-0">✕</div>
+            <div>
+              <span className="text-sm font-medium text-red-700">Rejected</span>
+              <p className="text-xs text-neutral-400 mt-0.5">Originator must resubmit or cancel.</p>
+            </div>
+          </div>
+        )}
+        {currentStatus === 80 && (
+          <div className="flex gap-3 items-start pt-1">
+            <div className="w-6 h-6 rounded-full border-2 border-neutral-300 bg-neutral-300 flex items-center justify-center text-[10px] text-white font-bold shrink-0">✕</div>
+            <div><span className="text-sm font-medium text-neutral-500">Cancelled</span></div>
+          </div>
+        )}
+        {currentStatus === 90 && (
+          <div className="flex gap-3 items-start pt-1">
+            <div className="w-6 h-6 rounded-full border-2 border-amber-400 bg-amber-400 flex items-center justify-center text-[10px] text-white font-bold shrink-0">⏸</div>
+            <div>
+              <span className="text-sm font-medium text-amber-700">On Hold</span>
+              <p className="text-xs text-neutral-400 mt-0.5">DC may resume when ready.</p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Panel footer — contextual actions (Reject, Place on Hold) */}
+      {panelActions.length > 0 && (
+        <div className="flex items-center gap-2 px-5 py-3 border-t border-neutral-100 bg-neutral-50 rounded-b-lg">
+          <span className="text-xs text-neutral-400 mr-1">Actions:</span>
+          {panelActions.map((action) => (
+            <Button
+              key={action.trigger}
+              size="sm"
+              variant={action.variant ?? "outline"}
+              disabled={transitionIsPending}
+              onClick={() => onAction(action)}
+            >
+              {action.label}
+            </Button>
+          ))}
+        </div>
       )}
     </div>
   )

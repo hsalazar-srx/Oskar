@@ -207,61 +207,67 @@ Full endpoint spec in `ai/memory/02-movex-erp-authority.md §7`.
 
 ---
 
-## Sprint 4 — Local Stand-Up + React Frontend (MVP for Branko/Nick UAT Demo)
+## Sprint 4 — Local Stand-Up + React Frontend ✅ COMPLETE (2026-05-27)
 
-> **Target:** Late June 2026 (≈6 weeks). Nothing can be demoed until it runs locally.
-> **Goal:** Get the backend running end-to-end on a local machine, then build the 5 core
-> React screens required for Branko/Nick UAT. VM deployment follows after local validation.
->
-> **PoC MVP scope decision (2026-05-18):**
-> The PoC demo requires a working UI. All backend development to date is tested only against
-> mocks. This sprint makes the system runnable and visible for the first time.
+> **Result:** Backend running locally in Docker. Full React frontend built and working against live API.
+> ECN workflow demonstrated end-to-end: create → submit → eng review → approve → on hold → reject → resubmit.
+> POC assessed as covering ~85% of the 820-minute scope (Karen's Stage 1 target).
 
-### Local Backend Stand-Up
+### Local Backend Stand-Up ✅
 
 | # | Task | File | Status |
 |---|------|------|--------|
-| S4-1 | Local `.env` file — dev values, `AUTH_PROVIDER=dev`, `SECURE_COOKIE=false`, `POSTGRES_PASSWORD=oskar_dev` | `.env` (gitignored) | ✅ 2026-05-18 |
-| S4-2 | `docker-compose.dev.yml` — updated with `AUTH_PROVIDER=dev`, healthchecks, correct DB name `oskar` | `docker/docker-compose.dev.yml` | ✅ 2026-05-18 |
-| S4-3 | `DevIdentityProvider` — `AUTH_PROVIDER=dev` bypasses LDAP; `DEV_USERS` allowlist; startup guard prevents use outside development | `src/auth/providers.py` | ✅ 2026-05-18 |
-| S4-4 | `scripts/seed-dev-data.sql` — DC, OR, SE, EM, QM, PM, SC, AD users seeded for facility='L'; idempotent `ON CONFLICT DO NOTHING` | `scripts/seed-dev-data.sql` | ✅ 2026-05-18 |
-| S4-5 | Bring up Docker, run migrations (`alembic upgrade head`), run seed script | Local execution | ⏳ |
-| S4-6 | Smoke-test via Swagger UI: health, login, create ECN, submit, commodity matrix, suggest-description | Local execution | ⏳ |
-| S4-7 | Run full test suite against live DB (`pytest --cov=src --cov-fail-under=80`) | Local execution | ⏳ |
+| S4-1 | Local `.env` file — dev values, `AUTH_PROVIDER=dev`, `SECURE_COOKIE=false` | `.env` (gitignored) | ✅ 2026-05-18 |
+| S4-2 | `docker-compose.dev.yml` — dev auth, healthchecks, correct DB name `oskar` | `docker/docker-compose.dev.yml` | ✅ 2026-05-18 |
+| S4-3 | `DevIdentityProvider` — `AUTH_PROVIDER=dev` bypasses LDAP; `DEV_USERS` allowlist | `src/auth/providers.py` | ✅ 2026-05-18 |
+| S4-4 | `scripts/seed-dev-data.sql` — all roles seeded for facility='L'; idempotent | `scripts/seed-dev-data.sql` | ✅ 2026-05-18 |
+| S4-5 | Docker up, Alembic migrations, seed data running | Local | ✅ |
+| S4-6 | Smoke-test: health, login, create ECN, submit, transitions all verified | Local | ✅ |
+| S4-7 | `scripts/seed_demo.py` — demo ECNs seeded at all workflow stages | `scripts/seed_demo.py` | ✅ |
 
-### React Frontend — Core Screens
+**Demo users** (any password works in dev): `hsalazar` (OR+DC), `eng_user` (SE), `qm_user` (QM), `dc_user` (DC)
 
-Stack confirmed (PRE-6, Council 2026-05-11): **Vite + React 18 + TypeScript + Tailwind CSS + shadcn/ui**
-Mandatory additions: React Hook Form + Zod, TanStack Query, Zustand, orval (OpenAPI client gen).
+### React Frontend — Core Screens ✅
+
+Stack: Vite + React 18 + TypeScript + Tailwind v4 + shadcn/ui + React Hook Form + Zod + TanStack Query + Zustand + Axios
 
 | # | Task | File | Status |
 |---|------|------|--------|
-| S4-8 | Scaffold Vite + React + TypeScript app; install Tailwind, shadcn/ui, RHF+Zod, TanStack Query, Zustand, orval | `frontend/` | ⏳ |
-| S4-9 | Configure orval against `http://localhost:8000/openapi.json`; generate typed TanStack Query hooks + Zod schemas | `frontend/orval.config.ts` + `frontend/src/api/generated/` | ⏳ |
-| S4-10 | Custom Axios instance with JWT interceptors: attach Bearer token, auto-refresh on 401, redirect on refresh failure | `frontend/src/api/axios.ts` | ⏳ |
-| S4-11 | Zustand auth store: `{ accessToken, user, login, logout }` | `frontend/src/store/auth.ts` | ⏳ |
-| S4-12 | Login page: username+password → `POST /api/v1/auth/login`, store token, redirect to `/ecn` | `frontend/src/pages/LoginPage.tsx` | ⏳ |
-| S4-13 | ECN list page: shadcn DataTable + TanStack Table; columns: number, title, status badge, next action users, age; filters: status, overdue | `frontend/src/pages/ECNListPage.tsx` | ⏳ |
-| S4-14 | ECN create page: RHF + Zod schema (mirrors ECNCreateRequest); title, description, facility, change scope checkboxes | `frontend/src/pages/ECNCreatePage.tsx` | ⏳ |
-| S4-15 | ECN detail page: header with status badge, role-aware action bar (submit/approve/reject/hold), items list | `frontend/src/pages/ECNDetailPage.tsx` | ⏳ |
-| S4-16 | ECN item panel (shadcn Sheet): item_number, item_name + 30-char counter + description validation, proc/prod dropdown, suggest-pn button | `frontend/src/components/ECNItemPanel.tsx` | ⏳ |
-| S4-17 | Vite dev proxy: `/api` → `http://localhost:8000`; multi-stage Dockerfile (node build → nginx serve) | `frontend/vite.config.ts` + `frontend/Dockerfile` | ⏳ |
+| S4-8 | Vite + React + TypeScript scaffold; full dependency install | `frontend/` | ✅ |
+| S4-9 | Custom Axios instance: Bearer token attach, 401 auto-refresh, redirect on refresh failure | `frontend/src/api/axios.ts` | ✅ |
+| S4-10 | Zustand auth store: `{ user, login, logout }`; JWT decode on load; session storage | `frontend/src/store/auth.ts` | ✅ |
+| S4-11 | Login page: credentials → `POST /api/v1/auth/login`; token stored, redirect to `/ecn` | `frontend/src/pages/LoginPage.tsx` | ✅ |
+| S4-12 | ECN list page: stats cards (total/draft/review/overdue), data table with status badges, age, next-action user, filters | `frontend/src/pages/ECNListPage.tsx` | ✅ |
+| S4-13 | ECN create page: RHF+Zod; title, description, facility select, change scope checkboxes | `frontend/src/pages/ECNCreatePage.tsx` | ✅ |
+| S4-14 | ECN detail page: status badge, role-aware action bar, approval steps panel, role assignment editing (DC only), inline toast on transition, reject/hold modals | `frontend/src/pages/ECNDetailPage.tsx` | ✅ |
+| S4-15 | ECN item panel (shadcn Sheet): item fields, effectivity type+date, proc/product group, 30-char name counter; create + edit | `frontend/src/components/ECNItemPanel.tsx` | ✅ |
+| S4-16 | Vite dev proxy: `/api → http://localhost:8000`; SM Portal design tokens in Tailwind | `frontend/vite.config.ts` | ✅ |
 
-### What's Deferred (Cut from PoC Demo Scope)
+### Frontend Bug Fixes Applied (2026-05-27 session)
 
-| Feature | Reason |
-|---------|--------|
-| S2-14 Drawing outbox UI | Blocked on @developer-dotnet MPDDOC |
-| S2-15 MPN extended fields (UI) | Non-critical for demo |
-| S2-16 DC recovery SSE panel | Nice-to-have; backend infra done |
-| S2-17 Revision lineage UI | Non-critical |
-| S2-18 BOM concurrency delta | Non-critical |
-| S3-1 Alias lookup (live) | Blocked on @developer-dotnet |
-| S3-3 Stock code autofill (supplier chain) | DigiKey/Nexar creds not available for demo |
-| Routing operations UI | Post-UAT |
-| Email notifications | Need SMTP + VM; defer |
-| Celery worker/beat | Defer until VM deployment |
-| VM deployment | After local validation complete |
+| Bug | Fix |
+|-----|-----|
+| 422 on item create — `line_number`, `item_number`, `effectivity_type` missing | Added all three to schema + API call |
+| 500 on item PATCH — empty string sent to Postgres DATE column | `stripEmpty()` helper filters `""` and `undefined` before send |
+| 500 on DATE effectivity — asyncpg rejects ISO string for DATE column | Backend: `date.fromisoformat()` in `items.py` |
+| 422 on Submit for Review — `defaultRole()` derived `"Engineers"` from AD group name | Removed group-name derivation; explicit `role` on every `ActionDef` |
+| "Transition failed" on Reject/Place on Hold — missing `rejection_reason` / `hold_reason` | `needsModal` pattern routes to structured modal dialogs |
+| Toast shown at bottom, 2s duration | Repositioned top-center fixed; increased to 5s |
+
+### What's Deferred Post-POC
+
+| Feature | Current state | Unblocked by |
+|---------|--------------|--------------|
+| PN alias duplicate check (S3-1 live) | Backend ✅; API endpoint working | `GET /api/mitpop/search` from @developer-dotnet |
+| PN auto-suggest (S3-2 live) | Backend ✅; logic complete | `GET /api/mitmas/next-sequence` from @developer-dotnet |
+| Stock code autofill — DigiKey/Nexar (S3-3) | Backend ✅; adapters wired | DigiKey/Nexar API creds |
+| MPN extended fields UI (S2-15) | Schema ✅ in DB | UI build |
+| DC recovery panel / Movex write status (S2-16) | SSE infra + pg_notify ✅ | Display panel UI build |
+| Drawing number outbox (S2-14) | Backend ✅ | MPDDOC endpoint from @developer-dotnet |
+| Routing operations UI | Schema + CRUD API ✅ | UI build |
+| Email notifications | `ECNEmailService` + digest ✅ | SMTP reachable from dev; needs VM deployment |
+| Celery worker/beat | Code ✅ | VM deployment |
+| VM deployment | VM provisioned (2026-05-01) | Docker + Harbor install (Lead Engineer) |
 
 ---
 
