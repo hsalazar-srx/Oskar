@@ -23,6 +23,8 @@ node_modules/
 dist/
 .next/
 *.local
+screenshot-out/
+screenshot-run.mjs
 
 # Docker volumes and runtime data
 docker/data/
