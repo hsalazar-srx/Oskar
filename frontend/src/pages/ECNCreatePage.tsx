@@ -27,7 +27,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>
 
 async function createECN(body: FormValues) {
-  const { data } = await axiosInstance.post("/api/v1/ecn", body)
+  const { data } = await axiosInstance.post("/api/v1/ecn/", body)
   return data
 }
 

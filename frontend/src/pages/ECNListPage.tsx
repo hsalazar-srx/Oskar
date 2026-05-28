@@ -10,6 +10,7 @@ import {
 import { useAuthStore } from "@/store/auth"
 import axiosInstance from "@/api/axios"
 import { statusLabel, statusBadgeVariant } from "@/lib/ecn-status"
+import { ageDays } from "@/lib/ecn-workflow"
 
 interface ECNSummary {
   id: string
@@ -26,10 +27,6 @@ async function fetchECNs(params: Record<string, string>) {
   const q = new URLSearchParams(params).toString()
   const { data } = await axiosInstance.get(`/api/v1/ecn/?${q}`)
   return data as ECNSummary[]
-}
-
-function ageDays(createdAt: string) {
-  return Math.floor((Date.now() - new Date(createdAt).getTime()) / 86_400_000)
 }
 
 const STATUS_OPTIONS = [
