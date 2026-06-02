@@ -29,7 +29,7 @@ services:
       - MOVEX_API_KEY=${MOVEX_API_KEY}
       - MOVEX_CONO=${MOVEX_CONO:-300}
       - DATABASE_URL=postgresql+asyncpg://oskar:${POSTGRES_PASSWORD}@oskar-db-staging:5432/oskar_staging
-      - AUTH_PROVIDER=ldap
+      - AUTH_PROVIDER=${AUTH_PROVIDER:-dev}
       - LDAP_SERVER=${LDAP_SERVER}
       - LDAP_BASE_DN=${LDAP_BASE_DN}
       - LDAP_BIND_DN=${LDAP_BIND_DN}
@@ -114,7 +114,7 @@ services:
     cap_drop:
       - ALL
     ports:
-      - "3001:80"
+      - "3001:8080"
     environment:
       - VITE_API_URL=/api/v1
 

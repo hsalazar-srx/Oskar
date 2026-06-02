@@ -1,7 +1,7 @@
 # OSKAR — Sprint Backlog
 # Source of truth for all work status.
 # oskar-state.md (gitignored) is for next-session notes only — not for tracking status.
-# Last synced: 2026-05-28 (Sprint 4 complete. Sprint 5: VM deployment. Frontend refactored.)
+# Last synced: 2026-06-02 (Sprint 5 staging stack live on apac-plm-ops.srxglobal.local)
 
 ---
 
@@ -287,17 +287,20 @@ Also fixed: `ECNCreatePage` POST `/api/v1/ecn` missing trailing slash → 401 (F
 
 ---
 
-## Sprint 5 — VM Deployment (staging)
+## Sprint 5 — VM Deployment (staging) ✅ CORE COMPLETE (2026-06-02)
 
-> **Goal:** Get Oskar running on `apac-plm-ops.srxglobal.local` in staging mode so Karen and the
-> engineering team can access it from the network. Celery worker + email notifications go live here.
-> LDAP auth starts as dev bypass; switches to live LDAPS once Manal confirms the service account.
+> **Result:** Staging stack live on `apac-plm-ops.srxglobal.local` (10.131.1.10).
+> All 5 containers healthy. 12 Alembic migrations applied. 7 demo ECNs seeded.
+> Corporate proxy blocked Windows→VM Docker push — images built on VM directly (see LL-002).
+> Remaining: IIS proxy, systemd auto-start, LDAP switchover (Manal dependency).
 
 **Pre-conditions:**
 - [x] VM provisioned (2026-05-01): 4 CPUs / 16 GB RAM / 100 GB storage ✅
-- [ ] Harbor installed on VM — `docs/runbooks/harbor-installation.md`
-- [ ] DNS A record `apac-plm-ops.srxglobal.local` → VM IP (Manal)
-- [ ] IIS reverse proxy rule on SRXWEBAPP1 for Oskar vhost (Lead Engineer)
+- [x] Harbor v2.15.0 installed on VM — HTTP mode, `oskar` project created ✅
+- [x] SSH enabled on VM (openssh-server installed 2026-06-02) ✅
+- [x] Node.js 20 LTS installed on VM (for npm lock file regen) ✅
+- [ ] DNS A record `apac-plm-ops.srxglobal.local` → VM IP (Manal) ⏳
+- [ ] IIS reverse proxy rule on SRXWEBAPP1 for Oskar vhost (Lead Engineer) ⏳
 
 **Deployment runbook:** `docs/runbooks/vm-deployment.md`
 
@@ -305,27 +308,42 @@ Also fixed: `ECNCreatePage` POST `/api/v1/ecn` missing trailing slash → 401 (F
 
 | # | Task | File | Status |
 |---|------|------|--------|
-| S5-1 | Harbor install on VM — Docker Engine + TLS cert + offline installer + `oskar` project | `docs/runbooks/harbor-installation.md` | ⏳ Manal + Lead Engineer |
-| S5-2 | Build and push images to Harbor — `./scripts/push-image.sh v0.1.0` | `scripts/push-image.sh` | ⏳ After S5-1 |
-| S5-3 | Provision `/etc/oskar/secrets.env` on VM — `sudo bash scripts/setup-server-secrets.sh` | `scripts/setup-server-secrets.sh` | ⏳ After VM access |
-| S5-4 | Copy `docker-compose.staging.yml` + `.env.staging` to VM; run `docker compose up -d` | `docker/docker-compose.staging.yml` + `docs/runbooks/vm-deployment.md` | ⏳ After S5-2, S5-3 |
-| S5-5 | Run Alembic migrations on staging DB — `docker exec oskar-app-staging alembic upgrade head` | — | ⏳ After S5-4 |
-| S5-6 | Run demo seed on staging — `docker exec oskar-app-staging python scripts/seed_demo.py` | `scripts/seed_demo.py` | ⏳ After S5-5 |
-| S5-7 | Smoke test staging endpoint — health, login, ECN list, ECN detail | `docs/runbooks/vm-deployment.md` | ⏳ After S5-6 |
-| S5-8 | IIS reverse proxy: `oskar.srxglobal.local` → port 8001 (staging) | IIS config on SRXWEBAPP1 | ⏳ Lead Engineer |
-| S5-9 | Validate SMTP → 10.10.0.155:25 from staging container | — | ⏳ After S5-4 |
-| S5-10 | Switch `AUTH_PROVIDER=ldap` once Manal confirms LDAPS service account | `.env.staging` on VM | ⏳ Blocked on Manal |
-| S5-11 | distribute Harbor `ca.crt` to dev machine (this workstation) | `docs/runbooks/harbor-installation.md §2` | ⏳ After S5-1 |
+| S5-1 | Harbor install on VM — Docker Engine + HTTP mode + `oskar` project | `docs/runbooks/harbor-installation.md` | ✅ 2026-06-02 |
+| S5-2 | Configure insecure registry on VM + `docker login 10.131.1.10` | `/etc/docker/daemon.json` on VM | ✅ 2026-06-02 |
+| S5-3 | Download source zip from GitHub onto VM, extract to `/opt/oskar-src` | VM filesystem | ✅ 2026-06-02 |
+| S5-4 | Build `oskar-app:v0.1.0` and `oskar-frontend:v0.1.0` on VM, push to Harbor | `Dockerfile`, `frontend/Dockerfile` | ✅ 2026-06-02 |
+| S5-5 | Create `/opt/oskar/.env.staging`; copy `docker-compose.staging.yml`; `docker compose up -d` | `docker/docker-compose.staging.yml` | ✅ 2026-06-02 |
+| S5-6 | Run Alembic migrations — 12 revisions applied (0001→0012) | `alembic/versions/` | ✅ 2026-06-02 |
+| S5-7 | Run demo seed — 7 ECNs across all workflow stages | `scripts/seed_demo.py` | ✅ 2026-06-02 |
+| S5-8 | Smoke test API — health + login + ECN list from VM | `curl http://localhost:8001/health` | ✅ 2026-06-02 |
+| S5-9 | IIS reverse proxy: `oskar.srxglobal.local` → ports 8001/3001 | IIS on SRXWEBAPP1 | ⏳ Lead Engineer |
+| S5-10 | Validate SMTP → 10.10.0.155:25 from staging container | — | ⏳ |
+| S5-11 | Switch `AUTH_PROVIDER=ldap` once Manal confirms LDAPS service account | `.env.staging` on VM | ⏳ Blocked on Manal |
+| S5-12 | Enable `oskar-staging.service` systemd unit for auto-start on reboot | `/etc/systemd/system/` on VM | ⏳ |
 
-### Sprint 5 Acceptance Criteria
+### Dockerfile Fixes Applied During Sprint 5
 
-- [ ] `https://apac-plm-ops.srxglobal.local` (Harbor UI) returns 200
-- [ ] `http://oskar-app-staging:8001/health` returns `{"status":"ok"}`
-- [ ] Login with `hsalazar` / demo password works from a browser on the LAN
-- [ ] ECN list loads with seed data (≥5 ECNs visible)
-- [ ] ECN workflow transition (Submit → Engineering Review) completes without error
-- [ ] Email digest fires to test inbox (SMTP smoke test)
-- [ ] Celery worker and beat containers both show `Up` in `docker ps`
+| Fix | Before | After |
+|-----|--------|-------|
+| `Dockerfile` missing alembic | Only copied `src/` | Also copies `alembic/`, `alembic.ini`, `scripts/` |
+| Frontend nginx image | `nginx:alpine` (root required) | `nginxinc/nginx-unprivileged:alpine` (non-root, port 8080) |
+| Frontend compose port | `3001:80` | `3001:8080` |
+
+### Sprint 5 Acceptance Checklist
+
+- [x] Harbor UI accessible at `http://10.131.1.10`
+- [x] `docker login 10.131.1.10` succeeds from VM
+- [x] `oskar-app:v0.1.0` and `oskar-frontend:v0.1.0` in Harbor
+- [x] All 5 staging containers Up (app healthy, worker/beat running, frontend up, db healthy)
+- [x] 12 Alembic migrations applied cleanly
+- [x] 7 demo ECNs seeded across all workflow stages
+- [x] `curl http://localhost:8001/health` → `{"status":"ok"}`
+- [ ] Login from LAN browser works
+- [ ] ECN list loads in browser with ≥5 seed ECNs
+- [ ] ECN transition fires in browser
+- [ ] `oskar-staging.service` enabled in systemd
+- [ ] IIS vhost routes correctly
+- [ ] LDAP auth confirmed (Manal dependency)
 
 ---
 

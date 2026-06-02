@@ -28,7 +28,7 @@ export default function ECNCard({ ecn }: Props) {
     <div className="rounded-lg border bg-white p-5 shadow-sm hover:shadow-md transition-shadow duration-[200ms] space-y-4">
       <div>
         <h1 className="text-xl font-semibold text-neutral-900 leading-snug">{ecn.title as string}</h1>
-        {ecn.description && (
+        {(ecn.description as string | null) && (
           <p className="mt-2 text-sm text-neutral-600 leading-relaxed">{ecn.description as string}</p>
         )}
       </div>

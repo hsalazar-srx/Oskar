@@ -21,8 +21,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application source
+# Copy application source and migrations
 COPY src/ ./src/
+COPY alembic/ ./alembic/
+COPY alembic.ini .
+COPY scripts/ ./scripts/
 
 # Non-root user — UID 1000, no shell, no home dir write access needed
 RUN useradd -r -u 1000 -M -s /sbin/nologin oskar \
