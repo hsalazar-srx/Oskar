@@ -42,6 +42,7 @@ services:
       - SMTP_HOST=${SMTP_HOST:-10.10.0.155}
       - SMTP_PORT=${SMTP_PORT:-25}
       - SMTP_SENDER=${SMTP_SENDER}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3001,http://10.131.1.10:3001}
       - OSKAR_ENV=staging
     depends_on:
       oskar-db-staging:
@@ -104,17 +105,8 @@ services:
     image: ${REGISTRY:-apac-plm-ops.srxglobal.local}/oskar-frontend:${TAG:-latest}
     container_name: oskar-frontend-staging
     restart: unless-stopped
-    read_only: true
-    tmpfs:
-      - /tmp
-      - /var/cache/nginx
-      - /var/run
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
     ports:
-      - "3001:8080"
+      - "3001:80"
     environment:
       - VITE_API_URL=/api/v1
 

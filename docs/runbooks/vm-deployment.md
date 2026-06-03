@@ -128,9 +128,10 @@ Confirm both images appear in Harbor:
 `http://10.131.1.10` → Projects → oskar → Repositories
 
 > **Frontend image notes:**
-> - Uses `nginxinc/nginx-unprivileged:alpine` (not `nginx:alpine`) — runs as non-root,
->   compatible with `read_only: true` and `cap_drop: ALL` in the compose file.
-> - Listens on port 8080 internally; compose maps `3001:8080`.
+> - Uses standard `nginx:alpine`, listens on port 80, mapped to host port 3001.
+> - The `nginx.conf` includes a `proxy_pass` block for `/api/` → backend on port 8000.
+> - `read_only: true` and `cap_drop: ALL` are NOT set on the frontend service in staging —
+>   standard nginx requires filesystem write access for its cache directories.
 
 ---
 
@@ -156,7 +157,12 @@ LDAP_SERVER=
 LDAP_BASE_DN=
 LDAP_BIND_DN=
 LDAP_BIND_PW=
-LDAP_ENABLED=false
+AUTH_PROVIDER=dev
+
+# Origins allowed to make POST/PUT/PATCH/DELETE requests to the API.
+# Must include every URL users access the frontend from.
+# Default in code is localhost:5173 (dev only) — always set this explicitly.
+CORS_ORIGINS=http://localhost:3001,http://10.131.1.10:3001
 
 JWT_SECRET_KEY_STAGING=change-me-jwt-secret-staging-64chars
 REFRESH_TOKEN_SECRET_STAGING=change-me-refresh-secret-staging-64chars
@@ -359,9 +365,10 @@ When staging is validated and LDAPS + Movex are confirmed:
 
 1. Copy `.env.staging` → `.env.prod`, change:
    - `MOVEX_CONO=100`
-   - `LDAP_ENABLED=true`
+   - `AUTH_PROVIDER=ldap`
    - `OSKAR_ENV=production`
-   - Generate fresh `JWT_SECRET_KEY_STAGING` and `POSTGRES_PASSWORD` for production
+   - `CORS_ORIGINS=http://oskar.srxglobal.local` (or the production hostname)
+   - Generate fresh `JWT_SECRET_KEY_STAGING`, `REFRESH_TOKEN_SECRET_STAGING`, and `POSTGRES_PASSWORD` for production
 2. Run `docker-compose.yml` (production) on the same VM
 3. Disable `DBCHK_OpenECN` SQL Server Agent job on DBSRV (G-6)
 4. Announce go-live to Karen
@@ -396,14 +403,21 @@ Then retry `docker login`.
 
 ### T-03 — Frontend container restarts: `chown failed (Operation not permitted)`
 
-The Dockerfile uses `nginx:alpine` (requires root for chown). Must use `nginxinc/nginx-unprivileged:alpine` instead, which runs as UID 101 and listens on port 8080.
+The `oskar-frontend` service has `read_only: true` or `cap_drop: ALL` set in the compose
+file. Standard `nginx:alpine` requires root to `chown` its cache directories at startup —
+these hardening flags prevent that.
 
-Verify [frontend/Dockerfile](../../frontend/Dockerfile) line 16 reads:
-```
-FROM nginxinc/nginx-unprivileged:alpine AS runner
+**Fix:** Ensure `docker-compose.staging.yml` does NOT have `read_only`, `tmpfs`, `cap_drop`,
+or `security_opt` on the `oskar-frontend` service. Replace from source if the file was edited
+manually:
+
+```bash
+sudo cp /opt/oskar-src/Oskar-master/docker/docker-compose.staging.yml /opt/oskar/docker-compose.staging.yml
+sudo docker compose -f docker-compose.staging.yml --env-file .env.staging up -d --force-recreate oskar-frontend
 ```
 
-Rebuild and re-push the frontend image.
+The correct frontend service definition has only: `image`, `container_name`, `restart`,
+`ports: ["3001:80"]`, and `environment`.
 
 ---
 
@@ -456,6 +470,60 @@ This is a warning, not an error. The stack will still start. Add missing variabl
 
 ---
 
+### T-09 — Login returns 403 `Origin not allowed`
+
+The backend `OriginCheckMiddleware` blocks POST requests from origins not in `CORS_ORIGINS`.
+The default is `localhost:5173` (dev Vite server only).
+
+**Fix:** Add `CORS_ORIGINS` to `/opt/oskar/.env.staging`:
+```bash
+echo "CORS_ORIGINS=http://localhost:3001,http://10.131.1.10:3001" | sudo tee -a /opt/oskar/.env.staging
+```
+
+Then force-recreate the app container to pick it up:
+```bash
+cd /opt/oskar
+sudo docker compose -f docker-compose.staging.yml --env-file .env.staging up -d --force-recreate oskar-app
+```
+
+> When adding IIS proxy or custom hostname, add that origin too:
+> `CORS_ORIGINS=http://localhost:3001,http://10.131.1.10:3001,http://oskar.srxglobal.local`
+
+---
+
+### T-10 — Login returns `Invalid credentials` despite correct password
+
+Check `AUTH_PROVIDER` in the running container:
+```bash
+sudo docker exec oskar-app-staging env | grep AUTH_PROVIDER
+```
+
+If it shows `ldap` but LDAP is not configured, the compose file has `AUTH_PROVIDER` hardcoded.
+Fix: ensure `/opt/oskar/.env.staging` has `AUTH_PROVIDER=dev` and force-recreate:
+```bash
+sudo docker compose -f docker-compose.staging.yml --env-file .env.staging up -d --force-recreate oskar-app
+```
+
+If the container still shows `AUTH_PROVIDER=ldap` after recreate, the compose file has it
+hardcoded — replace the compose file from source:
+```bash
+sudo cp /opt/oskar-src/Oskar-master/docker/docker-compose.staging.yml /opt/oskar/docker-compose.staging.yml
+```
+
+---
+
+### T-11 — Compose file service names missing after VM edits
+
+Never use `sed` to patch compose YAML — indentation errors silently corrupt the file.
+Always replace from source:
+```bash
+sudo cp /opt/oskar-src/Oskar-master/docker/docker-compose.staging.yml /opt/oskar/docker-compose.staging.yml
+```
+
+Then re-apply any environment overrides by editing `.env.staging` instead.
+
+---
+
 ## Sprint 5 Acceptance Checklist
 
 - [x] Harbor UI accessible at `http://10.131.1.10`
@@ -465,7 +533,7 @@ This is a warning, not an error. The stack will still start. Add missing variabl
 - [x] `alembic upgrade head` — 12 migrations applied cleanly
 - [x] Seed data — 7 ECNs created across all workflow stages
 - [x] `curl http://localhost:8001/health` returns `{"status":"ok"}`
-- [ ] Login with demo credentials works from a browser on the LAN
+- [x] Login with demo credentials works from browser (`http://10.131.1.10:3001`)
 - [ ] ECN list loads with ≥5 seed ECNs visible in browser
 - [ ] ECN workflow transition completes in browser
 - [ ] `oskar-staging.service` enabled in systemd

@@ -128,6 +128,10 @@ The following bugs were found and fixed during the deployment attempt:
 | 5 | `seed_demo.py` fails: can't write to container filesystem | Run seed via one-off container with source volume-mounted |
 | 6 | `docker compose up oskar-beat` fails: service not found | VM had old compose file — `cp` from source replaces it |
 | 7 | `oskar-worker` reports unhealthy | No healthcheck defined for Celery — expected, not a real failure |
+| 8 | `AUTH_PROVIDER=ldap` hardcoded in compose — all logins fail | Changed to `${AUTH_PROVIDER:-dev}`; set `AUTH_PROVIDER=dev` in `.env.staging` |
+| 9 | nginx proxy returns 403 on login POST | `CORS_ORIGINS` not set — backend `OriginCheckMiddleware` rejected `http://localhost:3001`; add `CORS_ORIGINS` to `.env.staging` and compose |
+| 10 | Frontend container crashes with `chown` error after switching back to `nginx:alpine` | Removed `read_only: true` + `cap_drop: ALL` from frontend service in staging compose — security hardening incompatible with standard nginx; re-evaluate for production |
+| 11 | Compose file on VM mangled by `sed` commands | Never use `sed` to patch compose YAML — always `cp` from source |
 
 ---
 
@@ -137,7 +141,7 @@ The following bugs were found and fixed during the deployment attempt:
    to any VM on the `10.x.x.x` range — the proxy will block it.
 
 2. **SSH must be installed on VMs before deployment.** Add `openssh-server` to the VM
-   provisioning checklist. `scp` and remote builds both require it.
+   provisioning checklist.
 
 3. **Harbor runs HTTP-only.** No TLS cert management required for the internal registry.
    `insecure-registries` must be set on any Docker host that pushes to or pulls from it.
@@ -145,9 +149,40 @@ The following bugs were found and fixed during the deployment attempt:
 4. **`Dockerfile` must include `alembic/`, `alembic.ini`, and `scripts/`.** These were missing
    from the initial image — migrations and seed data both failed without them.
 
-5. **Frontend must use `nginxinc/nginx-unprivileged:alpine`.** The standard `nginx:alpine` image
-   requires root to `chown` its cache directories, which conflicts with `read_only: true` +
-   `cap_drop: ALL` in the compose security hardening.
+5. **Frontend uses standard `nginx:alpine` without `read_only: true`.** The security hardening
+   (`read_only: true` + `cap_drop: ALL`) is incompatible with standard nginx in staging.
+   Re-evaluate for production using a custom entrypoint or pre-created cache dirs.
+
+6. **`CORS_ORIGINS` must be set in `.env.staging` and passed via compose.** The backend
+   `OriginCheckMiddleware` blocks all POST/PUT/PATCH/DELETE from origins not in the allowlist.
+   Default is `localhost:5173` (dev only) — staging must add `http://localhost:3001` and
+   `http://10.131.1.10:3001` (or whatever hostname users access the frontend on).
+
+7. **Never patch compose files with `sed`.** YAML indentation is fragile. Always `cp` the
+   compose file from the source directory on the VM.
+
+8. **`AUTH_PROVIDER` must come from env, not be hardcoded.** Staging uses `dev` bypass;
+   production uses `ldap`. The compose file uses `${AUTH_PROVIDER:-dev}` as the default.
+
+---
+
+## `.env.staging` Minimum Required Variables (2026-06-03)
+
+```env
+REGISTRY=10.131.1.10/oskar
+TAG=v0.1.0
+POSTGRES_PASSWORD=oskar_staging_pass
+AUTH_PROVIDER=dev
+CORS_ORIGINS=http://localhost:3001,http://10.131.1.10:3001
+JWT_SECRET_KEY_STAGING=<64-char-hex>
+REFRESH_TOKEN_SECRET_STAGING=<64-char-hex>
+CELERY_SECURITY_KEY=<64-char-hex>
+SMTP_HOST=10.10.0.155
+SMTP_PORT=25
+SMTP_SENDER=oskar@srxglobal.com
+MOVEX_CONO=300
+OSKAR_ENV=staging
+```
 
 ---
 
@@ -155,5 +190,5 @@ The following bugs were found and fixed during the deployment attempt:
 
 - `docs/runbooks/vm-deployment.md` — updated deployment runbook
 - `Dockerfile` — now includes `alembic/`, `alembic.ini`, `scripts/`
-- `frontend/Dockerfile` — now uses `nginxinc/nginx-unprivileged:alpine`
-- `docker/docker-compose.staging.yml` — frontend port changed to `3001:8080`
+- `frontend/Dockerfile` — uses `nginx:alpine`, port 80
+- `docker/docker-compose.staging.yml` — `CORS_ORIGINS` added, `AUTH_PROVIDER` from env, frontend without `read_only`
