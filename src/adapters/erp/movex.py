@@ -27,10 +27,10 @@ Never call write methods from FastAPI request handlers.
 from __future__ import annotations
 
 import os
+import time
 from typing import Any
 
 import httpx
-import pybreaker
 from tenacity import (
     retry,
     retry_if_exception,
@@ -44,13 +44,39 @@ from src.adapters.erp.base import ERPAdapter
 # Resilience configuration
 # ---------------------------------------------------------------------------
 
-# Circuit breaker: opens after 5 consecutive failures; resets after 60 seconds.
-# Shared across all MovexRestAdapter instances (module-level singleton).
-_circuit_breaker = pybreaker.CircuitBreaker(
-    fail_max=5,
-    reset_timeout=60,
-    name="movex-rest-api",
-)
+# pybreaker 1.2.0 uses Tornado internals in call_async — incompatible with asyncio.
+# Minimal async-native circuit breaker: opens after 5 consecutive failures, 60s reset.
+class _AsyncCircuitBreaker:
+    def __init__(self, fail_max: int = 5, reset_timeout: int = 60) -> None:
+        self._fail_max = fail_max
+        self._reset_timeout = reset_timeout
+        self._failures = 0
+        self._opened_at: float | None = None
+
+    def _is_open(self) -> bool:
+        if self._opened_at is None:
+            return False
+        if time.monotonic() - self._opened_at >= self._reset_timeout:
+            self._failures = 0
+            self._opened_at = None
+            return False
+        return True
+
+    async def call_async(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
+        if self._is_open():
+            raise RuntimeError("movex-rest-api circuit breaker is open — too many consecutive failures")
+        try:
+            result = await fn(*args, **kwargs)
+            self._failures = 0
+            return result
+        except Exception:
+            self._failures += 1
+            if self._failures >= self._fail_max:
+                self._opened_at = time.monotonic()
+            raise
+
+
+_circuit_breaker = _AsyncCircuitBreaker(fail_max=5, reset_timeout=60)
 
 
 def _is_transient(exc: BaseException) -> bool:
@@ -103,7 +129,7 @@ class MovexRestAdapter(ERPAdapter):
         self.cono = os.environ["MOVEX_CONO"]   # '300' dev/UAT | '100' production (PRE-12)
         self._headers: dict[str, str] = {}
         if self.api_key:
-            self._headers["X-Api-Key"] = self.api_key
+            self._headers["X-API-Key"] = self.api_key
         self._client: httpx.AsyncClient | None = None
 
     async def open(self) -> None:
@@ -136,18 +162,20 @@ class MovexRestAdapter(ERPAdapter):
     @_retry_decorator()
     async def _get(self, path: str, **kwargs: Any) -> httpx.Response:
         """GET with retry + circuit breaker."""
-        with _circuit_breaker:
+        async def _call() -> httpx.Response:
             resp = await self._http.get(path, **kwargs)
             resp.raise_for_status()
             return resp
+        return await _circuit_breaker.call_async(_call)
 
     @_retry_decorator()
     async def _post(self, path: str, **kwargs: Any) -> httpx.Response:
         """POST with retry + circuit breaker."""
-        with _circuit_breaker:
+        async def _call() -> httpx.Response:
             resp = await self._http.post(path, **kwargs)
             resp.raise_for_status()
             return resp
+        return await _circuit_breaker.call_async(_call)
 
     # ------------------------------------------------------------------
     # Read methods
