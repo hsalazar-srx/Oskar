@@ -68,19 +68,27 @@ class LDAPIdentityProvider:
 
     @staticmethod
     def _make_server(server_uri: str):
-        """Build a TLS-hardened ldap3 Server.
+        """Build an ldap3 Server.
 
-        Production: LDAP_SERVER=ldaps://srxdc01.srxglobal.com:636
+        Production: LDAP_SERVER=ldaps://srxdc01.srxglobal.com:636, LDAP_USE_TLS=true (default)
         TLS: CERT_REQUIRED, CA cert from Docker secret /run/secrets/internal_ca.crt
              Falls back to system CA bundle when the secret file is absent (dev/CI).
         ADR-006 P0-1 — LDAPS mandatory; plain LDAP on 389 is a DISP Tier 1 finding.
+
+        Staging override: LDAP_USE_TLS=false + LDAP_SERVER=ldap://... uses plain LDAP on 389.
+        Remove once Manal enables LDAPS on the DC.
         """
+        import os as _os
         import ssl
 
         import ldap3  # type: ignore[import]
 
+        use_tls = _os.getenv("LDAP_USE_TLS", "true").lower() != "false"
+
+        if not use_tls:
+            return ldap3.Server(server_uri, use_ssl=False, get_info=ldap3.ALL)
+
         ca_file = "/run/secrets/internal_ca.crt"
-        import os as _os
         ca = ca_file if _os.path.exists(ca_file) else None
 
         tls = ldap3.Tls(
