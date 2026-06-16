@@ -43,7 +43,7 @@ export default function ECNCreatePage() {
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { facility: "L", change_scope: [] },
+    defaultValues: { facility: "D", change_scope: [] },
   })
 
   const selectedScope = watch("change_scope") ?? []
@@ -116,7 +116,8 @@ export default function ECNCreatePage() {
                 className="h-10 w-full rounded-md border border-neutral-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900"
                 {...register("facility")}
               >
-                <option value="L">L — Melbourne</option>
+                <option value="D">D — Melbourne</option>
+                <option value="L">L — Johor Bahru</option>
               </select>
             </div>
           </div>

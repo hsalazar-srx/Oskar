@@ -46,7 +46,7 @@ _EFFECTIVITY_VALUES = {"DATE", "ECN", "IMMEDIATE"}
 class ECNCreateBody(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     description: str | None = None
-    facility: str = Field("L", max_length=10)
+    facility: str = Field("D", max_length=10)
     is_new_item: bool = False
     routing_changes: bool = False
     operation_changes: bool = False

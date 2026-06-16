@@ -48,7 +48,7 @@ export default function LoginPage() {
             Engineering Change<br />Management
           </h1>
           <p className="text-neutral-400 text-sm leading-relaxed max-w-xs">
-            Scanfil APAC — Melbourne facility. Manage engineering changes from draft through Movex implementation.
+            Scanfil APAC — Engineering change management from draft through Movex implementation.
           </p>
         </div>
         <p className="text-xs text-neutral-600">Scanfil APAC · Internal system</p>

@@ -86,7 +86,7 @@ class LDAPIdentityProvider:
         use_tls = _os.getenv("LDAP_USE_TLS", "true").lower() != "false"
 
         if not use_tls:
-            return ldap3.Server(server_uri, use_ssl=False, get_info=ldap3.ALL)
+            return ldap3.Server(server_uri, use_ssl=False, get_info=ldap3.NONE)
 
         ca_file = "/run/secrets/internal_ca.crt"
         ca = ca_file if _os.path.exists(ca_file) else None
@@ -193,7 +193,7 @@ class LDAPIdentityProvider:
         try:
             import ldap3  # type: ignore[import]
 
-            server = ldap3.Server(self.server_uri, get_info=ldap3.ALL)
+            server = self._make_server(self.server_uri)
             conn = ldap3.Connection(
                 server,
                 user=self.bind_dn,

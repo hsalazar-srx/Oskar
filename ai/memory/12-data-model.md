@@ -30,7 +30,7 @@
 4. **`ecn_transition_history` is INSERT-only with SHA-256 chain.** No UPDATE or DELETE — ever. RLS enforced at DB layer.
 5. **All conditional approval routing is data-driven.** `ecn_step_conditions` maps change scope flags to required roles. No `if change_scope == X` logic in Python.
 6. **Movex identifiers stored as VARCHAR.** `item_number`, `ecn_number`, `supplier_number` — never FK into a Movex table.
-7. **`facility` is first-class.** Present on `ecn_instances`, `system_role_users`, `ecn_role_assignments`, and `ecn_step_conditions`. Default `'L'` (Melbourne). Adding a new plant requires only INSERTs — zero schema migration.
+7. **`facility` is first-class.** Present on `ecn_instances`, `system_role_users`, `ecn_role_assignments`, and `ecn_step_conditions`. Default `'D'` (Melbourne). Adding a new plant requires only INSERTs — zero schema migration.
 8. **`extra_data JSONB` safety valve on `ecn_instances`.** Any field discovered during POC/UAT goes here first; promoted to a proper column in the next sprint migration.
 9. **JSONB fields are holding areas, not permanent homes (ADR-010).** Any JSONB field that is queried, filtered, or displayed in the UI must be promoted to a typed column. `extra_data JSONB` and `questionnaire_data JSONB` are reserved for ZQ01–ZQ18 pending Branko validation. `agent_provenance JSONB` on `ecn_transition_history` is the sole sanctioned AI metadata JSONB — contents are opaque audit metadata, not queryable. `payload` and `result` on `agent_actions` vary by action type and remain JSONB.
 
@@ -40,8 +40,8 @@
 
 | Code | Plant | Notes |
 |------|-------|-------|
-| `L` | Melbourne (Laverton) | **Default — all Sprint 1 ECNs** |
-| `D` | Johor Bahru | Future — added when OSKAR is deployed there |
+| `D` | Melbourne (Laverton) | **Default — ECNs originate from Melbourne engineering team** |
+| `L` | Johor Bahru, Malaysia | Manufacturing site |
 
 A `facilities` lookup table is deferred to Phase 2. For Sprint 1, `facility` is a `VARCHAR(10)` validated at the application layer against the known codes list.
 
@@ -1038,7 +1038,7 @@ CREATE TABLE ecn_step_conditions (
 );
 ```
 
-**Seed data (migration `0002_seed_step_conditions`) — facility `'L'` (Melbourne):**
+**Seed data (migration `0002_seed_step_conditions`) — facility `'L'` (Johor Bahru). Melbourne (`'D'`) rows added in migration `0013_default_facility_d_melbourne`:**
 
 | facility | stage | role_id | condition_field | condition_op | condition_value | description |
 |----------|-------|---------|-----------------|--------------|-----------------|-------------|

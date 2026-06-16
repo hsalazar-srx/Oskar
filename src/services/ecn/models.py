@@ -25,7 +25,7 @@ VALID_ROLE_IDS = {
 class ECNCreateRequest:
     title: str
     description: str | None = None
-    facility: str = "L"
+    facility: str = "D"
     is_new_item: bool = False
     routing_changes: bool = False
     operation_changes: bool = False

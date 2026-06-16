@@ -73,7 +73,7 @@
 
 | # | Task | Sprint | Status |
 |---|------|--------|--------|
-| G-1 | `facility` column on `ecn_instances` (default `'L'` = Melbourne) | F-1 | ✅ included in 0001_initial_schema.py |
+| G-1 | `facility` column on `ecn_instances` (default `'D'` = Melbourne) | F-1 | ✅ included in 0001_initial_schema.py; default updated in 0013 |
 | G-2 | `next_action_users[]` on ECN list response | Sprint 1 | ✅ 2026-04-21 |
 | G-3 | ECN list filters: status, overdue, assignee, facility, age_days | Sprint 1 | ✅ 2026-04-21 |
 | G-4 | Celery beat task `tasks/ecn_digest.py` — daily HTML email | Sprint 2 | ✅ `src/tasks/ecn_notifications.py:288-347` |

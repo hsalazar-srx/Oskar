@@ -1,10 +1,11 @@
-"""Seed ecn_step_conditions — Melbourne (facility='L') approval routing rules
+"""Seed ecn_step_conditions — Johor Bahru (facility='L') approval routing rules
+Melbourne (facility='D') rules added in 0013_default_facility_d_melbourne.py.
 
 Revision ID: 0002
 Revises: 0001
 Create Date: 2026-04-16
 
-Inserts 7 rows defining the data-driven approval routing for facility 'L' (Melbourne).
+Inserts 7 rows defining the data-driven approval routing for facility 'L' (Johor Bahru).
 All rows target stage 40 (MANAGEMENT_REVIEW) — the parallel approval block.
 
 Source: ai/memory/12-data-model.md §8.2

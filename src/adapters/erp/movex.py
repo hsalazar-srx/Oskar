@@ -334,7 +334,7 @@ class MovexRestAdapter(ERPAdapter):
             "/mi/PDS002MI/AddComponent",
             json={
                 "cono": self.cono,
-                "faci": "L",          # facility — will be parameterised Sprint 2
+                "faci": "D",          # facility — will be parameterised Sprint 2
                 "prno": parent_item,
                 "mseq": str(operation_number),
                 "mtno": component_item,
