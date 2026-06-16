@@ -181,7 +181,7 @@
 **Pre-conditions:**
 - [ ] Sprint 2 complete
 - [x] Engineering Team's methodology documentation received ✅ — `context/ecn-history/Initial_Meeting_Nick_and_Branko_290426/`
-- [ ] movex-rest-api: `GET /api/mitpop/search` custom DB2 endpoint deployed (@developer-dotnet) — **S3-1 blocker**
+- [x] movex-rest-api: `GET /api/mitpop/search` custom DB2 endpoint deployed (@developer-dotnet) — **S3-1 blocker**. Renamed to `/api/parts/search-alias` 2026-06-16.
 
 **Key finding (2026-05-11):** No M3 MI program supports reverse alias lookup (POPN→ITNO).
 MMS025MI.GetAlias requires CONO+ALWT+ITNO+ALWQ+E0PA+VFDT (ITNO-first). MMS025MI.LstAlias

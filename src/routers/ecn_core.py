@@ -75,6 +75,7 @@ async def create_ecn(
         title=body.title,
         description=body.description,
         facility=body.facility,
+        customer_number=body.customer_number,
         is_new_item=body.is_new_item,
         routing_changes=body.routing_changes,
         operation_changes=body.operation_changes,

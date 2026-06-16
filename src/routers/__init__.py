@@ -21,6 +21,7 @@ from fastapi import APIRouter
 
 from src.routers.admin import admin_router
 from src.routers.auth import auth_router
+from src.routers.customers import customers_router
 from src.routers.ecn import ecn_router
 from src.routers.parts import parts_router
 from src.routers.sse import sse_router
@@ -31,3 +32,4 @@ v1_router.include_router(ecn_router)
 v1_router.include_router(sse_router)
 v1_router.include_router(admin_router)
 v1_router.include_router(parts_router)
+v1_router.include_router(customers_router)

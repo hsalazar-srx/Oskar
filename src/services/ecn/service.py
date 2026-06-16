@@ -54,6 +54,7 @@ def _row_to_detail(
         id=str(row["id"]),
         ecn_number=row["ecn_number"],
         facility=row["facility"],
+        customer_number=row.get("customer_number"),
         title=row["title"],
         description=row.get("description"),
         status=status_int,
@@ -113,13 +114,13 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
         await self._session.execute(
             sa.text(
                 "INSERT INTO ecn_instances "
-                "(id, ecn_number, facility, title, description, originator_username, "
+                "(id, ecn_number, facility, customer_number, title, description, originator_username, "
                 " is_new_item, routing_changes, operation_changes, new_parts, "
                 " lead_time_changes, change_to_documents, wapc_delta_pct, "
                 " wapc_threshold_override, requires_customer_approval, "
                 " customer_approval_reference, regulatory_impact, extra_data) "
                 "VALUES "
-                "(:id, :ecn_number, :facility, :title, :description, :originator, "
+                "(:id, :ecn_number, :facility, :customer_number, :title, :description, :originator, "
                 " :is_new_item, :routing_changes, :operation_changes, :new_parts, "
                 " :lead_time_changes, :change_to_documents, :wapc_delta_pct, "
                 " :wapc_threshold_override, :requires_customer_approval, "
@@ -127,6 +128,7 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
             ),
             {
                 "id": ecn_id, "ecn_number": ecn_number, "facility": facility,
+                "customer_number": req.customer_number,
                 "title": req.title.strip(), "description": req.description,
                 "originator": actor_username,
                 "is_new_item": req.is_new_item, "routing_changes": req.routing_changes,
@@ -274,7 +276,7 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
         where_clause = " AND ".join(conditions)
         rows = await self._session.execute(
             sa.text(
-                f"SELECT e.id, e.ecn_number, e.facility, e.title, e.status, "
+                f"SELECT e.id, e.ecn_number, e.facility, e.customer_number, e.title, e.status, "
                 f"       e.originator_username, e.revision_number, e.created_at, "
                 f"       e.updated_at, e.is_archived "
                 f"FROM ecn_instances e "
@@ -294,6 +296,7 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
                     id=ecn_id,
                     ecn_number=row["ecn_number"],
                     facility=row["facility"],
+                    customer_number=row.get("customer_number"),
                     title=row["title"],
                     status=status_int,
                     status_name=ECNStatus(status_int).name,

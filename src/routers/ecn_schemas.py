@@ -47,6 +47,7 @@ class ECNCreateBody(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     description: str | None = None
     facility: str = Field("D", max_length=10)
+    customer_number: str = Field(..., min_length=2, max_length=10)
     is_new_item: bool = False
     routing_changes: bool = False
     operation_changes: bool = False
@@ -67,6 +68,11 @@ class ECNCreateBody(BaseModel):
         if upper not in VALID_FACILITIES:
             raise ValueError(f"Unknown facility '{v}'. Valid: {sorted(VALID_FACILITIES)}")
         return upper
+
+    @field_validator("customer_number")
+    @classmethod
+    def validate_customer_number(cls, v: str) -> str:
+        return v.strip().upper()
 
 
 class ECNUpdateBody(BaseModel):
@@ -312,6 +318,7 @@ class ECNDetailOut(BaseModel):
     id: str
     ecn_number: str
     facility: str
+    customer_number: str | None
     title: str
     description: str | None
     status: int
@@ -344,6 +351,7 @@ class ECNSummaryOut(BaseModel):
     id: str
     ecn_number: str
     facility: str
+    customer_number: str | None
     title: str
     status: int
     status_name: str
@@ -455,6 +463,7 @@ def detail_out(d: ECNDetail) -> ECNDetailOut:
         id=d.id,
         ecn_number=d.ecn_number,
         facility=d.facility,
+        customer_number=d.customer_number,
         title=d.title,
         description=d.description,
         status=d.status,
@@ -489,6 +498,7 @@ def summary_out(s: ECNSummary) -> ECNSummaryOut:
         id=s.id,
         ecn_number=s.ecn_number,
         facility=s.facility,
+        customer_number=s.customer_number,
         title=s.title,
         status=s.status,
         status_name=s.status_name,

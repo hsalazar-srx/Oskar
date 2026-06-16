@@ -36,6 +36,7 @@ export default function ECNCard({ ecn }: Props) {
       <div className="flex flex-wrap gap-x-6 gap-y-1.5 pt-1 border-t border-neutral-100">
         <Meta label="Originator" value={ecn.originator_username as string} />
         <Meta label="Facility" value={ecn.facility as string} mono />
+        <Meta label="Customer" value={(ecn.customer_number as string | null) ?? "—"} mono />
         <Meta label="Revision" value={`#${ecn.revision_number}`} mono />
         <Meta
           label="Created"

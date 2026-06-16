@@ -94,7 +94,7 @@ class ERPAdapter(ABC):
 
         No M3 MI program supports this direction (MMS025MI.GetAlias/LstAlias both
         require ITNO as input — confirmed 2026-05-11). Implemented as a custom
-        parameterised DB2 endpoint on movex-rest-api: GET /api/mitpop/search.
+        parameterised DB2 endpoint on movex-rest-api: GET /api/parts/search-alias.
 
         Args:
             popn: Customer/manufacturer part number (MITPOP.MPPOPN). Stripped before call.
@@ -119,7 +119,7 @@ class ERPAdapter(ABC):
         """Return the next available 4-digit sequence number for an item number prefix.
 
         Queries MVXCDTA.MITMAS for the highest MMITNO matching '{prefix}%' via
-        custom DB2 endpoint GET /api/mitmas/next-sequence, then returns max_seq + 1.
+        custom DB2 endpoint GET /api/parts/next-sequence, then returns max_seq + 1.
         CONO is injected by the adapter from its own configuration — callers must not pass it.
 
         Args:

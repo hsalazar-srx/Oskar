@@ -10,9 +10,16 @@ export interface GroupEntry {
 
 export interface SuggestPnResponse {
   suggested_pn: string
+  procurement_group: string
+  product_group: string
+  cuno: string
   commodity_code: string
   sequence: number
-  prefix: string
+}
+
+export interface CustomerEntry {
+  cuno: string
+  name: string | null
 }
 
 // ── ECN core ──────────────────────────────────────────────────────────────────
@@ -63,9 +70,25 @@ export async function fetchGroups() {
   return data as GroupEntry[]
 }
 
-export async function suggestPn(prgp: string, itcl: string): Promise<SuggestPnResponse> {
-  const { data } = await axiosInstance.get(`/api/v1/parts/suggest-pn?prgp=${prgp}&itcl=${itcl}`)
+export async function suggestPn(
+  ecnId: string,
+  procurementGroup: string,
+  productGroup: string,
+  commodityOverride?: string,
+): Promise<SuggestPnResponse> {
+  const params: Record<string, string> = {
+    ecn_id: ecnId,
+    procurement_group: procurementGroup,
+    product_group: productGroup,
+  }
+  if (commodityOverride) params.commodity_override = commodityOverride
+  const { data } = await axiosInstance.get("/api/v1/parts/suggest-pn", { params })
   return data
+}
+
+export async function fetchCustomers(): Promise<CustomerEntry[]> {
+  const { data } = await axiosInstance.get("/api/v1/customers")
+  return data as CustomerEntry[]
 }
 
 // Private — only used by create/update below

@@ -2,12 +2,13 @@ import { useNavigate } from "react-router-dom"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import axiosInstance from "@/api/axios"
+import { fetchCustomers } from "@/api/ecn"
 
 const SCOPE_OPTIONS = [
   { id: "new_parts",            label: "New parts",         desc: "Introducing parts not yet in Movex" },
@@ -22,6 +23,7 @@ const schema = z.object({
   title: z.string().min(3, "At least 3 characters").max(200, "Max 200 characters"),
   description: z.string().min(10, "At least 10 characters"),
   facility: z.string().min(1),
+  customer_number: z.string().min(2, "Select a customer").max(10),
   change_scope: z.array(z.string()).min(1, "Select at least one scope"),
 })
 type FormValues = z.infer<typeof schema>
@@ -44,6 +46,11 @@ export default function ECNCreatePage() {
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: { facility: "D", change_scope: [] },
+  })
+
+  const { data: customers = [] } = useQuery({
+    queryKey: ["customers"],
+    queryFn: fetchCustomers,
   })
 
   const selectedScope = watch("change_scope") ?? []
@@ -119,6 +126,23 @@ export default function ECNCreatePage() {
                 <option value="D">D — Melbourne</option>
                 <option value="L">L — Johor Bahru</option>
               </select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="customer_number">Customer <span className="text-red-400">*</span></Label>
+              <select
+                id="customer_number"
+                className="h-10 w-full rounded-md border border-neutral-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900"
+                {...register("customer_number")}
+                defaultValue=""
+              >
+                <option value="" disabled>— Select customer —</option>
+                <option value="AC">AC — Generic / Common Stock</option>
+                {customers.map((c) => (
+                  <option key={c.cuno} value={c.cuno}>{c.cuno} — {c.name ?? "Unknown"}</option>
+                ))}
+              </select>
+              {errors.customer_number && <p className="text-xs text-red-500">{errors.customer_number.message}</p>}
             </div>
           </div>
 

@@ -341,7 +341,7 @@ WHERE T1.DOCONO = @cono
 
 ### Endpoint Spec for @developer-dotnet (Sprint 3 pre-condition)
 
-**`GET /api/mitpop/search`**
+**`GET /api/parts/search-alias`** (renamed 2026-06-16 from `/api/mitpop/search` — see §10)
 
 ```
 Query params:
@@ -371,7 +371,7 @@ Empty `records: []` when POPN has no alias — never a 404. HTTP 500 on DB2 erro
 
 **OSKAR consumption:** `MovexRestAdapter.lookup_by_alias()` → `src/adapters/erp/movex.py`.
 Response mapped to `full_match` / `partial_match` / `no_match` in `src/routers/parts.py`.
-Endpoint: `GET /api/v1/parts/alias?popn=&cuno=`. 34 tests passing as of 2026-05-11.
+Endpoint: `GET /api/v1/parts/alias?popn=&cuno=`. 34 tests passing as of 2026-06-16.
 
 **Pre-condition check** (startup): confirm `MVXCDTA.MITPOP` is accessible from the DB2 connection.
 
@@ -382,7 +382,7 @@ Endpoint: `GET /api/v1/parts/alias?popn=&cuno=`. 34 tests passing as of 2026-05-
 Required for auto part number generation. OSKAR generates: `LF{CUNO}{commodity}{seq:04d}`.
 The sequence is the next unused slot for items starting with a given 6-char prefix.
 
-**`GET /api/mitmas/next-sequence`**
+**`GET /api/parts/next-sequence`** (renamed 2026-06-16 from `/api/mitmas/next-sequence` — see §10)
 
 ```
 Query params:
@@ -404,9 +404,12 @@ WHERE MMCONO = @cono
 HTTP 500 on DB2 error with detail.
 
 **Notes:**
-- The 6-char prefix is `LF` + 2-char CUNO + 2-digit commodity code. Total PN = 10 chars.
+- The 6-char prefix is `LF` + 2-char code + 2-digit commodity code. Total PN = 10 chars.
 - `LF` is the company prefix (legacy Startronics/SRXGlobal identifier) — not a lead-free marker.
   Lead Free Code (BBB=Non-RoHS / PBF=RoHS) is a separate MITMAS field, not encoded in ITNO.
+- **Correction (2026-06-16):** this 2-char code is **not** `OCUSMA.OKCUNO` — see §10. It was
+  previously documented (and labelled "Movex Customer Code" in the engineering team's
+  `ecn_item_upload_v13` template) as a customer code, but live data disproved this.
 - The sequence returned is advisory — the engineer confirms before the item is created in Movex
   via `PDS001MI.AddProduct`. OSKAR does not commit the PN to Movex in this call.
 - `TEM/TEMP` has 4 valid commodity codes: 66, 76, 81, 90.
@@ -417,7 +420,61 @@ Endpoint: `GET /api/v1/parts/suggest-pn`. 50 tests passing as of 2026-05-12.
 
 ---
 
-## 9. SSoT Rules for AI Suggestions
+## 10. Customer List Endpoint + the "AC" Finding (2026-06-16)
+
+**Context:** Oskar's ECN header needs a customer selector to drive Suggest PN. The
+existing assumption (§8, the `ecn_item_upload_v13` template, `commodity_codes.py`) was
+that the 2-char code embedded in the part number after `LF` is `OCUSMA.OKCUNO`
+("Movex Customer Code (Ref CRS610)").
+
+**Live data disproved this.** Querying `MVXC300.OCUSMA` directly:
+- Real customer codes (via `OKCUNO`, confirmed against `CRS610`) are **4-digit numeric**
+  (e.g. `0021`, `0148`), never 2-char alphabetic.
+- Real Scanfil APAC part numbers under `LF` (e.g. `LFAC120001`, `LFAC210001`,
+  `LFACCARTON`, `LFAC910001`) all carry the same 2-char code `AC` — and these are
+  **generic/internal stock items** (resistors, capacitors, connectors, packaging, glue)
+  with no link to a specific customer.
+- Customer-specific items in Movex (e.g. `ADEPT-AAAA-R02`, `AD201014-17`) do **not**
+  follow the `LF` + code + commodity + seq format at all — they use project-specific
+  descriptive naming.
+
+**Working conclusion (confirmed with the user, not yet re-validated against Engineering):**
+`AC` is a fixed generic-stock placeholder, not a real customer code. Until this is
+formally confirmed with Engineering/Branko, OSKAR treats `AC` as a valid pseudo-customer
+option alongside real OCUSMA customers — offered explicitly in the UI as
+"AC — Generic / Common Stock", not returned by the customer-list endpoint itself.
+
+**`GET /api/customers/list`**
+
+```
+Query params:
+  cono  int  required  Company number (from MOVEX_CONO env var)
+```
+
+**SQL executed:**
+
+```sql
+SELECT TRIM(OKCUNO) AS CUNO, TRIM(OKCUNM) AS NAME
+FROM MVXCDTA.OCUSMA
+WHERE OKCONO = @cono AND OKSTAT = '20'
+ORDER BY TRIM(OKCUNO)
+```
+
+`OKSTAT = '20'` = active (other values observed: `90` = inactive/blocked, `10` = prospect).
+135 active customers in CONO 300 — small enough for a plain dropdown, no pagination needed.
+
+**Response:** `{ "data": { "records": [ { "CUNO": "0021", "NAME": "MOTEC PTY LTD" } ] } }`
+
+**OSKAR consumption:** `MovexRestAdapter.list_customers()` → `src/adapters/erp/movex.py`.
+Endpoint: `GET /api/v1/parts/customers`.
+
+**Route rename (same change):** `/api/mitpop/search` → `/api/parts/search-alias`,
+`/api/mitmas/next-sequence` → `/api/parts/next-sequence` — resource-oriented naming,
+consistent with `/api/customers/list`. The old table-named routes no longer exist.
+
+---
+
+## 11. SSoT Rules for AI Suggestions
 
 When an AI agent makes a suggestion that involves item data, BOM data, or supplier data:
 

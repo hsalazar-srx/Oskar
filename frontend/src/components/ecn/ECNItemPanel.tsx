@@ -37,10 +37,11 @@ interface Props {
   ecnId: string
   itemId: string | null
   nextLineNumber: number
+  customerNumber: string | null
   onClose: () => void
 }
 
-export default function ECNItemPanel({ ecnId, itemId, nextLineNumber, onClose }: Props) {
+export default function ECNItemPanel({ ecnId, itemId, nextLineNumber, customerNumber, onClose }: Props) {
   const isNew = itemId === null
   const qc = useQueryClient()
   const [descLen, setDescLen] = useState(0)
@@ -114,11 +115,11 @@ export default function ECNItemPanel({ ecnId, itemId, nextLineNumber, onClose }:
   })
 
   const handleSuggestPn = async () => {
-    if (!watchedPrgp || !watchedItcl) return
+    if (!watchedPrgp || !watchedItcl || !customerNumber) return
     setPnLoading(true)
     setPnError(null)
     try {
-      const result = await suggestPn(watchedPrgp, watchedItcl)
+      const result = await suggestPn(ecnId, watchedPrgp, watchedItcl)
       setValue("item_number", result.suggested_pn, { shouldDirty: true })
     } catch {
       setPnError("Could not generate suggestion — Movex may be unavailable")
@@ -128,7 +129,7 @@ export default function ECNItemPanel({ ecnId, itemId, nextLineNumber, onClose }:
   }
 
   const descOver   = descLen > 30
-  const canSuggest = !!watchedPrgp && !!watchedItcl && !pnLoading
+  const canSuggest = !!watchedPrgp && !!watchedItcl && !!customerNumber && !pnLoading
 
   return (
     <Sheet open onOpenChange={(open) => { if (!open) onClose() }}>
@@ -189,13 +190,23 @@ export default function ECNItemPanel({ ecnId, itemId, nextLineNumber, onClose }:
                       className="h-10 shrink-0 min-w-[100px] text-xs"
                       disabled={!canSuggest}
                       onClick={handleSuggestPn}
-                      title={canSuggest ? "Suggest next available part number" : "Select procurement and product group first"}
+                      title={canSuggest ? "Suggest next available part number" : "Complete the required fields below first"}
                     >
                       {pnLoading ? <Spinner size="sm" /> : "Suggest PN"}
                     </Button>
                   )}
                 </div>
                 {pnError && <FieldError>{pnError}</FieldError>}
+                {isNewItem && !canSuggest && !pnLoading && (
+                  <FieldHint>
+                    Suggest PN needs:{" "}
+                    {[
+                      !customerNumber && "a customer set on the ECN",
+                      !watchedPrgp && "Procurement group",
+                      !watchedItcl && "Product group",
+                    ].filter(Boolean).join(", ")}
+                  </FieldHint>
+                )}
                 {!isNewItem && <FieldHint>Must match an existing Movex part number</FieldHint>}
               </Field>
 

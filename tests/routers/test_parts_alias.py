@@ -5,7 +5,7 @@ GET /api/v1/parts/alias?popn=...&cuno=...
 
 Reverse lookup: customer P/N (POPN) → Scanfil APAC ITNO via MVXCDTA.MITPOP.
 No M3 MI program supports this direction — implemented as a custom DB2
-endpoint on movex-rest-api (GET /api/mitpop/search).
+endpoint on movex-rest-api (GET /api/parts/search-alias).
 
 Three match states:
   full_match    — exactly one ITNO resolves from POPN

@@ -26,6 +26,7 @@ class ECNCreateRequest:
     title: str
     description: str | None = None
     facility: str = "D"
+    customer_number: str | None = None
     is_new_item: bool = False
     routing_changes: bool = False
     operation_changes: bool = False
@@ -156,6 +157,7 @@ class ECNSummary:
     created_at: datetime
     updated_at: datetime
     is_archived: bool
+    customer_number: str | None = None
     next_action_users: list[str] = field(default_factory=list)
 
 
@@ -187,6 +189,7 @@ class ECNDetail:
     archived_by: str | None
     created_at: datetime
     updated_at: datetime
+    customer_number: str | None = None
     role_assignments: list[RoleAssignment] = field(default_factory=list)
     approval_steps: list[ApprovalStep] = field(default_factory=list)
     extra_data: dict[str, Any] | None = None

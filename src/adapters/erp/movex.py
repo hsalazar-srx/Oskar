@@ -186,7 +186,7 @@ class MovexRestAdapter(ERPAdapter):
         popn: str,
         cuno: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Reverse alias lookup via custom DB2 endpoint GET /api/mitpop/search.
+        """Reverse alias lookup via custom DB2 endpoint GET /api/parts/search-alias.
 
         No M3 MI program supports POPN→ITNO direction (confirmed 2026-05-11).
         movex-rest-api queries MVXCDTA.MITPOP directly:
@@ -200,23 +200,33 @@ class MovexRestAdapter(ERPAdapter):
         }
         if cuno:
             params["e0pa"] = cuno.strip()
-        resp = await self._get("/mitpop/search", params=params)
+        resp = await self._get("/parts/search-alias", params=params)
         payload = resp.json()
         return payload.get("data", {}).get("records", [])
 
     async def get_next_itno_sequence(self, prefix: str) -> int:
-        """Next available sequence via GET /api/mitmas/next-sequence.
+        """Next available sequence via GET /api/parts/next-sequence.
 
         movex-rest-api queries MAX(TRIM(MMITNO)) FROM MVXCDTA.MITMAS
         WHERE MMCONO=@cono AND MMITNO LIKE @prefix||'%', returns next_seq integer.
         Returns 1 when no items with this prefix exist.
         """
         resp = await self._get(
-            "/mitmas/next-sequence",
+            "/parts/next-sequence",
             params={"cono": self.cono, "prefix": prefix},
         )
         payload = resp.json()
         return int(payload.get("data", {}).get("next_seq", 1))
+
+    async def list_customers(self) -> list[dict[str, Any]]:
+        """List active Movex customers via GET /api/customers/list.
+
+        movex-rest-api queries MVXCDTA.OCUSMA WHERE OKCONO=@cono AND OKSTAT='20',
+        returns records with CUNO (4-digit numeric customer code) and NAME.
+        """
+        resp = await self._get("/customers/list", params={"cono": self.cono})
+        payload = resp.json()
+        return payload.get("data", {}).get("records", [])
 
     async def get_item(self, item_number: str) -> dict[str, Any]:
         """Fetch item master record via MMS200MI.GetItmBasic (generic MI transaction route).

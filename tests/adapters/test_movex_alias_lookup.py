@@ -2,7 +2,7 @@
 OSKAR — MovexRestAdapter.lookup_by_alias unit tests (S3-1)
 
 Verifies that the adapter calls the correct custom DB2 endpoint on movex-rest-api:
-  GET /api/mitpop/search?cono=...&popn=...&e0pa=...
+  GET /api/parts/search-alias?cono=...&popn=...&e0pa=...
 
 MVXCDTA.MITPOP has no reverse-lookup MI program (MMS025MI.GetAlias and LstAlias
 both require ITNO as input — confirmed 2026-05-11). The reverse lookup
@@ -45,12 +45,12 @@ def _mock_response(records: list) -> MagicMock:
 class TestLookupByAliasParams:
 
     @pytest.mark.asyncio
-    async def test_calls_mitpop_search_path(self, adapter: MovexRestAdapter):
+    async def test_calls_search_alias_path(self, adapter: MovexRestAdapter):
         mock_get = AsyncMock(return_value=_mock_response([]))
         with patch.object(adapter, "_get", mock_get):
             await adapter.lookup_by_alias(popn="ACME-001")
         path = mock_get.call_args.args[0]
-        assert path == "/mitpop/search"
+        assert path == "/parts/search-alias"
 
     @pytest.mark.asyncio
     async def test_cono_from_env(self, adapter: MovexRestAdapter):

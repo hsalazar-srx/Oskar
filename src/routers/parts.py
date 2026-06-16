@@ -166,11 +166,12 @@ class SuggestPNResponse(BaseModel):
     summary="Suggest next available Scanfil APAC part number for a new item (S3-2)",
 )
 async def suggest_pn(
+    ecn_id: Annotated[str, Query(min_length=1, description="ECN UUID — customer_number is read from the ECN header, not passed by the caller")],
     procurement_group: Annotated[str, Query(min_length=2, max_length=5, description="Movex procurement group (MITMAS.MMPRGP)")],
     product_group: Annotated[str, Query(min_length=2, max_length=5, description="Movex product group (MITMAS.MMITCL)")],
-    cuno: Annotated[str, Query(min_length=2, max_length=2, description="2-char Movex customer code (OCUSMA.OKCUNO)")],
     user: Annotated[CurrentUser, Depends(get_current_user)],
     erp: Annotated[MovexRestAdapter, Depends(_get_erp_adapter)],
+    session: Annotated[AsyncSession, Depends(get_session)],
     commodity_override: Annotated[str | None, Query(max_length=2, description="Override when multiple commodity codes exist for this pair")] = None,
 ) -> SuggestPNResponse:
     """Suggest the next available part number for a new item.
@@ -180,16 +181,30 @@ async def suggest_pn(
     11/12/13/14), commodity_override is required — returns 422 with commodity_options
     so the UI can prompt the engineer to choose.
 
-    Queries MVXCDTA.MITMAS via GET /api/mitmas/next-sequence for the highest existing
+    Queries MVXCDTA.MITMAS via GET /api/parts/next-sequence for the highest existing
     sequence under this prefix, then increments by one. Thread-safe as long as the
     engineer confirms the suggestion before creating the item in Movex.
 
-    PN format: LF + {CUNO 2 chars} + {commodity 2 digits} + {seq 4 digits zero-padded}
+    PN format: LF + {2-char code} + {commodity 2 digits} + {seq 4 digits zero-padded}
     'LF' is the company prefix (Startronics/Scanfil APAC legacy), not a lead-free marker.
+    The 2-char code is the ECN's customer_number — a real Movex customer code or the
+    fixed 'AC' generic-stock marker (ai/memory/02-movex-erp-authority.md §10).
     """
+    svc = ECNService(session)
+    try:
+        ecn = await svc.get(ecn_id)
+    except ECNNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ECN not found")
+
+    if not ecn.customer_number:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="ECN has no customer_number set — cannot suggest a part number.",
+        )
+
     prgp = procurement_group.upper().strip()
     itcl = product_group.upper().strip()
-    cuno_upper = cuno.upper()
+    cuno_upper = ecn.customer_number.upper()
 
     # Validate groups exist in the commodity map
     if prgp not in VALID_PROCUREMENT_GROUPS or itcl not in VALID_PRODUCT_GROUPS:

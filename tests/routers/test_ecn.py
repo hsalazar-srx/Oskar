@@ -59,6 +59,7 @@ def _detail(
         id=ecn_id,
         ecn_number=ecn_number,
         facility="L",
+        customer_number="AC",
         title="Test ECN",
         description=None,
         status=ecn_status,
@@ -98,6 +99,7 @@ def _summary(ecn_id: str = "ecn-0001", **kwargs: Any) -> ECNSummary:
         id=ecn_id,
         ecn_number="ECN-2026-L-0001",
         facility="L",
+        customer_number="AC",
         title="Test ECN",
         status=ECNStatus.DRAFT,
         status_name="DRAFT",
@@ -132,7 +134,7 @@ def client() -> TestClient:
 class TestCreateECN:
     def test_returns_201_with_ecn_number(self, client: TestClient) -> None:
         with patch.object(ECNService, "create", new_callable=AsyncMock, return_value=_detail()):
-            resp = client.post("/api/v1/ecn/", json={"title": "Test ECN", "facility": "L"})
+            resp = client.post("/api/v1/ecn/", json={"title": "Test ECN", "facility": "L", "customer_number": "AC"})
         assert resp.status_code == 201
         body = resp.json()
         assert body["ecn_number"] == "ECN-2026-L-0001"
@@ -142,7 +144,7 @@ class TestCreateECN:
 
     def test_role_assignments_included(self, client: TestClient) -> None:
         with patch.object(ECNService, "create", new_callable=AsyncMock, return_value=_detail()):
-            resp = client.post("/api/v1/ecn/", json={"title": "Test ECN"})
+            resp = client.post("/api/v1/ecn/", json={"title": "Test ECN", "customer_number": "AC"})
         roles = {r["role_id"] for r in resp.json()["role_assignments"]}
         assert "OR" in roles
         assert "DC" in roles
@@ -164,7 +166,7 @@ class TestCreateECN:
             ECNService, "create", new_callable=AsyncMock,
             side_effect=ECNValidationError("No active DC configured for facility 'L'"),
         ):
-            resp = client.post("/api/v1/ecn/", json={"title": "Test ECN"})
+            resp = client.post("/api/v1/ecn/", json={"title": "Test ECN", "customer_number": "AC"})
         assert resp.status_code == 422
         assert "DC" in resp.json()["detail"]
 
@@ -173,7 +175,7 @@ class TestCreateECN:
         with patch.object(ECNService, "create", new_callable=AsyncMock, return_value=expected):
             resp = client.post(
                 "/api/v1/ecn/",
-                json={"title": "Scope Test", "routing_changes": True, "new_parts": True},
+                json={"title": "Scope Test", "customer_number": "AC", "routing_changes": True, "new_parts": True},
             )
         assert resp.status_code == 201
         assert resp.json()["routing_changes"] is True
@@ -181,7 +183,7 @@ class TestCreateECN:
 
     def test_facility_case_insensitive(self, client: TestClient) -> None:
         with patch.object(ECNService, "create", new_callable=AsyncMock, return_value=_detail()):
-            resp = client.post("/api/v1/ecn/", json={"title": "Test ECN", "facility": "l"})
+            resp = client.post("/api/v1/ecn/", json={"title": "Test ECN", "facility": "l", "customer_number": "AC"})
         assert resp.status_code == 201
 
 

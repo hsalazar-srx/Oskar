@@ -122,15 +122,19 @@ async def _wipe_demo_ecns(session: AsyncSession) -> int:
 
 
 async def _ensure_role_users(session: AsyncSession) -> None:
-    """Set exactly one user per role for facility L.
+    """Set exactly one user per role for facilities L and D.
 
     _auto_assign_roles sets username=None when multiple users share a role,
     which violates the NOT NULL constraint. We clear and rebuild with one
     canonical persona per role so auto-assignment always resolves.
+
+    Facility D (Melbourne) mirrors L (Johor Bahru) with the same dev personas —
+    real Melbourne role owners are not yet confirmed; update this table once
+    they are (see ai/memory/02-movex-erp-authority.md or equivalent UAT doc).
     """
-    # Remove all existing facility L role users and start clean
+    # Remove all existing facility L/D role users and start clean
     await session.execute(
-        sa.text("DELETE FROM system_role_users WHERE facility = 'L'")
+        sa.text("DELETE FROM system_role_users WHERE facility IN ('L', 'D')")
     )
 
     # One canonical user per role — roles that map to the same person are fine
@@ -148,6 +152,19 @@ async def _ensure_role_users(session: AsyncSession) -> None:
         ("L", "TE", SE,  "Engineering User",  f"{SE}@srxglobal.local"),
         ("L", "MQ", QM,  "Quality Manager",   f"{QM}@srxglobal.local"),
         ("L", "CA", DC,  "Doc Controller",    f"{DC}@srxglobal.local"),
+        ("D", "DC", DC,  "Doc Controller",    f"{DC}@srxglobal.local"),
+        ("D", "SE", SE,  "Engineering User",  f"{SE}@srxglobal.local"),
+        ("D", "QM", QM,  "Quality Manager",   f"{QM}@srxglobal.local"),
+        ("D", "EM", SE,  "Engineering User",  f"{SE}@srxglobal.local"),
+        ("D", "PM", QM,  "Quality Manager",   f"{QM}@srxglobal.local"),
+        ("D", "SC", QM,  "Quality Manager",   f"{QM}@srxglobal.local"),
+        ("D", "FN", QM,  "Quality Manager",   f"{QM}@srxglobal.local"),
+        ("D", "AD", OR,  "Hector Salazar",    f"{OR}@srxglobal.local"),
+        ("D", "CE", SE,  "Engineering User",  f"{SE}@srxglobal.local"),
+        ("D", "RD", SE,  "Engineering User",  f"{SE}@srxglobal.local"),
+        ("D", "TE", SE,  "Engineering User",  f"{SE}@srxglobal.local"),
+        ("D", "MQ", QM,  "Quality Manager",   f"{QM}@srxglobal.local"),
+        ("D", "CA", DC,  "Doc Controller",    f"{DC}@srxglobal.local"),
     ]
     for facility, role_id, username, display_name, email in users:
         await session.execute(

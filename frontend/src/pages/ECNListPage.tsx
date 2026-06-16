@@ -18,6 +18,7 @@ interface ECNSummary {
   title: string
   status: number
   facility: string
+  customer_number: string | null
   created_at: string
   originator_username: string
   next_action_users: string[]
@@ -146,6 +147,7 @@ export default function ECNListPage() {
                   <TableHead className="font-medium text-xs uppercase tracking-wide text-neutral-500">Title</TableHead>
                   <TableHead className="w-36 font-medium text-xs uppercase tracking-wide text-neutral-500">Status</TableHead>
                   <TableHead className="w-28 font-medium text-xs uppercase tracking-wide text-neutral-500 hidden md:table-cell">Originator</TableHead>
+                  <TableHead className="w-24 font-medium text-xs uppercase tracking-wide text-neutral-500 hidden md:table-cell">Customer</TableHead>
                   <TableHead className="w-32 font-medium text-xs uppercase tracking-wide text-neutral-500 hidden lg:table-cell">Next action</TableHead>
                   <TableHead className="w-20 text-right font-medium text-xs uppercase tracking-wide text-neutral-500">Age</TableHead>
                 </TableRow>
@@ -153,7 +155,7 @@ export default function ECNListPage() {
               <TableBody>
                 {ecns.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-16">
+                    <TableCell colSpan={7} className="text-center py-16">
                       <p className="text-sm text-neutral-400">
                         {search || statusFilter ? "No ECNs match your filters." : "No ECNs yet — create the first one."}
                       </p>
@@ -191,6 +193,9 @@ export default function ECNListPage() {
                       </TableCell>
                       <TableCell className="text-xs text-neutral-500 hidden md:table-cell">
                         {ecn.originator_username}
+                      </TableCell>
+                      <TableCell className="text-xs font-mono text-neutral-500 hidden md:table-cell">
+                        {ecn.customer_number ?? "—"}
                       </TableCell>
                       <TableCell className="hidden lg:table-cell">
                         {ecn.next_action_users?.length > 0 ? (

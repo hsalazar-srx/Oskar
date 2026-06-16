@@ -172,6 +172,7 @@ export default function ECNDetailPage() {
           ecnId={id!}
           itemId={selectedItemId === "new" ? null : selectedItemId}
           nextLineNumber={items.length + 1}
+          customerNumber={ecn?.customer_number ?? null}
           onClose={() => setSelectedItemId(null)}
         />
       )}

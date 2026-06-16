@@ -5,8 +5,13 @@ Maps (procurement_group, product_group) → default 2-digit commodity code, plus
 the full set of valid codes for that pair when multiple exist.
 
 Scanfil APAC item number format for new items created via OSKAR:
-    LF + {2-char CUNO} + {2-digit commodity} + {4-digit zero-padded seq}
-    Example: LFAA120023  (customer AA, RESISTOR SMD, seq 23)
+    LF + {2-char code} + {2-digit commodity} + {4-digit zero-padded seq}
+    Example: LFAC120023  (generic stock, RESISTOR SMD, seq 23)
+
+The 2-char code is NOT a Movex customer number (OCUSMA.OKCUNO codes are 4-digit
+numeric) — confirmed against live data 2026-06-16. See
+ai/memory/02-movex-erp-authority.md §10. "AC" is used as a fixed placeholder for
+generic/common stock items not tied to a specific customer.
 
 'LF' is the company prefix (legacy Startronics/Scanfil APAC identifier). It does NOT
 encode lead-free status — the Lead Free Code field (BBB=Non-RoHS / PBF=RoHS) is a

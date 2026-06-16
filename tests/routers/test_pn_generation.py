@@ -2,14 +2,19 @@
 OSKAR — Scanfil APAC part number suggestion tests (S3-2)
 
 GET /api/v1/parts/suggest-pn
-  ?procurement_group=PAS&product_group=RES&cuno=AA[&commodity_override=12]
+  ?ecn_id=ecn-001&procurement_group=PAS&product_group=RES[&commodity_override=12]
 
 Auto-generates the next available Scanfil APAC part number on the no_match path.
-Format: LF + {2-char CUNO} + {2-digit commodity} + {4-digit zero-padded seq}
-Example: LFAA120023  (customer=AA, commodity=12=RES SMD, seq=23)
+Format: LF + {2-char code} + {2-digit commodity} + {4-digit zero-padded seq}
+Example: LFAC120023  (generic stock, commodity=12=RES SMD, seq=23)
 
 'LF' is the company prefix (legacy Startronics/Scanfil APAC identifier). It does NOT
 encode lead-free status — that is a separate MITMAS field (BBB/PBF).
+
+The 2-char code is read server-side from the ECN header's customer_number (set once
+at ECN creation, never edited) — NOT passed by the caller. It is either a real Movex
+customer code (OCUSMA.OKCUNO) or the fixed 'AC' generic-stock marker. See
+ai/memory/02-movex-erp-authority.md §10 for why this is not always a customer code.
 
 Key design facts from Engineering Team's template (ecn_item_upload_v13, 2026-04-29):
   - Both procurement_group AND product_group are required to resolve the commodity code.
@@ -19,17 +24,15 @@ Key design facts from Engineering Team's template (ecn_item_upload_v13, 2026-04-
   - Some codes are shared across different (prgp, itcl) pairs with the same numeric range.
     e.g. ACT/LED=26 and EM/DISP=26 — they share the sequence namespace (by design).
   - Sequence = next available 4-digit slot from MVXCDTA.MITMAS for the 6-char prefix.
-  - CUNO is 2 chars, uppercased (Movex customer code from OCUSMA).
   - CSP/CSP is a customer-supplied part — PN format is LFXXXXNNNN; not auto-sequenced.
   - TEM/TEMP has 4 commodity codes: 66, 76, 81, 90 (electrical, software, misc ranges).
   - PLA/INJEC and PLA/PLAMC each have 2 codes: 65 (standard) and 67 (off-the-shelf/cable tie).
-
-TDD: written before implementation.
 
 Run with: pytest tests/routers/test_pn_generation.py -v
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -41,6 +44,8 @@ from src.adapters.erp.movex import MovexRestAdapter
 from src.auth.dependencies import CurrentUser, get_current_user
 from src.db import get_session
 from src.main import app
+from src.services.ecn import ECNDetail, ECNNotFound, ECNService
+from src.workflow.machine import ECNStatus
 
 _ENGINEER = CurrentUser(
     username="eng_user",
@@ -50,7 +55,46 @@ _ENGINEER = CurrentUser(
     jti="test-jti-pn-001",
 )
 
+_NOW = datetime(2026, 6, 16, 8, 0, 0, tzinfo=timezone.utc)
+
 app.state.erp_adapter = MovexRestAdapter.__new__(MovexRestAdapter)
+
+
+def _ecn(customer_number: str | None = "LM", **kwargs) -> ECNDetail:
+    defaults = dict(
+        id="ecn-001",
+        ecn_number="ECN-2026-D-0001",
+        facility="D",
+        customer_number=customer_number,
+        title="Test ECN",
+        description=None,
+        status=ECNStatus.DRAFT,
+        status_name=ECNStatus(ECNStatus.DRAFT).name,
+        originator_username="eng_user",
+        revision_number=1,
+        is_new_item=True,
+        routing_changes=False,
+        operation_changes=False,
+        new_parts=False,
+        lead_time_changes=False,
+        change_to_documents=False,
+        wapc_delta_pct=None,
+        wapc_threshold_override=False,
+        requires_customer_approval=False,
+        customer_approval_reference=None,
+        customer_approved_at=None,
+        regulatory_impact=False,
+        is_archived=False,
+        archived_at=None,
+        archived_by=None,
+        created_at=_NOW,
+        updated_at=_NOW,
+        role_assignments=[],
+        approval_steps=[],
+        extra_data=None,
+    )
+    defaults.update(kwargs)
+    return ECNDetail(**defaults)
 
 
 def _make_client(user: CurrentUser) -> TestClient:
@@ -65,18 +109,24 @@ def _clear_overrides():
     app.dependency_overrides.clear()
 
 
+def _patched_get(customer_number: str | None = "LM"):
+    """Context manager patching ECNService.get() to return an ECN with the given customer_number."""
+    return patch.object(ECNService, "get", new_callable=AsyncMock, return_value=_ecn(customer_number))
+
+
 # ── Unique-code pairs (no override needed) ────────────────────────────────────
 
 class TestSuggestPNUniqueCodes:
     """These (prgp, itcl) pairs map to exactly one commodity code."""
 
-    def _get(self, prgp: str, itcl: str, seq: int = 1) -> dict:
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
+    def _get(self, prgp: str, itcl: str, seq: int = 1, customer_number: str = "LM") -> dict:
+        with _patched_get(customer_number), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
             mock.return_value = seq
             client = _make_client(_ENGINEER)
             resp = client.get(
                 "/api/v1/parts/suggest-pn",
-                params={"procurement_group": prgp, "product_group": itcl, "cuno": "LM"},
+                params={"ecn_id": "ecn-001", "procurement_group": prgp, "product_group": itcl},
             )
         assert resp.status_code == 200, resp.text
         return resp.json()
@@ -127,11 +177,12 @@ class TestSuggestPNMultiCode:
     """These (prgp, itcl) pairs have multiple commodity codes — override required."""
 
     def test_res_without_override_returns_422_with_options(self):
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
+        with _patched_get("AA"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
             client = _make_client(_ENGINEER)
             resp = client.get(
                 "/api/v1/parts/suggest-pn",
-                params={"procurement_group": "PAS", "product_group": "RES", "cuno": "AA"},
+                params={"ecn_id": "ecn-001", "procurement_group": "PAS", "product_group": "RES"},
             )
         assert resp.status_code == 422
         body = resp.json()
@@ -140,167 +191,182 @@ class TestSuggestPNMultiCode:
         assert set(options) == {"11", "12", "13", "14"}
 
     def test_res_with_override_12_returns_200(self):
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
+        with _patched_get("AA"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
             mock.return_value = 1
             client = _make_client(_ENGINEER)
             resp = client.get(
                 "/api/v1/parts/suggest-pn",
-                params={"procurement_group": "PAS", "product_group": "RES",
-                        "cuno": "AA", "commodity_override": "12"},
+                params={"ecn_id": "ecn-001", "procurement_group": "PAS", "product_group": "RES",
+                        "commodity_override": "12"},
             )
         assert resp.status_code == 200
         assert resp.json()["commodity_code"] == "12"
         assert resp.json()["suggested_pn"] == "LFAA120001"
 
     def test_res_with_override_11_returns_200(self):
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
+        with _patched_get("LM"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
             mock.return_value = 7
             client = _make_client(_ENGINEER)
             resp = client.get(
                 "/api/v1/parts/suggest-pn",
-                params={"procurement_group": "PAS", "product_group": "RES",
-                        "cuno": "LM", "commodity_override": "11"},
+                params={"ecn_id": "ecn-001", "procurement_group": "PAS", "product_group": "RES",
+                        "commodity_override": "11"},
             )
         assert resp.json()["suggested_pn"] == "LFLM110007"
 
     def test_caps_without_override_returns_422(self):
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
+        with _patched_get("AA"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
             client = _make_client(_ENGINEER)
             resp = client.get(
                 "/api/v1/parts/suggest-pn",
-                params={"procurement_group": "PAS", "product_group": "CAPS", "cuno": "AA"},
+                params={"ecn_id": "ecn-001", "procurement_group": "PAS", "product_group": "CAPS"},
             )
         assert resp.status_code == 422
         options = resp.json()["detail"]["commodity_options"]
         assert set(options) == {"20", "21", "22"}
 
     def test_diode_without_override_returns_422(self):
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
+        with _patched_get("AA"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
             client = _make_client(_ENGINEER)
             resp = client.get(
                 "/api/v1/parts/suggest-pn",
-                params={"procurement_group": "ACT", "product_group": "DIODE", "cuno": "AA"},
+                params={"ecn_id": "ecn-001", "procurement_group": "ACT", "product_group": "DIODE"},
             )
         assert resp.status_code == 422
         options = resp.json()["detail"]["commodity_options"]
         assert set(options) == {"24", "25"}
 
     def test_xstor_without_override_returns_422(self):
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
+        with _patched_get("AA"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
             client = _make_client(_ENGINEER)
             resp = client.get(
                 "/api/v1/parts/suggest-pn",
-                params={"procurement_group": "ACT", "product_group": "XSTOR", "cuno": "AA"},
+                params={"ecn_id": "ecn-001", "procurement_group": "ACT", "product_group": "XSTOR"},
             )
         assert resp.status_code == 422
         options = resp.json()["detail"]["commodity_options"]
         assert set(options) == {"30", "31", "32"}
 
     def test_connt_without_override_returns_422(self):
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
+        with _patched_get("AA"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
             client = _make_client(_ENGINEER)
             resp = client.get(
                 "/api/v1/parts/suggest-pn",
-                params={"procurement_group": "EM", "product_group": "CONNT", "cuno": "AA"},
+                params={"ecn_id": "ecn-001", "procurement_group": "EM", "product_group": "CONNT"},
             )
         assert resp.status_code == 422
         options = resp.json()["detail"]["commodity_options"]
         assert set(options) == {"35", "36", "37", "38"}
 
     def test_ic_without_override_returns_422(self):
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
+        with _patched_get("AA"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
             client = _make_client(_ENGINEER)
             resp = client.get(
                 "/api/v1/parts/suggest-pn",
-                params={"procurement_group": "ACT", "product_group": "IC", "cuno": "AA"},
+                params={"ecn_id": "ecn-001", "procurement_group": "ACT", "product_group": "IC"},
             )
         assert resp.status_code == 422
         options = resp.json()["detail"]["commodity_options"]
         assert set(options) == {"40", "41", "49", "51"}
 
     def test_rfdvc_without_override_returns_422(self):
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
+        with _patched_get("AA"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
             client = _make_client(_ENGINEER)
             resp = client.get(
                 "/api/v1/parts/suggest-pn",
-                params={"procurement_group": "EM", "product_group": "RFDVC", "cuno": "AA"},
+                params={"ecn_id": "ecn-001", "procurement_group": "EM", "product_group": "RFDVC"},
             )
         assert resp.status_code == 422
         options = resp.json()["detail"]["commodity_options"]
         assert set(options) == {"56", "57"}
 
     def test_invalid_override_returns_422(self):
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
+        with _patched_get("AA"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
             client = _make_client(_ENGINEER)
             resp = client.get(
                 "/api/v1/parts/suggest-pn",
-                params={"procurement_group": "PAS", "product_group": "RES",
-                        "cuno": "AA", "commodity_override": "99"},
+                params={"ecn_id": "ecn-001", "procurement_group": "PAS", "product_group": "RES",
+                        "commodity_override": "99"},
             )
         assert resp.status_code == 422
 
     def test_pla_injec_without_override_returns_422(self):
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
+        with _patched_get("AA"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
             client = _make_client(_ENGINEER)
             resp = client.get(
                 "/api/v1/parts/suggest-pn",
-                params={"procurement_group": "PLA", "product_group": "INJEC", "cuno": "AA"},
+                params={"ecn_id": "ecn-001", "procurement_group": "PLA", "product_group": "INJEC"},
             )
         assert resp.status_code == 422
         options = resp.json()["detail"]["commodity_options"]
         assert set(options) == {"65", "67"}
 
     def test_pla_plamc_without_override_returns_422(self):
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
+        with _patched_get("AA"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
             client = _make_client(_ENGINEER)
             resp = client.get(
                 "/api/v1/parts/suggest-pn",
-                params={"procurement_group": "PLA", "product_group": "PLAMC", "cuno": "AA"},
+                params={"ecn_id": "ecn-001", "procurement_group": "PLA", "product_group": "PLAMC"},
             )
         assert resp.status_code == 422
         options = resp.json()["detail"]["commodity_options"]
         assert set(options) == {"65", "67"}
 
     def test_tem_temp_without_override_returns_422(self):
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
+        with _patched_get("AA"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
             client = _make_client(_ENGINEER)
             resp = client.get(
                 "/api/v1/parts/suggest-pn",
-                params={"procurement_group": "TEM", "product_group": "TEMP", "cuno": "AA"},
+                params={"ecn_id": "ecn-001", "procurement_group": "TEM", "product_group": "TEMP"},
             )
         assert resp.status_code == 422
         options = resp.json()["detail"]["commodity_options"]
         assert set(options) == {"66", "76", "81", "90"}
 
     def test_tem_temp_with_override_81_returns_200(self):
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
+        with _patched_get("LM"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
             mock.return_value = 3
             client = _make_client(_ENGINEER)
             resp = client.get(
                 "/api/v1/parts/suggest-pn",
-                params={"procurement_group": "TEM", "product_group": "TEMP",
-                        "cuno": "LM", "commodity_override": "81"},
+                params={"ecn_id": "ecn-001", "procurement_group": "TEM", "product_group": "TEMP",
+                        "commodity_override": "81"},
             )
         assert resp.status_code == 200
         assert resp.json()["suggested_pn"] == "LFLM810003"
 
     def test_indtr_without_override_returns_422(self):
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
+        with _patched_get("AA"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
             client = _make_client(_ENGINEER)
             resp = client.get(
                 "/api/v1/parts/suggest-pn",
-                params={"procurement_group": "MAG", "product_group": "INDTR", "cuno": "AA"},
+                params={"ecn_id": "ecn-001", "procurement_group": "MAG", "product_group": "INDTR"},
             )
         assert resp.status_code == 422
         options = resp.json()["detail"]["commodity_options"]
         assert set(options) == {"54", "55", "56"}
 
     def test_swtch_without_override_returns_422(self):
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
+        with _patched_get("AA"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock):
             client = _make_client(_ENGINEER)
             resp = client.get(
                 "/api/v1/parts/suggest-pn",
-                params={"procurement_group": "EM", "product_group": "SWTCH", "cuno": "AA"},
+                params={"ecn_id": "ecn-001", "procurement_group": "EM", "product_group": "SWTCH"},
             )
         assert resp.status_code == 422
         options = resp.json()["detail"]["commodity_options"]
@@ -311,11 +377,12 @@ class TestSuggestPNMultiCode:
 
 class TestSuggestPNFormat:
 
-    def _get_pn(self, prgp: str, itcl: str, cuno: str, seq: int, override: str | None = None) -> str:
-        params = {"procurement_group": prgp, "product_group": itcl, "cuno": cuno}
+    def _get_pn(self, prgp: str, itcl: str, customer_number: str, seq: int, override: str | None = None) -> str:
+        params = {"ecn_id": "ecn-001", "procurement_group": prgp, "product_group": itcl}
         if override:
             params["commodity_override"] = override
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
+        with _patched_get(customer_number), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
             mock.return_value = seq
             client = _make_client(_ENGINEER)
             resp = client.get("/api/v1/parts/suggest-pn", params=params)
@@ -330,7 +397,7 @@ class TestSuggestPNFormat:
         pn = self._get_pn("PCA", "PCBA", "LM", 1)
         assert pn.startswith("LF")
 
-    def test_cuno_lowercased_input_uppercased_in_pn(self):
+    def test_customer_number_lowercased_uppercased_in_pn(self):
         pn = self._get_pn("PCA", "PCBA", "lm", 1)
         assert pn[2:4] == "LM"
 
@@ -351,8 +418,9 @@ class TestSuggestPNFormat:
         assert pn[4:6] == "05"
 
     def test_prefix_passed_to_adapter(self):
-        params = {"procurement_group": "PCA", "product_group": "PCBA", "cuno": "LM"}
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
+        params = {"ecn_id": "ecn-001", "procurement_group": "PCA", "product_group": "PCBA"}
+        with _patched_get("LM"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
             mock.return_value = 1
             client = _make_client(_ENGINEER)
             client.get("/api/v1/parts/suggest-pn", params=params)
@@ -360,8 +428,9 @@ class TestSuggestPNFormat:
 
     def test_only_prefix_passed_to_adapter(self):
         # CONO is injected by the adapter internally — router must NOT pass it
-        params = {"procurement_group": "PCA", "product_group": "PCBA", "cuno": "LM"}
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
+        params = {"ecn_id": "ecn-001", "procurement_group": "PCA", "product_group": "PCBA"}
+        with _patched_get("LM"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
             mock.return_value = 1
             client = _make_client(_ENGINEER)
             client.get("/api/v1/parts/suggest-pn", params=params)
@@ -369,71 +438,118 @@ class TestSuggestPNFormat:
         assert mock.call_args.kwargs["prefix"] == "LFLM05"
 
     def test_response_includes_procurement_group(self):
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
+        with _patched_get("LM"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
             mock.return_value = 1
             client = _make_client(_ENGINEER)
             resp = client.get(
                 "/api/v1/parts/suggest-pn",
-                params={"procurement_group": "PCA", "product_group": "PCBA", "cuno": "LM"},
+                params={"ecn_id": "ecn-001", "procurement_group": "PCA", "product_group": "PCBA"},
             )
         assert resp.json()["procurement_group"] == "PCA"
 
     def test_response_includes_product_group(self):
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
+        with _patched_get("LM"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
             mock.return_value = 1
             client = _make_client(_ENGINEER)
             resp = client.get(
                 "/api/v1/parts/suggest-pn",
-                params={"procurement_group": "PCA", "product_group": "PCBA", "cuno": "LM"},
+                params={"ecn_id": "ecn-001", "procurement_group": "PCA", "product_group": "PCBA"},
             )
         assert resp.json()["product_group"] == "PCBA"
+
+
+# ── Customer number sourcing (server-side, not caller-supplied) ──────────────
+
+class TestSuggestPNCustomerNumberSourcing:
+
+    def test_ecn_not_found_returns_404(self):
+        with patch.object(ECNService, "get", new_callable=AsyncMock, side_effect=ECNNotFound("ecn-001")):
+            client = _make_client(_ENGINEER)
+            resp = client.get(
+                "/api/v1/parts/suggest-pn",
+                params={"ecn_id": "ecn-001", "procurement_group": "PCA", "product_group": "PCBA"},
+            )
+        assert resp.status_code == 404
+
+    def test_ecn_with_no_customer_number_returns_422(self):
+        with _patched_get(None):
+            client = _make_client(_ENGINEER)
+            resp = client.get(
+                "/api/v1/parts/suggest-pn",
+                params={"ecn_id": "ecn-001", "procurement_group": "PCA", "product_group": "PCBA"},
+            )
+        assert resp.status_code == 422
+        assert "customer_number" in resp.json()["detail"]
+
+    def test_generic_stock_ac_customer_number_works(self):
+        with _patched_get("AC"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
+            mock.return_value = 1
+            client = _make_client(_ENGINEER)
+            resp = client.get(
+                "/api/v1/parts/suggest-pn",
+                params={"ecn_id": "ecn-001", "procurement_group": "PCA", "product_group": "PCBA"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["suggested_pn"] == "LFAC050001"
+
+    def test_caller_cannot_override_customer_number_via_query_param(self):
+        # cuno is no longer an accepted query param — passing it should have no effect
+        with _patched_get("LM"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
+            mock.return_value = 1
+            client = _make_client(_ENGINEER)
+            resp = client.get(
+                "/api/v1/parts/suggest-pn",
+                params={"ecn_id": "ecn-001", "procurement_group": "PCA", "product_group": "PCBA", "cuno": "ZZ"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["suggested_pn"] == "LFLM050001"
 
 
 # ── Input validation ──────────────────────────────────────────────────────────
 
 class TestSuggestPNValidation:
 
-    def test_missing_procurement_group_returns_422(self):
-        client = _make_client(_ENGINEER)
-        resp = client.get("/api/v1/parts/suggest-pn",
-                          params={"product_group": "PCBA", "cuno": "LM"})
-        assert resp.status_code == 422
-
-    def test_missing_product_group_returns_422(self):
-        client = _make_client(_ENGINEER)
-        resp = client.get("/api/v1/parts/suggest-pn",
-                          params={"procurement_group": "PCA", "cuno": "LM"})
-        assert resp.status_code == 422
-
-    def test_missing_cuno_returns_422(self):
+    def test_missing_ecn_id_returns_422(self):
         client = _make_client(_ENGINEER)
         resp = client.get("/api/v1/parts/suggest-pn",
                           params={"procurement_group": "PCA", "product_group": "PCBA"})
         assert resp.status_code == 422
 
-    def test_cuno_too_long_returns_422(self):
+    def test_missing_procurement_group_returns_422(self):
         client = _make_client(_ENGINEER)
         resp = client.get("/api/v1/parts/suggest-pn",
-                          params={"procurement_group": "PCA", "product_group": "PCBA", "cuno": "LMX"})
+                          params={"ecn_id": "ecn-001", "product_group": "PCBA"})
+        assert resp.status_code == 422
+
+    def test_missing_product_group_returns_422(self):
+        client = _make_client(_ENGINEER)
+        resp = client.get("/api/v1/parts/suggest-pn",
+                          params={"ecn_id": "ecn-001", "procurement_group": "PCA"})
         assert resp.status_code == 422
 
     def test_unknown_product_group_returns_422(self):
-        client = _make_client(_ENGINEER)
-        resp = client.get("/api/v1/parts/suggest-pn",
-                          params={"procurement_group": "PCA", "product_group": "BOGUS", "cuno": "LM"})
+        with _patched_get("LM"):
+            client = _make_client(_ENGINEER)
+            resp = client.get("/api/v1/parts/suggest-pn",
+                              params={"ecn_id": "ecn-001", "procurement_group": "PCA", "product_group": "BOGUS"})
         assert resp.status_code == 422
 
     def test_unknown_procurement_group_returns_422(self):
-        client = _make_client(_ENGINEER)
-        resp = client.get("/api/v1/parts/suggest-pn",
-                          params={"procurement_group": "BOGUS", "product_group": "PCBA", "cuno": "LM"})
+        with _patched_get("LM"):
+            client = _make_client(_ENGINEER)
+            resp = client.get("/api/v1/parts/suggest-pn",
+                              params={"ecn_id": "ecn-001", "procurement_group": "BOGUS", "product_group": "PCBA"})
         assert resp.status_code == 422
 
     def test_unauthenticated_returns_401(self):
         app.dependency_overrides.clear()
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.get("/api/v1/parts/suggest-pn",
-                          params={"procurement_group": "PCA", "product_group": "PCBA", "cuno": "LM"})
+                          params={"ecn_id": "ecn-001", "procurement_group": "PCA", "product_group": "PCBA"})
         assert resp.status_code == 401
 
 
@@ -442,25 +558,28 @@ class TestSuggestPNValidation:
 class TestSuggestPNERPErrors:
 
     def test_circuit_breaker_open_returns_503(self):
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
+        with _patched_get("LM"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
             mock.side_effect = pybreaker.CircuitBreakerError()
             client = _make_client(_ENGINEER)
             resp = client.get("/api/v1/parts/suggest-pn",
-                              params={"procurement_group": "PCA", "product_group": "PCBA", "cuno": "LM"})
+                              params={"ecn_id": "ecn-001", "procurement_group": "PCA", "product_group": "PCBA"})
         assert resp.status_code == 503
 
     def test_erp_connect_error_returns_502(self):
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
+        with _patched_get("LM"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
             mock.side_effect = httpx.ConnectError("refused")
             client = _make_client(_ENGINEER)
             resp = client.get("/api/v1/parts/suggest-pn",
-                              params={"procurement_group": "PCA", "product_group": "PCBA", "cuno": "LM"})
+                              params={"ecn_id": "ecn-001", "procurement_group": "PCA", "product_group": "PCBA"})
         assert resp.status_code == 502
 
     def test_erp_timeout_returns_502(self):
-        with patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
+        with _patched_get("LM"), \
+             patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
             mock.side_effect = httpx.TimeoutException("timeout")
             client = _make_client(_ENGINEER)
             resp = client.get("/api/v1/parts/suggest-pn",
-                              params={"procurement_group": "PCA", "product_group": "PCBA", "cuno": "LM"})
+                              params={"ecn_id": "ecn-001", "procurement_group": "PCA", "product_group": "PCBA"})
         assert resp.status_code == 502
