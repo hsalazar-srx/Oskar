@@ -36,7 +36,6 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import httpx
-import pybreaker
 import pytest
 from fastapi.testclient import TestClient
 
@@ -560,7 +559,7 @@ class TestSuggestPNERPErrors:
     def test_circuit_breaker_open_returns_503(self):
         with _patched_get("LM"), \
              patch.object(MovexRestAdapter, "get_next_itno_sequence", new_callable=AsyncMock) as mock:
-            mock.side_effect = pybreaker.CircuitBreakerError()
+            mock.side_effect = RuntimeError("movex-rest-api circuit breaker is open — too many consecutive failures")
             client = _make_client(_ENGINEER)
             resp = client.get("/api/v1/parts/suggest-pn",
                               params={"ecn_id": "ecn-001", "procurement_group": "PCA", "product_group": "PCBA"})

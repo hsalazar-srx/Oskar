@@ -211,6 +211,137 @@ class ECNItemsMixin:
             )
         return await self.get_item(ecn_id, item_id)
 
+    async def bulk_create_items(
+        self,
+        ecn_id: str,
+        items: list[dict],
+    ) -> list[ECNItemDetail]:
+        """Insert multiple items for an ECN in one atomic transaction.
+
+        All rows are validated and inserted together — any failure rolls back
+        the entire batch. The ECN status is checked with a row-level lock inside
+        the transaction to prevent the DRAFT→non-DRAFT race condition.
+
+        Args:
+            ecn_id: UUID of the target ECN.
+            items: List of dicts matching the BulkItemRow schema fields.
+
+        Raises:
+            ECNNotFound: ECN does not exist.
+            ECNValidationError: ECN is not in DRAFT, or a row fails validation,
+                                or a duplicate item_number is found in the batch.
+        """
+        from src.workflow.machine import ECNStatus
+
+        # -- Batch-level duplicate check (within the submitted rows) ----------
+        seen_item_numbers: set[str] = set()
+        for idx, row in enumerate(items, start=1):
+            num = row.get("item_number", "")
+            if num in seen_item_numbers:
+                raise ECNValidationError(
+                    f"Row {idx}: item_number '{num}' appears more than once in the upload"
+                )
+            seen_item_numbers.add(num)
+
+        # -- Lock ECN row and assert DRAFT status inside the transaction ------
+        ecn_row = await self._session.execute(
+            sa.text(
+                "SELECT id, status FROM ecn_instances "
+                "WHERE id = :ecn_id FOR UPDATE"
+            ),
+            {"ecn_id": ecn_id},
+        )
+        ecn = ecn_row.first()
+        if not ecn:
+            raise ECNNotFound(ecn_id)
+        if ecn[1] != ECNStatus.DRAFT:
+            raise ECNValidationError("ECN is not in DRAFT status")
+
+        # -- Determine starting line_number from existing items ---------------
+        max_line_row = await self._session.execute(
+            sa.text(
+                "SELECT COALESCE(MAX(line_number), 0) FROM ecn_items WHERE ecn_id = :ecn_id"
+            ),
+            {"ecn_id": ecn_id},
+        )
+        next_line = (max_line_row.scalar() or 0) + 1
+
+        # -- Insert all rows --------------------------------------------------
+        import json as _json
+
+        created_ids: list[str] = []
+        for offset, row in enumerate(items):
+            item_number = str(row.get("item_number", "")).strip()
+            effectivity_type = row.get("effectivity_type", "IMMEDIATE")
+            effectivity_from_str = row.get("effectivity_from")
+            eff_date = (
+                date.fromisoformat(effectivity_from_str) if effectivity_from_str else None
+            )
+
+            # Pack MOVEX-only fields (no dedicated column) into questionnaire_data.
+            # Merge with any existing questionnaire_data from the row if present.
+            movex_fields: dict = {}
+            for key in ("order_type", "lead_free_code", "good_receiving_method"):
+                val = row.get(key)
+                if val:
+                    movex_fields[key] = val
+            existing_qd = row.get("questionnaire_data") or {}
+            questionnaire_data = {**existing_qd, **movex_fields} if movex_fields else (existing_qd or None)
+
+            item_id = str(uuid.uuid4())
+            await self._session.execute(
+                sa.text(
+                    "INSERT INTO ecn_items "
+                    "(id, ecn_id, line_number, is_new_item, item_number, item_status, item_name, "
+                    "description_2, drawing_number, procurement_group, product_group, "
+                    "unit_of_measure, item_group, customer_alias, "
+                    "effectivity_type, effectivity_from, questionnaire_data) "
+                    "VALUES (:id, :ecn_id, :line_number, :is_new_item, :item_number, :item_status, :item_name, "
+                    ":description_2, :drawing_number, :procurement_group, :product_group, "
+                    ":unit_of_measure, :item_group, :customer_alias, "
+                    ":effectivity_type, :effectivity_from, :questionnaire_data)"
+                ),
+                {
+                    "id": item_id,
+                    "ecn_id": ecn_id,
+                    "line_number": next_line + offset,
+                    "is_new_item": bool(row.get("is_new_item", False)),
+                    "item_number": item_number,
+                    "item_status": row.get("item_status", "20"),
+                    "item_name": row.get("item_name"),
+                    "description_2": row.get("description_2"),
+                    "drawing_number": row.get("drawing_number"),
+                    "procurement_group": row.get("procurement_group"),
+                    "product_group": row.get("product_group"),
+                    "unit_of_measure": row.get("unit_of_measure"),
+                    "item_group": row.get("item_group"),
+                    "customer_alias": row.get("customer_alias"),
+                    "effectivity_type": effectivity_type,
+                    "effectivity_from": eff_date,
+                    "questionnaire_data": _json.dumps(questionnaire_data) if questionnaire_data else None,
+                },
+            )
+            created_ids.append(item_id)
+
+        # -- Return created items (in insertion order) -------------------------
+        result: list[ECNItemDetail] = []
+        for item_id in created_ids:
+            mpns = await self._fetch_mpns(item_id)
+            row_data = await self._session.execute(
+                sa.text(
+                    "SELECT id, ecn_id, line_number, is_new_item, item_number, item_name, "
+                    "description_2, drawing_number, drawing_created, procurement_group, product_group, "
+                    "unit_of_measure, item_group, customer_alias, effectivity_from, effectivity_type, "
+                    "customer_part_number, created_at, updated_at "
+                    "FROM ecn_items WHERE id = :item_id"
+                ),
+                {"item_id": item_id},
+            )
+            r = row_data.first()
+            if r:
+                result.append(self._row_to_item(r, mpns))
+        return result
+
     async def delete_item(self, ecn_id: str, item_id: str) -> None:
         ecn_row = await self._session.execute(
             sa.text("SELECT status FROM ecn_instances WHERE id = :ecn_id"),

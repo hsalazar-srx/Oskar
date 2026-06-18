@@ -14,6 +14,7 @@ import ECNCard from "@/components/ecn/ECNCard"
 import WorkflowPanel from "@/components/ecn/WorkflowPanel"
 import ECNItemPanel from "@/components/ECNItemPanel"
 import { ActionModal, ModalField } from "@/components/ecn/ActionModal"
+import { ItemUploadDrawer } from "@/components/ecn/ItemUploadDrawer"
 
 export default function ECNDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -21,6 +22,7 @@ export default function ECNDetailPage() {
   const qc = useQueryClient()
   const user = useAuthStore((s) => s.user)
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
+  const [uploadDrawerOpen, setUploadDrawerOpen] = useState(false)
   const [toast, setToast] = useState<{ from: string; to: string } | null>(null)
   const [modal, setModal] = useState<{ action: ActionDef } | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -136,7 +138,16 @@ export default function ECNDetailPage() {
 
         <Section
           title={`Items (${items.length})`}
-          action={<Button size="sm" variant="outline" onClick={() => setSelectedItemId("new")}>+ Add item</Button>}
+          action={
+            <div className="flex gap-2">
+              {ecn.status === 0 && (
+                <Button size="sm" variant="outline" onClick={() => setUploadDrawerOpen(true)}>
+                  ↑ Upload items
+                </Button>
+              )}
+              <Button size="sm" variant="outline" onClick={() => setSelectedItemId("new")}>+ Add item</Button>
+            </div>
+          }
         >
           {items.length === 0 ? (
             <div className="py-6 text-center">
@@ -176,6 +187,13 @@ export default function ECNDetailPage() {
           onClose={() => setSelectedItemId(null)}
         />
       )}
+
+      <ItemUploadDrawer
+        ecnId={id!}
+        open={uploadDrawerOpen}
+        onClose={() => setUploadDrawerOpen(false)}
+        onSuccess={() => qc.invalidateQueries({ queryKey: ["ecn-items", id] })}
+      />
 
       {modal?.action.needsModal === "reject" && (
         <ActionModal

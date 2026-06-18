@@ -30,7 +30,7 @@ services:
       - TEST_DATABASE_URL=postgresql+asyncpg://oskar:oskar_dev@oskar-test-db:5432/oskar_test
       # Dev auth bypass — skip LDAP entirely (not reachable from localhost)
       - AUTH_PROVIDER=dev
-      - DEV_USERS=${DEV_USERS:-hsalazar,testuser,dc_user,eng_user}
+      - DEV_USERS=${DEV_USERS:-hsalazar,testuser,dc_user,eng_user,qm_user}
       - SECURE_COOKIE=false
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-ebe708e2900192fddb0b554ced9c6d9f3c5d6d3badda1ad1e3df6b3aeb3a779f}
       - REFRESH_TOKEN_SECRET=${REFRESH_TOKEN_SECRET:-ebe708e2900192fddb0b554ced9c6d9f3c5d6d3badda1ad1e3df6b3aeb3a779f}

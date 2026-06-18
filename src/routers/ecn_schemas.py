@@ -172,7 +172,7 @@ class CreateItemBody(BaseModel):
     procurement_group: str | None = Field(None, max_length=3)
     product_group: str | None = Field(None, max_length=5)
     unit_of_measure: str | None = Field(None, max_length=3)
-    item_group: str | None = Field(None, max_length=3)
+    item_group: str | None = Field(None, max_length=4)
     customer_alias: str | None = Field(None, max_length=30)
     customer_part_number: str | None = Field(None, max_length=50)
     effectivity_type: str = Field(..., description="DATE | ECN | IMMEDIATE")
@@ -193,7 +193,7 @@ class UpdateItemBody(BaseModel):
     procurement_group: str | None = Field(None, max_length=3)
     product_group: str | None = Field(None, max_length=5)
     unit_of_measure: str | None = Field(None, max_length=3)
-    item_group: str | None = Field(None, max_length=3)
+    item_group: str | None = Field(None, max_length=4)
     customer_alias: str | None = Field(None, max_length=30)
     customer_part_number: str | None = Field(None, max_length=50)
     effectivity_type: str | None = None
@@ -261,6 +261,46 @@ class UpdateMPNBody(BaseModel):
     def _validate_packaging(cls, v: str | None) -> str | None:
         if v is not None and v not in _PACKAGING_VALUES:
             raise ValueError(f"packaging_type must be one of {_PACKAGING_VALUES}")
+        return v
+
+
+class BulkItemRow(BaseModel):
+    """One parsed row from the bulk upload template, sent from the frontend.
+
+    Required fields (upload is rejected if any are blank):
+        item_number, item_name, item_status, procurement_group, product_group,
+        order_type, lead_free_code, good_receiving_method.
+
+    item_status is stored in ecn_items.item_status (VARCHAR 2).
+    order_type / lead_free_code / good_receiving_method have no dedicated column
+    in ecn_items; they are stored in questionnaire_data JSONB.
+    """
+    is_new_item: bool = False
+    item_number: str = Field(..., min_length=1, max_length=15)
+    item_status: str = Field(..., min_length=1, max_length=2,
+                             description="20 = Active, 90 = Inactive")
+    item_name: str = Field(..., min_length=1, max_length=30)
+    description_2: str | None = Field(None, max_length=60)
+    drawing_number: str | None = Field(None, max_length=20)
+    procurement_group: str = Field(..., min_length=1, max_length=3)
+    product_group: str = Field(..., min_length=1, max_length=5)
+    unit_of_measure: str | None = Field(None, max_length=3)
+    item_group: str | None = Field(None, max_length=4)
+    customer_alias: str | None = Field(None, max_length=30)
+    order_type: str = Field(..., min_length=1, max_length=10,
+                            description="e.g. 001 = Product Stock Code, 010 = Component")
+    lead_free_code: str = Field(..., min_length=1, max_length=10,
+                                description="BBB = NON-ROHS, PBF = ROHS")
+    good_receiving_method: str = Field(..., min_length=1, max_length=10,
+                                       description="010 = Direct Put Away, 020 = Receive Inspect")
+    effectivity_type: str = Field("IMMEDIATE", description="DATE | ECN | IMMEDIATE")
+    effectivity_from: str | None = None
+
+    @field_validator("effectivity_type")
+    @classmethod
+    def _validate_effectivity(cls, v: str) -> str:
+        if v not in _EFFECTIVITY_VALUES:
+            raise ValueError(f"effectivity_type must be one of {_EFFECTIVITY_VALUES}")
         return v
 
 

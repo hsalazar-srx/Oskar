@@ -21,7 +21,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import httpx
-import pybreaker
 import pytest
 from fastapi.testclient import TestClient
 
@@ -243,7 +242,7 @@ class TestAliasLookupERPErrors:
 
     def test_circuit_breaker_open_returns_503(self):
         with patch.object(MovexRestAdapter, "lookup_by_alias", new_callable=AsyncMock) as mock:
-            mock.side_effect = pybreaker.CircuitBreakerError()
+            mock.side_effect = RuntimeError("movex-rest-api circuit breaker is open — too many consecutive failures")
             client = _make_client(_ENGINEER)
             resp = client.get("/api/v1/parts/alias", params={"popn": "ACME-001"})
         assert resp.status_code == 503

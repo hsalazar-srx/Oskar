@@ -30,6 +30,8 @@ services:
       - MOVEX_CONO=${MOVEX_CONO:-300}
       - DATABASE_URL=postgresql+asyncpg://oskar:${POSTGRES_PASSWORD}@oskar-db-staging:5432/oskar_staging
       - AUTH_PROVIDER=${AUTH_PROVIDER:-dev}
+      - DEV_USERS=${DEV_USERS:-hsalazar,eng_user,qm_user,dc_user}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
       - LDAP_SERVER=${LDAP_SERVER}
       - LDAP_BASE_DN=${LDAP_BASE_DN}
       - LDAP_BIND_DN=${LDAP_BIND_DN}

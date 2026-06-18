@@ -39,7 +39,10 @@ def _ecn_number(facility: str, seq: int, year: int | None = None) -> str:
 async def _next_ecn_seq(session: AsyncSession, facility: str, year: int) -> int:
     prefix = f"ECN-{year}-{facility}-%"
     row = await session.execute(
-        sa.text("SELECT COUNT(*) FROM ecn_instances WHERE ecn_number LIKE :prefix"),
+        sa.text(
+            "SELECT COALESCE(MAX(CAST(SPLIT_PART(ecn_number, '-', 4) AS INTEGER)), 0) "
+            "FROM ecn_instances WHERE ecn_number LIKE :prefix"
+        ),
         {"prefix": prefix},
     )
     return int(row.scalar_one()) + 1
