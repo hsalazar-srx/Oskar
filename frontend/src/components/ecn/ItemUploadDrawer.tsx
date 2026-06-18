@@ -75,16 +75,16 @@ export function ItemUploadDrawer({ ecnId, customerNumber, open, onClose, onSucce
         setParseResult(null)
         setRawFile(null)
         setSubmitError(null)
-      }, 300)
+      }, 200)
     }
   }, [open])
 
-  // -- Drop handler ----------------------------------------------------------
   const onDrop = React.useCallback((acceptedFiles: File[]) => {
     const file = acceptedFiles[0]
     if (!file) return
-
+    setRawFile(file)
     setSubmitError(null)
+
     const reader = new FileReader()
     reader.onload = (e) => {
       try {
@@ -93,10 +93,10 @@ export function ItemUploadDrawer({ ecnId, customerNumber, open, onClose, onSucce
         const wb = XLSX.read(data, { type: "array", raw: false })
         const result = parseWorkbook(wb, customerNumber ?? undefined)
         setParseResult(result)
-        setRawFile(file)
         setState("preview")
       } catch {
-        setSubmitError("Could not read the file. Ensure it is a valid .xlsx or .csv.")
+        setSubmitError("Could not parse the file. Ensure it is a valid .xlsx or .csv.")
+        setState("preview")
       }
     }
     reader.readAsArrayBuffer(file)
@@ -203,33 +203,20 @@ export function ItemUploadDrawer({ ecnId, customerNumber, open, onClose, onSucce
                     <p className="text-sm font-medium text-neutral-700">
                       {isDragActive ? "Drop the file here" : "Drag & drop your spreadsheet here"}
                     </p>
-                    <p className="text-xs text-neutral-400 mt-1">or click to browse — .xlsx or .csv accepted</p>
+                    <p className="text-xs text-neutral-400 mt-1">or click to browse — .xlsx or .csv</p>
                   </div>
                 </div>
 
-                <div className="w-full bg-neutral-50 rounded-lg p-4 text-xs text-neutral-500 space-y-1">
-                  <p className="font-semibold text-neutral-600 mb-2">Required columns in your file:</p>
-                  {["Item No", "Item Name", "Item Status", "Procurement Group", "Product Group",
-                    "Order Type", "Lead Free Code", "Good Receiving Method"].map((col) => (
-                    <div key={col} className="flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 shrink-0" />
-                      {col}
-                    </div>
-                  ))}
+                <div className="text-xs text-neutral-400 text-center max-w-md">
+                  Use the standard Oskar item upload template. Delete the instruction rows (rows 2–6)
+                  before uploading. All required columns must be present.
                 </div>
-
-                {submitError && (
-                  <div className="w-full bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700 flex gap-2">
-                    <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-                    {submitError}
-                  </div>
-                )}
               </div>
             )}
 
-            {/* ── PREVIEW / SUBMITTING: results table ── */}
-            {(state === "preview" || state === "submitting") && parseResult && (
-              <div className="space-y-4">
+            {/* ── PREVIEW: parsed rows ── */}
+            {state === "preview" && parseResult && (
+              <div className="flex flex-col gap-4">
 
                 {/* Summary bar */}
                 <div className="flex items-center gap-3 flex-wrap">

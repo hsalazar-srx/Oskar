@@ -190,6 +190,7 @@ export default function ECNDetailPage() {
 
       <ItemUploadDrawer
         ecnId={id!}
+        customerNumber={ecn?.customer_number ?? null}
         open={uploadDrawerOpen}
         onClose={() => setUploadDrawerOpen(false)}
         onSuccess={() => qc.invalidateQueries({ queryKey: ["ecn-items", id] })}

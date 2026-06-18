@@ -40,6 +40,9 @@ docker/data/
 .DS_Store
 Thumbs.db
 
+# Microsoft Office lock files (created when a file is open, deleted on close)
+~$*
+
 # Pytest / coverage
 .pytest_cache/
 .coverage
