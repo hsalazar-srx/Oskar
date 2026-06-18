@@ -11,7 +11,6 @@ from __future__ import annotations
 from typing import Annotated
 
 import httpx
-import pybreaker
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
@@ -47,7 +46,9 @@ async def list_customers(
     """
     try:
         records = await erp.list_customers()
-    except pybreaker.CircuitBreakerError:
+    except RuntimeError as exc:
+        if "circuit breaker" not in str(exc):
+            raise
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="ERP system unavailable (circuit breaker open). Try again shortly.",

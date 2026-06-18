@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Council Report — Oskar Bulk Item Upload Architecture</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8f9fa; color: #1a1a1a; line-height: 1.6; }
+  .header { background: #1a1a2e; color: white; padding: 32px 40px; }
+  .header h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.3px; }
+  .header .meta { font-size: 13px; color: #94a3b8; margin-top: 6px; }
+  .header .question { font-size: 14px; color: #cbd5e1; margin-top: 16px; background: rgba(255,255,255,0.08); padding: 12px 16px; border-radius: 6px; border-left: 3px solid #6366f1; }
+  .container { max-width: 960px; margin: 0 auto; padding: 32px 24px; }
+
+  /* VERDICT */
+  .verdict { background: white; border-radius: 10px; border: 1px solid #e2e8f0; margin-bottom: 24px; overflow: hidden; }
+  .verdict-header { background: #1e293b; color: white; padding: 18px 24px; display: flex; align-items: center; gap: 10px; }
+  .verdict-header h2 { font-size: 16px; font-weight: 600; }
+  .verdict-header .badge { background: #6366f1; font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 500; }
+  .verdict-body { padding: 24px; }
+  .verdict-section { margin-bottom: 28px; }
+  .verdict-section:last-child { margin-bottom: 0; }
+  .verdict-section h3 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: #6366f1; margin-bottom: 12px; }
+  .verdict-section p, .verdict-section li { font-size: 14px; color: #374151; line-height: 1.7; }
+  .verdict-section ul { padding-left: 20px; }
+  .verdict-section ul li { margin-bottom: 6px; }
+
+  /* HIGHLIGHT BOX */
+  .highlight { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 16px 20px; margin-top: 12px; }
+  .highlight p { font-size: 14px; color: #1e40af; }
+  .warning { background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; padding: 16px 20px; margin-top: 12px; }
+  .warning p { font-size: 14px; color: #9a3412; }
+  .danger { background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 16px 20px; margin-top: 12px; }
+  .danger p { font-size: 14px; color: #991b1b; }
+  .success { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px 20px; margin-top: 12px; }
+  .success p { font-size: 14px; color: #14532d; }
+
+  /* FIRST THING */
+  .first-thing { background: #1e293b; border-radius: 10px; padding: 24px; margin-bottom: 24px; color: white; }
+  .first-thing .label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8; margin-bottom: 8px; }
+  .first-thing h3 { font-size: 18px; font-weight: 700; color: #a5b4fc; margin-bottom: 12px; }
+  .first-thing p { font-size: 14px; color: #cbd5e1; line-height: 1.7; }
+
+  /* AGREEMENT GRID */
+  .alignment-grid { background: white; border-radius: 10px; border: 1px solid #e2e8f0; margin-bottom: 24px; overflow: hidden; }
+  .alignment-grid .grid-header { background: #f8fafc; padding: 16px 24px; border-bottom: 1px solid #e2e8f0; }
+  .alignment-grid .grid-header h3 { font-size: 14px; font-weight: 600; color: #374151; }
+  .grid-body { padding: 20px 24px; }
+  .grid-row { display: grid; grid-template-columns: 200px 1fr; gap: 16px; margin-bottom: 12px; align-items: start; }
+  .grid-row:last-child { margin-bottom: 0; }
+  .advisor-name { font-size: 12px; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; padding-top: 3px; }
+  .position-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tag { font-size: 12px; padding: 3px 10px; border-radius: 20px; font-weight: 500; }
+  .tag-agree { background: #dcfce7; color: #15803d; }
+  .tag-clash { background: #fef3c7; color: #92400e; }
+  .tag-strong { background: #ede9fe; color: #5b21b6; }
+
+  /* COLLAPSIBLE */
+  details { background: white; border-radius: 10px; border: 1px solid #e2e8f0; margin-bottom: 12px; overflow: hidden; }
+  details summary { padding: 16px 20px; cursor: pointer; font-size: 14px; font-weight: 600; color: #374151; display: flex; align-items: center; gap: 8px; list-style: none; user-select: none; }
+  details summary::-webkit-details-marker { display: none; }
+  details summary::before { content: '▶'; font-size: 10px; color: #9ca3af; transition: transform 0.2s; }
+  details[open] summary::before { transform: rotate(90deg); }
+  details summary:hover { background: #f8fafc; }
+  .advisor-badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 500; margin-left: auto; }
+  .contrarian { background: #fef2f2; color: #991b1b; }
+  .first-principles { background: #eff6ff; color: #1e40af; }
+  .expansionist { background: #f0fdf4; color: #14532d; }
+  .outsider { background: #fdf4ff; color: #6b21a8; }
+  .executor { background: #fff7ed; color: #9a3412; }
+  .details-body { padding: 0 20px 20px; font-size: 14px; color: #374151; line-height: 1.7; }
+
+  /* PEER REVIEWS */
+  .review-item { padding: 12px 0; border-bottom: 1px solid #f1f5f9; }
+  .review-item:last-child { border-bottom: none; }
+  .review-question { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #9ca3af; margin-bottom: 4px; }
+  .review-answer { font-size: 14px; color: #374151; }
+
+  .section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8; margin-bottom: 16px; margin-top: 32px; }
+  footer { text-align: center; padding: 24px; font-size: 12px; color: #9ca3af; border-top: 1px solid #e2e8f0; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>LLM Council Report — Oskar Bulk Item Upload</h1>
+  <div class="meta">Scanfil APAC · ECN Platform · 17 June 2026</div>
+  <div class="question">
+    <strong>Question:</strong> Is the proposed bulk CSV/Excel import architecture (react-dropzone + SheetJS client-side → preview → /bulk endpoint) the best approach for Oskar? What failure modes are being missed, and is the UX pattern optimal?
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- FIRST THING -->
+  <div class="first-thing">
+    <div class="label">The One Thing To Do First</div>
+    <h3>Write the header-fingerprint validator before writing a single line of parsing logic.</h3>
+    <p>Define the canonical column header list as a constant. On every upload — before parsing, before preview, before any network call — check that the uploaded file's headers match that list. If they don't, block immediately with a message naming the missing or unexpected columns. This costs two hours to build and future-proofs every downstream assumption your parser makes. Without it, template drift silently corrupts data. With it, everything else can be built with confidence.</p>
+  </div>
+
+  <!-- VERDICT -->
+  <div class="verdict">
+    <div class="verdict-header">
+      <h2>Council Verdict</h2>
+      <span class="badge">Chairman Synthesis</span>
+    </div>
+    <div class="verdict-body">
+
+      <div class="verdict-section">
+        <h3>Where the Council Agrees</h3>
+        <ul>
+          <li>Dedicated <code>/bulk</code> endpoint: unanimous. No sequential loop, no background job.</li>
+          <li>All-or-nothing transaction: unanimous. Stop entirely on any error — the user corrects and retries.</li>
+          <li>Two-step preview/confirm UX is correct in principle. The preview is the primary trust mechanism — do not remove it to simplify the POC.</li>
+          <li><strong>SheetJS must use <code>{raw: false}</code></strong> — all columns read as strings, never coerced to numbers. AS/400 item numbers frequently carry leading zeros (e.g. <code>0034567</code> → silently becomes <code>34567</code>). This is a data integrity hole, not a theoretical edge case. Non-negotiable.</li>
+          <li>DRAFT status race condition is a ship-blocking bug: ECN status must be checked <em>inside</em> the transaction with a row-level lock, not in application code before the transaction starts.</li>
+          <li>Skip rows by header content match, not position. Hardcoded "skip rows 2-6" is a comment waiting to become a bug.</li>
+        </ul>
+      </div>
+
+      <div class="verdict-section">
+        <h3>Where the Council Clashes</h3>
+        <p><strong>Client-side vs server-side parsing</strong> — the central dispute.</p>
+        <div class="warning">
+          <p><strong>Executor (server-side):</strong> openpyxl + stdlib csv, zero new JS dependencies, one place to fix template changes. Simpler to debug.</p>
+        </div>
+        <div class="highlight">
+          <p><strong>Contrarian + First Principles (client-side):</strong> The preview is the value proposition. Engineers need to see their data reflected back instantly — before any network round-trip. Eliminating the preview to simplify the POC trades away the primary reason engineers will trust bulk upload over manual entry.</p>
+        </div>
+        <div class="success" style="margin-top:12px;">
+          <p><strong>Chairman resolution:</strong> Do both. Parse client-side with SheetJS (<code>{raw: false}</code>) for instant preview. Also POST the raw file to the backend as <code>multipart/form-data</code>. The backend runs an authoritative dry-run Pydantic validation pass — returns structured errors with row numbers if anything fails. If dry-run passes, re-validate and INSERT inside a single transaction. Client-side validation is for UX speed only. The backend is the source of truth. Neither trusts the other.</p>
+        </div>
+        <p style="margin-top:12px; font-size:14px; color:#374151;"><strong>Idempotent upsert vs pure insert:</strong> The Expansionist argues for idempotent upsert keyed on item_number for retry safety. For a POC with atomic batches, a pure insert with a DB-level uniqueness constraint on <code>(ecn_id, item_number)</code> is correct and simpler. Upsert is the right shape for Sprint 2 production hardening.</p>
+      </div>
+
+      <div class="verdict-section">
+        <h3>Blind Spots the Council Caught</h3>
+        <div class="danger">
+          <p><strong>1. Authorization missing from the architecture.</strong> All 5 peer reviewers flagged this independently. A <code>/bulk</code> endpoint that bypasses the role gates applied to single-item add is a compliance gap. Scanfil APAC is a regulated electronics contract manufacturer under ISO 13485. The bulk endpoint must enforce identical RBAC checks: who is permitted to add items to this specific ECN. Wire this in on day one — if the POC ships without it, it becomes the production behavior by inertia.</p>
+        </div>
+        <div class="danger" style="margin-top:12px;">
+          <p><strong>2. No server-side file guards.</strong> Do not trust browser MIME detection. Enforce &lt;1MB and whitelist <code>.xlsx</code>/<code>.csv</code> content-type at the endpoint level before any parsing begins. Define behavior on VPN timeout mid-upload — the transaction either committed or it didn't; the client needs a clear error state, not an orphaned spinner.</p>
+        </div>
+        <div class="warning" style="margin-top:12px;">
+          <p><strong>3. Encoding.</strong> CP1252 from AS/400/MOVEX exports is a real vector. Show raw cell values in the preview, not normalized ones. Use <code>chardet</code> on the server side if accepting raw <code>.csv</code> files.</p>
+        </div>
+      </div>
+
+      <div class="verdict-section">
+        <h3>The Full Recommendation</h3>
+        <ul>
+          <li><strong>Client-side parse:</strong> SheetJS with <code>{raw: false}</code>. Header-fingerprint check first — block on mismatch before preview renders.</li>
+          <li><strong>Preview:</strong> Full grid with inline error highlighting. Show raw cell values. This is not optional for the POC.</li>
+          <li><strong>Confirm → Backend:</strong> POST raw file as <code>multipart/form-data</code>. Backend dry-run Pydantic pass first. If clean, INSERT inside a single transaction. ECN DRAFT status checked via <code>SELECT ... FOR UPDATE</code> inside the transaction — not in application code outside it.</li>
+          <li><strong>DB:</strong> Unique constraint on <code>(ecn_id, item_number)</code>. Line numbers auto-assigned by sequence.</li>
+          <li><strong>Auth:</strong> Identical RBAC as single-item add on the <code>/bulk</code> endpoint. Day one, non-negotiable.</li>
+          <li><strong>File guards:</strong> Server-side content-type whitelist + size enforcement before parsing begins.</li>
+          <li><strong>Skip logic:</strong> Header name matching, not positional row numbers.</li>
+          <li><strong>SheetJS <code>{raw: false}</code>:</strong> Non-negotiable. Leading-zero integrity for MOVEX item numbers.</li>
+        </ul>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ALIGNMENT GRID -->
+  <div class="alignment-grid">
+    <div class="grid-header">
+      <h3>Advisor Position Summary</h3>
+    </div>
+    <div class="grid-body">
+      <div class="grid-row">
+        <div class="advisor-name">The Contrarian</div>
+        <div class="position-tags">
+          <span class="tag tag-agree">Dedicated /bulk</span>
+          <span class="tag tag-clash">Client-side parse (with dry-run server pass)</span>
+          <span class="tag tag-strong">Leading-zero SheetJS bug</span>
+          <span class="tag tag-agree">Two-step UX</span>
+        </div>
+      </div>
+      <div class="grid-row">
+        <div class="advisor-name">First Principles</div>
+        <div class="position-tags">
+          <span class="tag tag-agree">Client-side parse</span>
+          <span class="tag tag-agree">Preview = trust mechanism</span>
+          <span class="tag tag-strong">Header-fingerprint check</span>
+          <span class="tag tag-agree">Two-step UX</span>
+        </div>
+      </div>
+      <div class="grid-row">
+        <div class="advisor-name">The Expansionist</div>
+        <div class="position-tags">
+          <span class="tag tag-agree">Client-side parse</span>
+          <span class="tag tag-agree">Dedicated /bulk</span>
+          <span class="tag tag-clash">Idempotent upsert (deferred to Sprint 2)</span>
+          <span class="tag tag-strong">MOVEX BOM pull opportunity</span>
+        </div>
+      </div>
+      <div class="grid-row">
+        <div class="advisor-name">The Outsider</div>
+        <div class="position-tags">
+          <span class="tag tag-strong">Row-skip by name not position</span>
+          <span class="tag tag-strong">DRAFT status race condition</span>
+          <span class="tag tag-strong">DB uniqueness constraint</span>
+          <span class="tag tag-strong">Encoding / CP1252</span>
+        </div>
+      </div>
+      <div class="grid-row">
+        <div class="advisor-name">The Executor</div>
+        <div class="position-tags">
+          <span class="tag tag-clash">Server-side parse (resolved: do both)</span>
+          <span class="tag tag-agree">Dedicated /bulk</span>
+          <span class="tag tag-agree">chardet for encoding</span>
+          <span class="tag tag-agree">DRAFT check inside transaction</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADVISOR DETAILS -->
+  <div class="section-label">Advisor Responses (full)</div>
+
+  <details>
+    <summary>The Contrarian <span class="advisor-badge contrarian">Risk Focus</span></summary>
+    <div class="details-body">
+      <p>The fatal flaw is the preview step becoming a trust trap. Engineers will glance at a 60-row preview table, see no red highlights, click Confirm, and then discover the backend rejected everything because of a Pydantic constraint the client-side validator didn't cover. Field length limits drift. Enum values get added server-side and forgotten on the client. That gap is where engineers lose 20 minutes at 4pm on a Friday.</p>
+      <br>
+      <p>The specific failure mode nobody asked about: Excel files from MOVEX exports carry numeric formatting on "text" fields. SheetJS will silently coerce a part number like <code>0034567</code> to the integer <code>34567</code>, stripping the leading zero. Your Pydantic model accepts it. Your MOVEX integration rejects it at sync time — three steps later, in a different session, with no connection back to the upload. That's a data integrity hole.</p>
+      <br>
+      <p>Stop-on-error all-or-nothing is correct — but apply it after a dry-run server validation pass, not after a client-side pass. Force SheetJS to read all columns as raw strings: <code>{raw: false}</code>. Non-negotiable.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>The First Principles Thinker <span class="advisor-badge first-principles">First Principles</span></summary>
+    <div class="details-body">
+      <p>What are you actually solving? Engineers have a standardised Excel template. They want its rows to become ECN items. That's it. This is not a general file upload problem. It's a known-schema, trusted-user, small-payload data entry shortcut.</p>
+      <br>
+      <p>Client-side parsing is correct — not because SheetJS is great, but because you're reading a template you control. Parse it where the feedback loop is tightest: in the browser, before any network round-trip. The preview step isn't a UX nicety, it's the core value proposition — the moment engineers see their data reflected back before commit is the moment they stop fearing bulk operations.</p>
+      <br>
+      <p>The failure mode nobody named: The template itself will drift. Engineers will add columns, rename headers, use merged cells. The missing piece is a <strong>header-fingerprint check</strong> on upload that detects template version mismatch and blocks with a clear message before the preview even renders. Ship that first.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>The Expansionist <span class="advisor-badge expansionist">Upside Focus</span></summary>
+    <div class="details-body">
+      <p>The standardised Excel template is the real unlock — not the upload mechanism. The same parser can be extended to ingest from M3 MOVEX BOMs directly via DB2 direct endpoints (MITMAS and MITPOP are already queryable). The template becomes optional. Cross-ECN item reuse and change velocity analytics are hiding in these CSV rows.</p>
+      <br>
+      <p>Client-side SheetJS is correct for the POC because the preview-before-confirm UX is worth more than any backend-side flexibility gain. The two-step flow is the trust mechanism that makes engineers adopt it over manual entry.</p>
+      <br>
+      <p>The dedicated <code>/bulk</code> endpoint is right, but shape it as an <strong>idempotent upsert keyed on item_number within the ECN</strong>, not a pure insert. "Upload failed at row 47, fix and retry" becomes a non-event — the retry just overwrites what was already written cleanly. Retry safety is free if you design for it now. (Chairman note: deferred to Sprint 2 — pure insert + DB uniqueness constraint is correct for the POC.)</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>The Outsider <span class="advisor-badge outsider">Fresh Eyes</span></summary>
+    <div class="details-body">
+      <p><strong>The template skip logic is a hidden landmine.</strong> Rows 2-6 are skipped as "instruction rows." What happens when an engineer deletes the instructions because they find them annoying? Or when the template gets updated and the instruction block grows to row 8? Skip rows by content match, not position. Match column headers by name. Everything that doesn't match a known header pattern gets ignored.</p>
+      <br>
+      <p><strong>The DRAFT status race condition.</strong> Engineers will upload, see a preview, confirm — and then get a backend error because the ECN slipped out of DRAFT status between their preview and their confirm click. Someone else approved it in that window. You have no optimistic lock. The confirm button needs to check ECN status server-side before inserting, and the error message must say exactly why it failed.</p>
+      <br>
+      <p><strong>Duplicate detection is unspecified.</strong> Upload the same file twice → 160 items instead of 80? Item number uniqueness must be enforced at the database constraint level, not just application logic.</p>
+      <br>
+      <p><strong>Encoding.</strong> MOVEX data on AS/400 often comes out in CP1252. Show the raw cell value in the preview, not a normalized version.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>The Executor <span class="advisor-badge executor">Ship It</span></summary>
+    <div class="details-body">
+      <p>Parse server-side. Send the raw file as <code>multipart/form-data</code>. Use openpyxl + stdlib csv. Zero new JS dependencies. If the template format ever changes, fix it in one place. (Chairman note: resolved — parse both sides; client for preview UX, server for authoritative validation.)</p>
+      <br>
+      <p>Dedicated <code>/bulk</code> endpoint. The sequential loop is a trap — 80 round-trips, 80 failure points, no atomicity. One endpoint, one transaction, one commit or rollback.</p>
+      <br>
+      <p>Two-step UX is correct but simplify it — skip the in-browser preview grid for the POC. Show errors as a numbered list. (Chairman note: preview grid is not optional — it's the trust mechanism. Don't remove it.)</p>
+      <br>
+      <p>Failure modes: duplicate <code>item_number</code> in batch, CP1252 encoding (use <code>chardet</code>), stale ECN status check inside the transaction not before it.</p>
+    </div>
+  </details>
+
+  <!-- PEER REVIEWS -->
+  <div class="section-label" style="margin-top:32px;">Peer Review Highlights</div>
+
+  <details>
+    <summary>All 5 Reviewers — Consensus Findings</summary>
+    <div class="details-body">
+      <div class="review-item">
+        <div class="review-question">Strongest response (unanimous)</div>
+        <div class="review-answer"><strong>The Outsider</strong> — identified three concrete, ship-blocking bugs: positional row-skip logic, DRAFT status race condition (no optimistic lock), missing DB-level uniqueness constraint. Each finding maps directly to a production defect, not a design preference.</div>
+      </div>
+      <div class="review-item">
+        <div class="review-question">Biggest blind spot (unanimous)</div>
+        <div class="review-answer"><strong>The Expansionist</strong> — pivoted to future vision (MOVEX BOM pull, cross-ECN item library, change velocity analytics) instead of answering the architecture questions. The idempotent upsert suggestion was correct but buried in roadmap speculation.</div>
+      </div>
+      <div class="review-item">
+        <div class="review-question">What ALL responses missed</div>
+        <div class="review-answer">
+          <strong>1. Authorization / RBAC</strong> — all 5 reviewers independently flagged this. The bulk endpoint must enforce identical role-based access checks as single-item add. A different endpoint bypassing role gates is a compliance gap for a regulated electronics manufacturer.<br><br>
+          <strong>2. Server-side file guards</strong> — enforce &lt;1MB and content-type whitelist (.xlsx/.csv only) at the endpoint level. Do not trust browser MIME detection. Handle VPN timeout gracefully (transaction committed or not — clear error state, not orphaned spinner).
+        </div>
+      </div>
+    </div>
+  </details>
+
+</div>
+
+<footer>
+  Council report generated 17 June 2026 · Oskar ECN Platform · Scanfil APAC · Adapted from Andrej Karpathy's LLM Council methodology
+</footer>
+
+</body>
+</html>

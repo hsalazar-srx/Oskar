@@ -34,7 +34,6 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
-import pybreaker
 import pytest
 from fastapi.testclient import TestClient
 
@@ -468,7 +467,7 @@ class TestStockCodeAutofillERPErrors:
         return resp.status_code
 
     def test_circuit_breaker_returns_503(self):
-        assert self._call_erp_error(pybreaker.CircuitBreakerError()) == 503
+        assert self._call_erp_error(RuntimeError("movex-rest-api circuit breaker is open — too many consecutive failures")) == 503
 
     def test_connect_error_returns_502(self):
         assert self._call_erp_error(httpx.ConnectError("refused")) == 502

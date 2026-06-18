@@ -113,3 +113,20 @@ export async function updateItem(ecnId: string, itemId: string, body: Record<str
   )
   return data
 }
+
+/**
+ * POST /api/v1/ecn/{ecnId}/items/bulk
+ * Sends the raw file as multipart/form-data. The backend parses, validates
+ * (Pydantic dry-run), and inserts all rows in one atomic transaction.
+ * Throws on any HTTP error so the caller can display the error detail.
+ */
+export async function bulkCreateItems(ecnId: string, file: File) {
+  const form = new FormData()
+  form.append("file", file)
+  const { data } = await axiosInstance.post(
+    `/api/v1/ecn/${ecnId}/items/bulk`,
+    form,
+    { headers: { "Content-Type": "multipart/form-data" } },
+  )
+  return data
+}

@@ -107,7 +107,7 @@ class ERPAdapter(ABC):
 
         Raises:
             httpx.HTTPStatusError: on non-transient 4xx/5xx from movex-rest-api.
-            pybreaker.CircuitBreakerError: when the circuit breaker is open.
+            RuntimeError: when the circuit breaker is open ("circuit breaker" in message).
         """
         ...
 
@@ -131,7 +131,7 @@ class ERPAdapter(ABC):
 
         Raises:
             httpx.HTTPStatusError: on non-transient 4xx/5xx from movex-rest-api.
-            pybreaker.CircuitBreakerError: when the circuit breaker is open.
+            RuntimeError: when the circuit breaker is open ("circuit breaker" in message).
         """
         ...
 

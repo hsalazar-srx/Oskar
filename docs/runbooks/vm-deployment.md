@@ -335,6 +335,15 @@ Once Manal confirms the LDAPS service account is active:
 
 ## Upgrading to a New Version
 
+> **Why every step here matters:** `oskar-app-staging` (and the other staging containers) run
+> with **no bind mounts** — confirm with `sudo docker inspect oskar-app-staging --format
+> '{{json .Mounts}}'` (returns `[]`). The container's filesystem, including `alembic/versions/`,
+> is whatever was baked into the image at `docker build` time. `git pull` in
+> `/opt/oskar-src/Oskar-master` only updates the **source** checkout — it has zero effect on the
+> running container until you rebuild the image, push it, bump `TAG` in `.env.staging`, and
+> recreate the container. Skipping the rebuild is the single most common cause of "I pulled the
+> latest code but the new endpoint/migration isn't there" — see T-12 below.
+
 On the VM:
 
 ```bash
@@ -342,8 +351,14 @@ On the VM:
 cd /opt/oskar-src/Oskar-master
 git pull   # or re-download zip
 
-# Rebuild and push
+# Check the lock file is in sync before building (avoids T-05 mid-build failure)
+cd frontend && npm ci --dry-run
 cd /opt/oskar-src/Oskar-master
+
+# Check current tag so you bump to the next one, not a duplicate
+grep '^TAG=' /opt/oskar/.env.staging
+
+# Rebuild and push (bump version — backend AND frontend if either changed)
 docker build -t 10.131.1.10/oskar/oskar-app:v0.1.1 -f Dockerfile .
 docker push 10.131.1.10/oskar/oskar-app:v0.1.1
 docker build -t 10.131.1.10/oskar/oskar-frontend:v0.1.1 -f frontend/Dockerfile ./frontend
@@ -354,8 +369,15 @@ cd /opt/oskar
 sed -i 's/TAG=v0.1.0/TAG=v0.1.1/' .env.staging
 sudo docker compose -f docker-compose.staging.yml --env-file .env.staging pull
 sudo docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
+
+# Run migrations, then verify the new head was actually picked up
 sudo docker exec -w /app oskar-app-staging alembic upgrade head
+sudo docker exec -w /app oskar-app-staging alembic current
 ```
+
+`alembic current` must show the latest revision as `(head)`. If it still shows an older
+revision after `upgrade head` reports no errors, the image was not actually rebuilt/repulled —
+see T-12.
 
 ---
 
@@ -521,6 +543,37 @@ sudo cp /opt/oskar-src/Oskar-master/docker/docker-compose.staging.yml /opt/oskar
 ```
 
 Then re-apply any environment overrides by editing `.env.staging` instead.
+
+---
+
+### T-12 — `alembic upgrade head` / `alembic current` shows an old revision after `git pull`
+
+Symptom: source in `/opt/oskar-src/Oskar-master/alembic/versions/` has the new migration file,
+`git log -1` shows the latest commit, but `alembic current` on the running container still
+reports an older `(head)`, and `alembic upgrade head` exits cleanly with no migrations applied.
+
+**Cause:** `oskar-app-staging` has no bind mounts (`docker inspect ... --format '{{json
+.Mounts}}'` returns `[]`). It runs entirely off the image tag in `/opt/oskar/.env.staging`,
+built at some point in the past. `git pull` only updates the source checkout — the running
+container never sees it until a new image is built, pushed, and deployed. This is the most
+common point of confusion in this runbook: editing/pulling source in
+`/opt/oskar-src/Oskar-master` feels like it should be enough, but that directory is a build
+input, not a running artifact.
+
+**Fix:** follow the full **Upgrading to a New Version** section above — rebuild the image with
+a new tag, push to Harbor, bump `TAG` in `.env.staging`, `pull` + `up -d`, then re-run
+`alembic upgrade head`. Confirm with `alembic current` showing the new revision as `(head)`
+before considering the deploy done.
+
+**Quick diagnostic** (run before assuming a rebuild is needed):
+```bash
+# Does the container's own copy of alembic/versions/ have the new file?
+sudo docker exec -w /app oskar-app-staging ls alembic/versions/ | tail -5
+
+# Is /opt/oskar-src/Oskar-master actually ahead of what's deployed?
+cd /opt/oskar-src/Oskar-master && git log --oneline -1
+```
+If the migration file is missing from inside the container, the image is stale — rebuild.
 
 ---
 

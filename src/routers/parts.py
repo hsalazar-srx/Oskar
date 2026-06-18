@@ -19,7 +19,6 @@ from __future__ import annotations
 from typing import Annotated, Literal
 
 import httpx
-import pybreaker
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -130,7 +129,9 @@ async def lookup_alias(
     """
     try:
         records = await erp.lookup_by_alias(popn=popn.strip(), cuno=cuno)
-    except pybreaker.CircuitBreakerError:
+    except RuntimeError as exc:
+        if "circuit breaker" not in str(exc):
+            raise
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="ERP system unavailable (circuit breaker open). Try again shortly.",
@@ -243,7 +244,9 @@ async def suggest_pn(
 
     try:
         seq = await erp.get_next_itno_sequence(prefix=prefix)
-    except pybreaker.CircuitBreakerError:
+    except RuntimeError as exc:
+        if "circuit breaker" not in str(exc):
+            raise
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="ERP system unavailable (circuit breaker open). Try again shortly.",
@@ -372,7 +375,9 @@ async def autofill_item(
     if not current_item.is_new_item:
         try:
             movex_item = await erp.get_item(body.item_number)
-        except pybreaker.CircuitBreakerError:
+        except RuntimeError as exc:
+            if "circuit breaker" not in str(exc):
+                raise
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="ERP system unavailable (circuit breaker open). Try again shortly.",
