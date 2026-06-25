@@ -41,12 +41,25 @@ export async function fireTransition(
   updatedAt: string,
   extra?: Record<string, string>,
 ) {
-  const { data } = await axiosInstance.patch(
-    `/api/v1/ecn/${ecnId}/status`,
-    { trigger, actor_role: actorRole, ...extra },
-    { headers: { "If-Unmodified-Since": updatedAt } },
-  )
-  return data
+  const doRequest = (ts: string) =>
+    axiosInstance.patch(
+      `/api/v1/ecn/${ecnId}/status`,
+      { trigger, actor_role: actorRole, ...extra },
+      { headers: { "If-Unmodified-Since": new Date(ts).toUTCString() } },
+    )
+
+  try {
+    const { data } = await doRequest(updatedAt)
+    return data
+  } catch (err: any) {
+    // On 409 the backend returns current_updated_at — retry once with the fresh timestamp.
+    const freshTs: string | undefined = err?.response?.data?.current_updated_at
+    if (err?.response?.status === 409 && freshTs) {
+      const { data } = await doRequest(freshTs)
+      return data
+    }
+    throw err
+  }
 }
 
 export async function assignRole(ecnId: string, roleId: string, username: string, actorRole: string) {

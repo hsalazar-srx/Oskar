@@ -17,7 +17,7 @@
 | VM specs | 4 CPUs / 16 GB RAM / 100 GB storage |
 | Harbor registry | `10.131.1.10` (HTTP port 80 — insecure mode) |
 | Staging backend port | `8001` |
-| Staging frontend port | `3001` |
+| Staging frontend port | `8080` (port 80 reserved for Harbor registry) |
 | Production backend port | `8000` |
 | Production frontend port | `3000` |
 | Compose files | `docker/docker-compose.staging.yml`, `docker/docker-compose.yml` |
@@ -162,7 +162,7 @@ AUTH_PROVIDER=dev
 # Origins allowed to make POST/PUT/PATCH/DELETE requests to the API.
 # Must include every URL users access the frontend from.
 # Default in code is localhost:5173 (dev only) — always set this explicitly.
-CORS_ORIGINS=http://localhost:3001,http://10.131.1.10:3001
+CORS_ORIGINS=http://localhost:8080,http://10.131.1.10:8080
 
 JWT_SECRET_KEY_STAGING=change-me-jwt-secret-staging-64chars
 REFRESH_TOKEN_SECRET_STAGING=change-me-refresh-secret-staging-64chars
@@ -195,7 +195,7 @@ Expected:
 oskar-app-staging      Up (healthy)   0.0.0.0:8001->8000/tcp
 oskar-worker-staging   Up             8000/tcp
 oskar-beat-staging     Up             8000/tcp
-oskar-frontend-staging Up             0.0.0.0:3001->8080/tcp
+oskar-frontend-staging Up             0.0.0.0:8080->80/tcp
 oskar-db-staging       Up (healthy)   0.0.0.0:5433->5432/tcp
 ```
 
@@ -262,7 +262,7 @@ curl -s http://localhost:8001/api/v1/ecn/ \
   -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 
 # Frontend
-curl -s -o /dev/null -w "%{http_code}" http://localhost:3001/
+curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/
 # Expected: 200
 ```
 
@@ -276,7 +276,7 @@ Create a new IIS site or virtual application on SRXWEBAPP1:
 |------|-------|
 | Hostname | `oskar.srxglobal.local` |
 | Backend proxy | `http://10.131.1.10:8001` (FastAPI) |
-| Frontend proxy | `http://10.131.1.10:3001` (nginx) |
+| Frontend proxy | `http://10.131.1.10:8080` (nginx) |
 
 Route `/api/*` to the backend, all other requests to the frontend.
 
@@ -335,15 +335,6 @@ Once Manal confirms the LDAPS service account is active:
 
 ## Upgrading to a New Version
 
-> **Why every step here matters:** `oskar-app-staging` (and the other staging containers) run
-> with **no bind mounts** — confirm with `sudo docker inspect oskar-app-staging --format
-> '{{json .Mounts}}'` (returns `[]`). The container's filesystem, including `alembic/versions/`,
-> is whatever was baked into the image at `docker build` time. `git pull` in
-> `/opt/oskar-src/Oskar-master` only updates the **source** checkout — it has zero effect on the
-> running container until you rebuild the image, push it, bump `TAG` in `.env.staging`, and
-> recreate the container. Skipping the rebuild is the single most common cause of "I pulled the
-> latest code but the new endpoint/migration isn't there" — see T-12 below.
-
 On the VM:
 
 ```bash
@@ -351,14 +342,8 @@ On the VM:
 cd /opt/oskar-src/Oskar-master
 git pull   # or re-download zip
 
-# Check the lock file is in sync before building (avoids T-05 mid-build failure)
-cd frontend && npm ci --dry-run
+# Rebuild and push
 cd /opt/oskar-src/Oskar-master
-
-# Check current tag so you bump to the next one, not a duplicate
-grep '^TAG=' /opt/oskar/.env.staging
-
-# Rebuild and push (bump version — backend AND frontend if either changed)
 docker build -t 10.131.1.10/oskar/oskar-app:v0.1.1 -f Dockerfile .
 docker push 10.131.1.10/oskar/oskar-app:v0.1.1
 docker build -t 10.131.1.10/oskar/oskar-frontend:v0.1.1 -f frontend/Dockerfile ./frontend
@@ -369,15 +354,8 @@ cd /opt/oskar
 sed -i 's/TAG=v0.1.0/TAG=v0.1.1/' .env.staging
 sudo docker compose -f docker-compose.staging.yml --env-file .env.staging pull
 sudo docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
-
-# Run migrations, then verify the new head was actually picked up
 sudo docker exec -w /app oskar-app-staging alembic upgrade head
-sudo docker exec -w /app oskar-app-staging alembic current
 ```
-
-`alembic current` must show the latest revision as `(head)`. If it still shows an older
-revision after `upgrade head` reports no errors, the image was not actually rebuilt/repulled —
-see T-12.
 
 ---
 
@@ -439,7 +417,7 @@ sudo docker compose -f docker-compose.staging.yml --env-file .env.staging up -d 
 ```
 
 The correct frontend service definition has only: `image`, `container_name`, `restart`,
-`ports: ["3001:80"]`, and `environment`.
+`ports: ["8080:80"]`, and `environment`.
 
 ---
 
@@ -499,7 +477,7 @@ The default is `localhost:5173` (dev Vite server only).
 
 **Fix:** Add `CORS_ORIGINS` to `/opt/oskar/.env.staging`:
 ```bash
-echo "CORS_ORIGINS=http://localhost:3001,http://10.131.1.10:3001" | sudo tee -a /opt/oskar/.env.staging
+echo "CORS_ORIGINS=http://localhost:8080,http://10.131.1.10:8080" | sudo tee -a /opt/oskar/.env.staging
 ```
 
 Then force-recreate the app container to pick it up:
@@ -509,7 +487,7 @@ sudo docker compose -f docker-compose.staging.yml --env-file .env.staging up -d 
 ```
 
 > When adding IIS proxy or custom hostname, add that origin too:
-> `CORS_ORIGINS=http://localhost:3001,http://10.131.1.10:3001,http://oskar.srxglobal.local`
+> `CORS_ORIGINS=http://localhost:8080,http://10.131.1.10:8080,http://oskar.srxglobal.local`
 
 ---
 
@@ -546,34 +524,55 @@ Then re-apply any environment overrides by editing `.env.staging` instead.
 
 ---
 
-### T-12 — `alembic upgrade head` / `alembic current` shows an old revision after `git pull`
+### T-13 — Login returns 404 through nginx but works directly on port 8001
 
-Symptom: source in `/opt/oskar-src/Oskar-master/alembic/versions/` has the new migration file,
-`git log -1` shows the latest commit, but `alembic current` on the running container still
-reports an older `(head)`, and `alembic upgrade head` exits cleanly with no migrations applied.
+**Symptom:** `POST http://localhost:8080/api/v1/auth/login` returns 404 with a FastAPI-style
+JSON body (`{"detail":"Not Found"}`), CORS headers are present, and `x-correlation-id` is
+set — but hitting the backend directly on port 8001 succeeds. Backend logs show **no request
+arriving** when the call goes through nginx (port 3001).
 
-**Cause:** `oskar-app-staging` has no bind mounts (`docker inspect ... --format '{{json
-.Mounts}}'` returns `[]`). It runs entirely off the image tag in `/opt/oskar/.env.staging`,
-built at some point in the past. `git pull` only updates the source checkout — the running
-container never sees it until a new image is built, pushed, and deployed. This is the most
-common point of confusion in this runbook: editing/pulling source in
-`/opt/oskar-src/Oskar-master` feels like it should be enough, but that directory is a build
-input, not a running artifact.
+**Cause:** nginx `proxy_pass` with a variable (`set $backend "..."; proxy_pass http://$backend/...`)
+fails silently with 404 when the `resolver` cannot resolve the hostname **at request time**,
+even if `nslookup` and `docker inspect` show the containers are on the same network. This is
+a known nginx behaviour: with a variable in `proxy_pass`, nginx returns 404 (not 502) on
+resolution failure, with no error in the nginx error log.
 
-**Fix:** follow the full **Upgrading to a New Version** section above — rebuild the image with
-a new tag, push to Harbor, bump `TAG` in `.env.staging`, `pull` + `up -d`, then re-run
-`alembic upgrade head`. Confirm with `alembic current` showing the new revision as `(head)`
-before considering the deploy done.
+This was introduced in the v0.2.1 frontend image to fix stale-IP 502s after backend restarts
+(LL-002). The fix worked locally but fails in the staging Docker network environment.
 
-**Quick diagnostic** (run before assuming a rebuild is needed):
+**Diagnosis:**
 ```bash
-# Does the container's own copy of alembic/versions/ have the new file?
-sudo docker exec -w /app oskar-app-staging ls alembic/versions/ | tail -5
-
-# Is /opt/oskar-src/Oskar-master actually ahead of what's deployed?
-cd /opt/oskar-src/Oskar-master && git log --oneline -1
+# No backend log line appears = nginx is not forwarding — it's returning 404 itself
+sudo docker logs oskar-app-staging -f --tail 0 &
+curl -s -X POST http://localhost:8080/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"hsalazar","password":"password"}'
 ```
-If the migration file is missing from inside the container, the image is stale — rebuild.
+
+**Fix:** Use a literal hostname in `proxy_pass` (no variable). nginx resolves Docker service
+names reliably at startup via the embedded DNS — stale-IP 502s only occur if the backend
+container restarts, which is rare and recoverable with a frontend restart anyway.
+
+`frontend/nginx.conf` must use:
+```nginx
+location /api/ {
+    proxy_pass http://oskar-app-staging:8000/api/;
+    ...
+}
+```
+
+**NOT:**
+```nginx
+resolver 127.0.0.11 valid=30s;
+location /api/ {
+    set $backend "oskar-app-staging:8000";
+    proxy_pass http://$backend/api/;
+    ...
+}
+```
+
+After correcting `nginx.conf`, rebuild and redeploy the frontend image — the backend image
+does not need to change.
 
 ---
 
@@ -586,7 +585,7 @@ If the migration file is missing from inside the container, the image is stale �
 - [x] `alembic upgrade head` — 12 migrations applied cleanly
 - [x] Seed data — 7 ECNs created across all workflow stages
 - [x] `curl http://localhost:8001/health` returns `{"status":"ok"}`
-- [x] Login with demo credentials works from browser (`http://10.131.1.10:3001`)
+- [x] Login with demo credentials works from browser (`http://10.131.1.10:8080`)
 - [ ] ECN list loads with ≥5 seed ECNs visible in browser
 - [ ] ECN workflow transition completes in browser
 - [ ] `oskar-staging.service` enabled in systemd

@@ -1,28 +1,88 @@
 @import "tailwindcss";
 
-/* ── Design tokens (from SM Portal design system) ──────────────────────────── */
-/* These are plain CSS custom properties — used in arbitrary values like        */
-/* transition-[var(--t-fast)] or shadow-[var(--shadow-card)] where needed.     */
+/* ── Scanfil APAC design tokens ─────────────────────────────────────────────── */
 :root {
+  /* Brand — Scanfil blue */
+  --brand-50:  #eff6ff;
+  --brand-100: #dbeafe;
+  --brand-200: #bfdbfe;
+  --brand-400: #60a5fa;
+  --brand-500: #3b82f6;
+  --brand-600: #0066cc;   /* Scanfil primary */
+  --brand-700: #0052a3;
+  --brand-800: #003d7a;
+  --brand-900: #1e3a5f;
+
+  /* Surfaces */
+  --surface-page:   #f5f7fa;
+  --surface-card:   #ffffff;
+  --surface-subtle: #f8fafc;
+
+  /* Borders */
+  --border-soft:   #e8ecf0;
+  --border-medium: #d1d9e0;
+
+  /* Text */
+  --text-primary:   #0f172a;
+  --text-secondary: #475569;
+  --text-tertiary:  #94a3b8;
+  --text-disabled:  #cbd5e1;
+
+  /* Shadows */
+  --shadow-xs:   0 1px 2px 0 rgb(0 0 0 / 0.04);
+  --shadow-sm:   0 1px 3px 0 rgb(0 0 0 / 0.07), 0 1px 2px -1px rgb(0 0 0 / 0.05);
+  --shadow-md:   0 4px 8px -2px rgb(0 0 0 / 0.08), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+  --shadow-lg:   0 12px 24px -4px rgb(0 0 0 / 0.10), 0 4px 8px -2px rgb(0 0 0 / 0.06);
+  --shadow-blue: 0 0 0 3px rgb(0 102 204 / 0.18);
+
   /* Transitions */
   --t-fast:   150ms ease-in-out;
   --t-normal: 200ms ease-in-out;
   --t-slow:   300ms ease-in-out;
 
-  /* Shadows beyond Tailwind's defaults */
-  --shadow-card: 0 1px 3px 0 rgb(0 0 0 / 0.06), 0 1px 2px -1px rgb(0 0 0 / 0.06);
-  --shadow-card-hover: 0 4px 8px -2px rgb(0 0 0 / 0.08), 0 2px 4px -2px rgb(0 0 0 / 0.05);
-
-  /* Z-index semantic scale */
+  /* Z-index scale */
   --z-sticky:  1020;
   --z-modal:   1050;
   --z-popover: 1060;
   --z-tooltip: 1070;
 }
 
-/* ── Focus ring utility ─────────────────────────────────────────────────────── */
+/* ── Base ────────────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  background-color: var(--surface-page);
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+/* ── Scrollbar ───────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar        { width: 6px; height: 6px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  { background: var(--border-medium); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
+
+/* ── Focus ring utility ──────────────────────────────────────────────────────── */
 @layer utilities {
   .focus-ring {
-    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 focus-visible:ring-offset-2;
+    @apply focus-visible:outline-none;
+    &:focus-visible {
+      box-shadow: 0 0 0 2px var(--surface-card), 0 0 0 4px var(--brand-600);
+    }
+  }
+
+  .focus-ring-inset {
+    @apply focus-visible:outline-none;
+    &:focus-visible {
+      box-shadow: inset 0 0 0 2px var(--brand-600);
+    }
   }
 }

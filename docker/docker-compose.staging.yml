@@ -44,7 +44,7 @@ services:
       - SMTP_HOST=${SMTP_HOST:-10.10.0.155}
       - SMTP_PORT=${SMTP_PORT:-25}
       - SMTP_SENDER=${SMTP_SENDER}
-      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3001,http://10.131.1.10:3001}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:8080,http://10.131.1.10:8080}
       - OSKAR_ENV=staging
     depends_on:
       oskar-db-staging:
@@ -108,7 +108,7 @@ services:
     container_name: oskar-frontend-staging
     restart: unless-stopped
     ports:
-      - "3001:80"
+      - "8080:80"
     environment:
       - VITE_API_URL=/api/v1
 

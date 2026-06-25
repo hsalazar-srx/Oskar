@@ -291,6 +291,25 @@ Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 
 ---
 
+## Local Dev — Known Gotchas
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `comm rc=11001` / DB2 ODBC failure | GlobalProtect VPN not connected | Connect VPN — `150.3.2.x` is office LAN only |
+| M3 MI socket connection refused (port 6300) | Same — VPN off | Connect GlobalProtect, restart API |
+| Movex API 401 on all requests | `ASPNETCORE_ENVIRONMENT` set to `Production` — user-secrets not loaded | Set `$env:ASPNETCORE_ENVIRONMENT = "Development"` before `dotnet run` |
+| Movex API build fails — file locked | Previous instance still running | `Stop-Process -Name Movex.API -Force` |
+| Oskar `/api/v1/*` → 502 Bad Gateway | FastAPI backend not running | `uvicorn src.main:app --reload --port 8000 --env-file .env` |
+| Oskar DB connection error | PostgreSQL not running | `docker compose up -d postgres` |
+
+**VPN check (run before starting any dev session):**
+```powershell
+Test-NetConnection -ComputerName 150.3.2.100 -Port 6300 -InformationLevel Quiet
+# Must return True — if False, connect GlobalProtect first
+```
+
+---
+
 ## Pre-Deployment Checklist
 
 - [ ] All tests pass on staging (port 8001)

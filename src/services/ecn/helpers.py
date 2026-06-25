@@ -345,5 +345,6 @@ async def _check_not_modified(
     if current_updated_at.tzinfo is None:
         current_updated_at = current_updated_at.replace(tzinfo=timezone.utc)
 
-    if current_updated_at != ts_check:
+    # RFC 7231 header has second precision; truncate microseconds before comparing.
+    if current_updated_at.replace(microsecond=0) != ts_check.replace(microsecond=0):
         raise ECNConflict(current_updated_at)

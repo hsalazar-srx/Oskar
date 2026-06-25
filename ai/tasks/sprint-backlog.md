@@ -379,6 +379,22 @@ Also fixed: `ECNCreatePage` POST `/api/v1/ecn` missing trailing slash → 401 (F
 
 ---
 
+## Iteration 2 — Backlog (Post-PoC)
+
+> Items confirmed as out of scope for Iteration 1 and queued for Iteration 2 planning.
+
+| # | Item | Source | Notes |
+|---|------|--------|-------|
+| I2-1 | Facility-scoped ECN digest — send per-facility digest emails so JB DCs only see JB ECNs and Melbourne DCs only see Melbourne ECNs. Current `_fetch_open_ecns()` has no facility filter — when both facilities go live, DC recipients will see cross-facility ECNs. Fix: filter digest query by `facility` and dispatch one email per facility group, or add a facility column + filter UI on the digest. | Gap analysis vs `ECN-Open-NextAction-Johor.xls` 2026-06-22 | `src/tasks/ecn_notifications.py:132-156` |
+| I2-2 | Customer BOM vs Quoted BOM comparison | Karen/Nick 2026-04-29 meeting (1:10:42) | Iteration 2/3 per Karen |
+| I2-3 | MPN extended fields UI — `lifecycle`, `eol_date`, `lead_time_weeks`, `msl_level`, `packaging_type`, `do_not_buy`, `alt_mpn` display in ECN item panel | S2-15 deferred | Schema ✅ in DB |
+| I2-4 | DC recovery panel — Movex write status display (SSE infra + pg_notify ✅) | S2-16 deferred | Display panel UI build |
+| I2-5 | ECN version/revision lineage — UI display of SHA-256 audit chain | S2-17 deferred | Audit chain ✅ in DB |
+| I2-6 | BOM concurrency detection — delta detection at DC_APPROVED gate | S2-18 deferred | Schema ✅ |
+| I2-7 | Routing operations UI | S2-23 deferred | Schema + CRUD API ✅ |
+
+---
+
 ## Future Improvements — Oskar MCP Server (Engineering Intelligence Layer)
 
 > **Decision:** 2026-05-11. Deferred from active sprint planning — BOM (Iteration 2) and Supplier
