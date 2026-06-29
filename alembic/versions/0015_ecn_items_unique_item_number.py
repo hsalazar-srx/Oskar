@@ -22,6 +22,24 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Remove duplicate (ecn_id, item_number) rows that exist in dev data,
+    # keeping the most recently created row for each duplicate group.
+    op.execute(
+        """
+        DELETE FROM ecn_items
+        WHERE id IN (
+            SELECT id FROM (
+                SELECT id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY ecn_id, item_number
+                           ORDER BY created_at DESC
+                       ) AS rn
+                FROM ecn_items
+            ) ranked
+            WHERE rn > 1
+        )
+        """
+    )
     op.execute(
         "ALTER TABLE ecn_items "
         "ADD CONSTRAINT uq_ecn_items_ecn_id_item_number "

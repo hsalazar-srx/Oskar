@@ -13,6 +13,7 @@ import {
 import ECNCard from "@/components/ecn/ECNCard"
 import WorkflowPanel from "@/components/ecn/WorkflowPanel"
 import ECNItemPanel from "@/components/ECNItemPanel"
+import ECNCommentsPanel from "@/components/ecn/ECNCommentsPanel"
 import { ActionModal, ModalField } from "@/components/ecn/ActionModal"
 import { ItemUploadDrawer } from "@/components/ecn/ItemUploadDrawer"
 
@@ -54,6 +55,13 @@ export default function ECNDetailPage() {
     queryKey: ["ecn-items", id],
     queryFn: () => fetchItems(id!),
     enabled: !!id,
+    select: (d: any[]) => d as Array<{
+      id: string
+      item_number: string
+      item_name: string
+      customer_alias: string | null
+      is_new_item: boolean
+    }>,
   })
 
   const transition = useMutation({
@@ -155,8 +163,19 @@ export default function ECNDetailPage() {
           title={`Items (${items.length})`}
           action={
             <div className="flex gap-2">
-              {ecn.status === 0 && (
+              {/* Upload button: visible always, disabled outside DRAFT */}
+              {ecn.status === 0 ? (
                 <Button size="sm" variant="outline" onClick={() => setUploadDrawerOpen(true)}>
+                  ↑ Upload
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled
+                  title="Uploads only available in Draft status"
+                  className="opacity-40 cursor-not-allowed"
+                >
                   ↑ Upload
                 </Button>
               )}
@@ -175,29 +194,43 @@ export default function ECNDetailPage() {
               <p className="text-xs text-[#cbd5e1]">Items represent the parts or assemblies being changed.</p>
             </div>
           ) : (
-            <div className="divide-y divide-[#f1f5f9]">
-              {items.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className="w-full flex items-center justify-between py-3 px-1 rounded-lg hover:bg-[#f8fafc] text-left transition-colors duration-150 group"
-                  onClick={() => setSelectedItemId(item.id)}
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span className="font-mono text-sm font-semibold text-[#0066cc] shrink-0">
-                      {item.item_number || <span className="text-[#cbd5e1] font-normal">—</span>}
-                    </span>
-                    <span className="text-sm text-[#475569] truncate">{item.item_name || "Untitled item"}</span>
-                    {item.is_new_item && <Badge variant="info" className="shrink-0 text-[11px]">New</Badge>}
-                  </div>
-                  <svg className="w-4 h-4 text-[#cbd5e1] group-hover:text-[#94a3b8] transition-colors duration-150 shrink-0 ml-2" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5"/>
-                  </svg>
-                </button>
-              ))}
-            </div>
+            <>
+              <div className="divide-y divide-[#f1f5f9]">
+                {items.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className="w-full flex items-center justify-between py-3 px-1 rounded-lg hover:bg-[#f8fafc] text-left transition-colors duration-150 group"
+                    onClick={() => setSelectedItemId(item.id)}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span className="font-mono text-sm font-semibold text-[#0066cc] shrink-0">
+                        {item.item_number || <span className="text-[#cbd5e1] font-normal">—</span>}
+                      </span>
+                      <div className="flex flex-col min-w-0">
+                        <span className="text-sm text-[#475569] truncate">{item.item_name || "Untitled item"}</span>
+                        {item.customer_alias && (
+                          <span className="text-[11px] font-mono text-[#94a3b8] truncate">Alias: {item.customer_alias}</span>
+                        )}
+                      </div>
+                      {item.is_new_item && <Badge variant="info" className="shrink-0 text-[11px]">New</Badge>}
+                    </div>
+                    <svg className="w-4 h-4 text-[#cbd5e1] group-hover:text-[#94a3b8] transition-colors duration-150 shrink-0 ml-2" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5"/>
+                    </svg>
+                  </button>
+                ))}
+              </div>
+              {/* Item count footer */}
+              <div className="mt-3 pt-3 border-t border-[#f1f5f9] text-right">
+                <span className="text-xs text-[#94a3b8]">
+                  {items.length} item{items.length !== 1 ? "s" : ""} total
+                </span>
+              </div>
+            </>
           )}
         </Section>
+        <ECNCommentsPanel ecnId={id!} />
       </main>
 
       {selectedItemId && (

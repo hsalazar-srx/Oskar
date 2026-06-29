@@ -17,9 +17,10 @@ from __future__ import annotations
 from typing import Annotated
 
 import structlog
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.adapters.erp.movex import MovexRestAdapter
 from src.auth.dependencies import CurrentUser, get_current_user
 from src.db import get_session
 from src.services.ecn import (
@@ -58,11 +59,32 @@ log = structlog.get_logger(__name__)
 ecn_core_router = APIRouter(tags=["ecn"])
 
 
+def _get_erp_adapter(request: Request) -> MovexRestAdapter:
+    return request.app.state.erp_adapter
+
+
+async def _resolve_customer_name(erp: MovexRestAdapter, cuno: str | None) -> str | None:
+    """Return the customer name for a CUNO by looking up the cached customer list."""
+    if not cuno:
+        return None
+    if cuno == "AC":
+        return "Generic / Common Stock"
+    try:
+        customers = await erp.list_customers()
+        for c in customers:
+            if c.get("cuno", "").upper() == cuno.upper():
+                return c.get("name") or None
+    except Exception:
+        pass
+    return None
+
+
 @ecn_core_router.post("/", response_model=ECNDetailOut, status_code=status.HTTP_201_CREATED)
 async def create_ecn(
     body: ECNCreateBody,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    erp: Annotated[MovexRestAdapter, Depends(_get_erp_adapter)],
 ) -> ECNDetailOut:
     """Create a new ECN in DRAFT status.
 
@@ -76,6 +98,7 @@ async def create_ecn(
         description=body.description,
         facility=body.facility,
         customer_number=body.customer_number,
+        customer_ecn_refs=body.customer_ecn_refs,
         is_new_item=body.is_new_item,
         routing_changes=body.routing_changes,
         operation_changes=body.operation_changes,
@@ -93,6 +116,7 @@ async def create_ecn(
         detail = await svc.create(req, actor_username=user.username)
     except ECNValidationError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    detail.customer_name = await _resolve_customer_name(erp, detail.customer_number)
     return detail_out(detail)
 
 
@@ -100,6 +124,7 @@ async def create_ecn(
 async def list_ecns(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    erp: Annotated[MovexRestAdapter, Depends(_get_erp_adapter)],
     facility: Annotated[str | None, Query(description="Filter by facility code")] = None,
     status_filter: Annotated[
         int | None, Query(alias="status", description="Filter by ECNStatus integer")
@@ -107,8 +132,16 @@ async def list_ecns(
     assignee: Annotated[
         str | None, Query(description="Filter ECNs where this username has an active role")
     ] = None,
-    overdue: Annotated[bool | None, Query(description="Only ECNs open longer than 30 days")] = None,
+    needs_my_action: Annotated[
+        bool | None, Query(description="Only ECNs where the current user has a pending role")
+    ] = None,
+    overdue: Annotated[bool | None, Query(description="Only ECNs open longer than 7 days in active status")] = None,
     age_days: Annotated[int | None, Query(description="Only ECNs older than N days")] = None,
+    search: Annotated[str | None, Query(description="Full-text search across ECN number, title, description, customer, customer ECN refs")] = None,
+    customer_number: Annotated[str | None, Query(description="Filter by customer code")] = None,
+    originator: Annotated[str | None, Query(description="Filter by originator username")] = None,
+    sort_by: Annotated[str, Query(description="Sort column: ecn_number | created_at | status | originator_username | customer_number")] = "created_at",
+    sort_dir: Annotated[str, Query(description="asc or desc")] = "desc",
     include_archived: Annotated[bool, Query()] = False,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -119,16 +152,37 @@ async def list_ecns(
     next to advance the ECN (G-2, replaces DBCHK_OpenECN SQL Server Agent job).
     """
     svc = ECNService(session)
+
+    # Build a customer name lookup map to enrich summaries without N+1 calls.
+    customer_name_map: dict[str, str] = {}
+    try:
+        customers = await erp.list_customers()
+        customer_name_map = {c.get("cuno", ""): c.get("name") or "" for c in customers}
+        customer_name_map["AC"] = "Generic / Common Stock"
+    except Exception:
+        pass
+
     summaries = await svc.list_ecns(
         facility=facility,
         status=status_filter,
         assignee=assignee,
+        needs_my_action=user.username if needs_my_action else None,
         overdue=overdue,
         age_days=age_days,
+        search=search,
+        customer_number=customer_number,
+        originator=originator,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
         include_archived=include_archived,
         limit=limit,
         offset=offset,
     )
+
+    for s in summaries:
+        if s.customer_number:
+            s.customer_name = customer_name_map.get(s.customer_number) or None
+
     return [summary_out(s) for s in summaries]
 
 
@@ -137,6 +191,7 @@ async def get_ecn(
     ecn_id: str,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    erp: Annotated[MovexRestAdapter, Depends(_get_erp_adapter)],
     response: Response,
 ) -> ECNDetailOut:
     """Fetch a single ECN with role assignments and approval steps.
@@ -152,6 +207,7 @@ async def get_ecn(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"ECN {ecn_id!r} not found",
         )
+    detail.customer_name = await _resolve_customer_name(erp, detail.customer_number)
     response.headers["Last-Modified"] = detail.updated_at.strftime("%a, %d %b %Y %H:%M:%S GMT")
     return detail_out(detail)
 
@@ -162,6 +218,7 @@ async def update_ecn(
     body: ECNUpdateBody,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    erp: Annotated[MovexRestAdapter, Depends(_get_erp_adapter)],
     if_unmodified_since: Annotated[str | None, Header()] = None,
 ) -> ECNDetailOut:
     """Edit writable fields on an ECN (DRAFT or REJECTED status only).
@@ -175,6 +232,7 @@ async def update_ecn(
     req = ECNUpdateRequest(
         title=body.title,
         description=body.description,
+        customer_ecn_refs=body.customer_ecn_refs,
         is_new_item=body.is_new_item,
         routing_changes=body.routing_changes,
         operation_changes=body.operation_changes,
@@ -200,6 +258,7 @@ async def update_ecn(
         )
     except ECNValidationError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    detail.customer_name = await _resolve_customer_name(erp, detail.customer_number)  # type: ignore[union-attr]
     return detail_out(detail)  # type: ignore[return-value]
 
 

@@ -147,7 +147,7 @@ class TestCreateRoutingOperation:
                 "operation_description": "Desc",
                 "work_centre": "WC",
                 "run_time": 1.0,
-                "change_type": "DELETE",   # invalid
+                "change_type": "REMOVE",   # invalid — valid values are ADD, UPDATE, DELETE
             },
         )
         assert resp.status_code == 422

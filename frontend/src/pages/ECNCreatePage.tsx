@@ -1,5 +1,6 @@
+import { useState, useRef, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
-import { useForm } from "react-hook-form"
+import { useForm, Controller } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -8,7 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import axiosInstance from "@/api/axios"
-import { fetchCustomers } from "@/api/ecn"
+import { fetchCustomers, type CustomerEntry } from "@/api/ecn"
 
 const SCOPE_OPTIONS = [
   { id: "new_parts",           label: "New parts",         desc: "Introducing parts not yet in Movex" },
@@ -20,20 +21,148 @@ const SCOPE_OPTIONS = [
 ] as const
 
 const schema = z.object({
-  title:           z.string().min(3, "At least 3 characters").max(200, "Max 200 characters"),
-  description:     z.string().min(10, "At least 10 characters"),
-  facility:        z.string().min(1),
-  customer_number: z.string().min(2, "Select a customer").max(10),
-  change_scope:    z.array(z.string()).min(1, "Select at least one scope"),
+  title:             z.string().min(3, "At least 3 characters").max(200, "Max 200 characters"),
+  description:       z.string().min(10, "At least 10 characters"),
+  facility:          z.string().min(1),
+  customer_number:   z.string().min(2, "Select a customer").max(10),
+  customer_ecn_refs: z.string().max(500).optional(),
+  change_scope:      z.array(z.string()).min(1, "Select at least one scope"),
 })
 type FormValues = z.infer<typeof schema>
 
 async function createECN(body: FormValues) {
-  const { data } = await axiosInstance.post("/api/v1/ecn/", body)
+  const payload = {
+    ...body,
+    customer_ecn_refs: body.customer_ecn_refs || null,
+  }
+  const { data } = await axiosInstance.post("/api/v1/ecn/", payload)
   return data
 }
 
 const fieldClass = "h-10 w-full rounded-lg border border-[#d1d9e0] bg-white px-3 text-sm text-[#0f172a] placeholder:text-[#94a3b8] focus:outline-none focus:border-[#0066cc] focus:ring-2 focus:ring-[#0066cc]/20 transition-all duration-150"
+
+// Pseudo-customer for generic stock
+const GENERIC_CUSTOMER: CustomerEntry = { cuno: "AC", name: "Generic / Common Stock" }
+
+function customerLabel(c: CustomerEntry) {
+  return c.name ? `${c.name} (${c.cuno})` : c.cuno
+}
+
+// ── CustomerCombobox ──────────────────────────────────────────────────────────
+
+interface CustomerComboboxProps {
+  customers: CustomerEntry[]
+  value: string
+  onChange: (cuno: string) => void
+  error?: string
+}
+
+function CustomerCombobox({ customers, value, onChange, error }: CustomerComboboxProps) {
+  const allCustomers = [GENERIC_CUSTOMER, ...customers]
+  const selected = allCustomers.find((c) => c.cuno === value) ?? null
+
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState("")
+  const inputRef = useRef<HTMLInputElement>(null)
+  const listRef  = useRef<HTMLUListElement>(null)
+
+  const filtered = allCustomers.filter((c) => {
+    if (!query) return true
+    const q = query.toLowerCase()
+    return (
+      c.cuno.toLowerCase().includes(q) ||
+      (c.name ?? "").toLowerCase().includes(q)
+    )
+  })
+
+  // Close on outside click
+  useEffect(() => {
+    function onClickOutside(e: MouseEvent) {
+      const el = inputRef.current?.closest("[data-combobox]")
+      if (el && !el.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener("mousedown", onClickOutside)
+    return () => document.removeEventListener("mousedown", onClickOutside)
+  }, [])
+
+  function select(cuno: string) {
+    onChange(cuno)
+    setQuery("")
+    setOpen(false)
+  }
+
+  function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    setQuery(e.target.value)
+    if (!open) setOpen(true)
+    if (e.target.value === "") onChange("")
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Escape") { setOpen(false); setQuery("") }
+    if (e.key === "Enter" && filtered.length === 1) {
+      e.preventDefault()
+      select(filtered[0].cuno)
+    }
+  }
+
+  const displayValue = open ? query : (selected ? customerLabel(selected) : "")
+
+  return (
+    <div data-combobox="" className="relative">
+      <div className={`flex items-center ${fieldClass} ${error ? "border-red-400" : ""} pr-8`}>
+        <input
+          ref={inputRef}
+          type="text"
+          placeholder="Type to search customers…"
+          className="flex-1 bg-transparent outline-none text-sm text-[#0f172a] placeholder:text-[#94a3b8]"
+          value={displayValue}
+          onChange={handleInputChange}
+          onFocus={() => setOpen(true)}
+          onKeyDown={handleKeyDown}
+          autoComplete="off"
+        />
+        {/* Chevron */}
+        <button
+          type="button"
+          tabIndex={-1}
+          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#94a3b8] hover:text-[#475569]"
+          onClick={() => { setOpen(!open); inputRef.current?.focus() }}
+        >
+          <svg className={`w-4 h-4 transition-transform ${open ? "rotate-180" : ""}`} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </button>
+      </div>
+
+      {open && (
+        <ul
+          ref={listRef}
+          className="absolute z-50 mt-1 w-full max-h-56 overflow-y-auto rounded-lg border border-[#e8ecf0] bg-white shadow-lg py-1"
+        >
+          {filtered.length === 0 && (
+            <li className="px-3 py-2 text-sm text-[#94a3b8]">No customers match "{query}"</li>
+          )}
+          {filtered.map((c) => (
+            <li
+              key={c.cuno}
+              className={`px-3 py-2 cursor-pointer text-sm transition-colors duration-100 ${
+                c.cuno === value
+                  ? "bg-[#eff6ff] text-[#0066cc] font-medium"
+                  : "text-[#0f172a] hover:bg-[#f8fafc]"
+              }`}
+              onMouseDown={(e) => { e.preventDefault(); select(c.cuno) }}
+            >
+              <span className="block font-medium">{c.name ?? c.cuno}</span>
+              {c.name && <span className="text-[10px] font-mono text-[#94a3b8]">{c.cuno}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+// ── ECNCreatePage ─────────────────────────────────────────────────────────────
 
 export default function ECNCreatePage() {
   const navigate = useNavigate()
@@ -44,6 +173,7 @@ export default function ECNCreatePage() {
     handleSubmit,
     watch,
     setValue,
+    control,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -145,23 +275,42 @@ export default function ECNCreatePage() {
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label htmlFor="customer_number" className="text-sm font-medium text-[#475569]">
+                  <Label className="text-sm font-medium text-[#475569]">
                     Customer <span className="text-red-400">*</span>
                   </Label>
-                  <select
-                    id="customer_number"
-                    className={fieldClass}
-                    {...register("customer_number")}
-                    defaultValue=""
-                  >
-                    <option value="" disabled>— Select —</option>
-                    <option value="AC">AC — Generic / Common Stock</option>
-                    {customers.map((c) => (
-                      <option key={c.cuno} value={c.cuno}>{c.cuno} — {c.name ?? "Unknown"}</option>
-                    ))}
-                  </select>
-                  {errors.customer_number && <p className="text-xs text-red-500">{errors.customer_number.message}</p>}
+                  <Controller
+                    name="customer_number"
+                    control={control}
+                    render={({ field }) => (
+                      <CustomerCombobox
+                        customers={customers}
+                        value={field.value ?? ""}
+                        onChange={field.onChange}
+                        error={errors.customer_number?.message}
+                      />
+                    )}
+                  />
+                  {errors.customer_number && (
+                    <p className="text-xs text-red-500">{errors.customer_number.message}</p>
+                  )}
                 </div>
+              </div>
+
+              {/* Customer ECN Refs */}
+              <div className="space-y-1.5">
+                <Label htmlFor="customer_ecn_refs" className="text-sm font-medium text-[#475569]">
+                  Customer ECN Refs
+                  <span className="ml-1.5 text-[#94a3b8] font-normal text-xs">(optional, comma-separated)</span>
+                </Label>
+                <Input
+                  id="customer_ecn_refs"
+                  placeholder="e.g. ECN-2024-001, CR-45678"
+                  className={fieldClass}
+                  {...register("customer_ecn_refs")}
+                />
+                {errors.customer_ecn_refs && (
+                  <p className="text-xs text-red-500">{errors.customer_ecn_refs.message}</p>
+                )}
               </div>
             </div>
           </div>

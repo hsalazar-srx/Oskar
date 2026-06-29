@@ -48,6 +48,7 @@ class ECNCreateBody(BaseModel):
     description: str | None = None
     facility: str = Field("D", max_length=10)
     customer_number: str = Field(..., min_length=2, max_length=10)
+    customer_ecn_refs: str | None = Field(None, max_length=500)
     is_new_item: bool = False
     routing_changes: bool = False
     operation_changes: bool = False
@@ -78,6 +79,7 @@ class ECNCreateBody(BaseModel):
 class ECNUpdateBody(BaseModel):
     title: str | None = Field(None, min_length=1, max_length=200)
     description: str | None = None
+    customer_ecn_refs: str | None = Field(None, max_length=500)
     is_new_item: bool | None = None
     routing_changes: bool | None = None
     operation_changes: bool | None = None
@@ -359,6 +361,8 @@ class ECNDetailOut(BaseModel):
     ecn_number: str
     facility: str
     customer_number: str | None
+    customer_name: str | None
+    customer_ecn_refs: str | None
     title: str
     description: str | None
     status: int
@@ -392,6 +396,8 @@ class ECNSummaryOut(BaseModel):
     ecn_number: str
     facility: str
     customer_number: str | None
+    customer_name: str | None
+    customer_ecn_refs: str | None
     title: str
     status: int
     status_name: str
@@ -504,6 +510,8 @@ def detail_out(d: ECNDetail) -> ECNDetailOut:
         ecn_number=d.ecn_number,
         facility=d.facility,
         customer_number=d.customer_number,
+        customer_name=d.customer_name,
+        customer_ecn_refs=d.customer_ecn_refs,
         title=d.title,
         description=d.description,
         status=d.status,
@@ -539,6 +547,8 @@ def summary_out(s: ECNSummary) -> ECNSummaryOut:
         ecn_number=s.ecn_number,
         facility=s.facility,
         customer_number=s.customer_number,
+        customer_name=s.customer_name,
+        customer_ecn_refs=s.customer_ecn_refs,
         title=s.title,
         status=s.status,
         status_name=s.status_name,

@@ -31,7 +31,7 @@ export async function fetchECN(id: string) {
 
 export async function fetchItems(id: string) {
   const { data } = await axiosInstance.get(`/api/v1/ecn/${id}/items`)
-  return data as { id: string; item_number: string; item_name: string; is_new_item: boolean }[]
+  return data as { id: string; item_number: string; item_name: string; customer_alias: string | null; is_new_item: boolean }[]
 }
 
 export async function fireTransition(

@@ -48,6 +48,7 @@ def _row_to_detail(
     row: dict[str, Any],
     role_assignments: list,
     approval_steps: list,
+    customer_name: str | None = None,
 ) -> ECNDetail:
     status_int = int(row["status"])
     return ECNDetail(
@@ -55,6 +56,8 @@ def _row_to_detail(
         ecn_number=row["ecn_number"],
         facility=row["facility"],
         customer_number=row.get("customer_number"),
+        customer_name=customer_name,
+        customer_ecn_refs=row.get("customer_ecn_refs"),
         title=row["title"],
         description=row.get("description"),
         status=status_int,
@@ -114,13 +117,15 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
         await self._session.execute(
             sa.text(
                 "INSERT INTO ecn_instances "
-                "(id, ecn_number, facility, customer_number, title, description, originator_username, "
+                "(id, ecn_number, facility, customer_number, customer_ecn_refs, title, description, "
+                " originator_username, "
                 " is_new_item, routing_changes, operation_changes, new_parts, "
                 " lead_time_changes, change_to_documents, wapc_delta_pct, "
                 " wapc_threshold_override, requires_customer_approval, "
                 " customer_approval_reference, regulatory_impact, extra_data) "
                 "VALUES "
-                "(:id, :ecn_number, :facility, :customer_number, :title, :description, :originator, "
+                "(:id, :ecn_number, :facility, :customer_number, :customer_ecn_refs, :title, :description, "
+                " :originator, "
                 " :is_new_item, :routing_changes, :operation_changes, :new_parts, "
                 " :lead_time_changes, :change_to_documents, :wapc_delta_pct, "
                 " :wapc_threshold_override, :requires_customer_approval, "
@@ -129,6 +134,7 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
             {
                 "id": ecn_id, "ecn_number": ecn_number, "facility": facility,
                 "customer_number": req.customer_number,
+                "customer_ecn_refs": req.customer_ecn_refs,
                 "title": req.title.strip(), "description": req.description,
                 "originator": actor_username,
                 "is_new_item": req.is_new_item, "routing_changes": req.routing_changes,
@@ -206,6 +212,7 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
             params["title"] = req.title.strip()
 
         _maybe("description", req.description)
+        _maybe("customer_ecn_refs", req.customer_ecn_refs)
         for flag in (
             "is_new_item", "routing_changes", "operation_changes",
             "new_parts", "lead_time_changes", "change_to_documents",
@@ -239,12 +246,23 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
         facility: str | None = None,
         status: int | None = None,
         assignee: str | None = None,
+        needs_my_action: str | None = None,
         overdue: bool | None = None,
         age_days: int | None = None,
+        search: str | None = None,
+        customer_number: str | None = None,
+        originator: str | None = None,
         include_archived: bool = False,
+        sort_by: str = "created_at",
+        sort_dir: str = "desc",
         limit: int = 50,
         offset: int = 0,
     ) -> list[ECNSummary]:
+        _SORT_COLUMNS = {"ecn_number", "created_at", "status", "originator_username", "customer_number"}
+        if sort_by not in _SORT_COLUMNS:
+            sort_by = "created_at"
+        order = "DESC" if sort_dir.lower() == "desc" else "ASC"
+
         conditions = ["e.is_archived = :include_archived"]
         params: dict[str, Any] = {
             "include_archived": include_archived, "limit": limit, "offset": offset,
@@ -256,6 +274,12 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
         if status is not None:
             conditions.append("e.status = :status")
             params["status"] = status
+        if customer_number:
+            conditions.append("e.customer_number = :customer_number")
+            params["customer_number"] = customer_number.upper()
+        if originator:
+            conditions.append("e.originator_username = :originator")
+            params["originator"] = originator
         if assignee:
             conditions.append(
                 "EXISTS ("
@@ -265,23 +289,46 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
                 ")"
             )
             params["assignee"] = assignee
+        if needs_my_action:
+            conditions.append(
+                "EXISTS ("
+                "  SELECT 1 FROM ecn_role_assignments era "
+                "  WHERE era.ecn_id = e.id AND era.username = :needs_my_action "
+                "  AND era.superseded_at IS NULL"
+                ")"
+            )
+            params["needs_my_action"] = needs_my_action
         if age_days is not None:
             conditions.append("e.created_at <= now() - make_interval(days => :age_days)")
             params["age_days"] = age_days
         if overdue is True:
+            # Overdue = open more than 7 days (matches UI "Age > 7" red indicator)
             conditions.append(
-                "e.status NOT IN (70, 80) AND e.created_at <= now() - interval '30 days'"
+                "e.status NOT IN (60, 65, 70, 80) "
+                "AND e.created_at <= now() - interval '7 days'"
             )
+        if search:
+            conditions.append(
+                "to_tsvector('simple', "
+                "  coalesce(e.ecn_number, '') || ' ' || "
+                "  coalesce(e.title, '') || ' ' || "
+                "  coalesce(e.description, '') || ' ' || "
+                "  coalesce(e.customer_number, '') || ' ' || "
+                "  coalesce(e.customer_ecn_refs, '')"
+                ") @@ plainto_tsquery('simple', :search)"
+            )
+            params["search"] = search
 
         where_clause = " AND ".join(conditions)
         rows = await self._session.execute(
             sa.text(
-                f"SELECT e.id, e.ecn_number, e.facility, e.customer_number, e.title, e.status, "
+                f"SELECT e.id, e.ecn_number, e.facility, e.customer_number, e.customer_ecn_refs, "
+                f"       e.title, e.status, "
                 f"       e.originator_username, e.revision_number, e.created_at, "
                 f"       e.updated_at, e.is_archived "
                 f"FROM ecn_instances e "
                 f"WHERE {where_clause} "
-                f"ORDER BY e.created_at DESC LIMIT :limit OFFSET :offset"
+                f"ORDER BY e.{sort_by} {order} LIMIT :limit OFFSET :offset"
             ),
             params,
         )
@@ -297,6 +344,7 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
                     ecn_number=row["ecn_number"],
                     facility=row["facility"],
                     customer_number=row.get("customer_number"),
+                    customer_ecn_refs=row.get("customer_ecn_refs"),
                     title=row["title"],
                     status=status_int,
                     status_name=ECNStatus(status_int).name,
