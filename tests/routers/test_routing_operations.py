@@ -300,6 +300,8 @@ class TestQueueRoutingOperationsOutbox:
             routing_changes=True,
             operation_changes=True,
             new_parts=False,
+            change_parts=False,
+            bom_changes=False,
             lead_time_changes=False,
             change_to_documents=False,
             wapc_delta_pct=None,

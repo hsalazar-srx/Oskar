@@ -19,6 +19,8 @@ import json
 import pytest
 from datetime import datetime, timezone
 
+from transitions import MachineError
+
 from src.workflow.machine import (
     ECNModel,
     ECNStatus,
@@ -213,19 +215,82 @@ class TestGuards:
         with pytest.raises(GuardFailed, match="Self-approval"):
             m.approve_role()
 
-    def test_cancel_blocked_for_non_originator_non_admin(self):
+    def test_cancel_blocked_for_non_originator_non_admin_non_dc(self):
         ecn = _ecn(ECNStatus.DRAFT)
-        ctx = _ctx(actor_username="other_user", actor_role="SE")
+        ctx = _ctx(actor_username="other_user", actor_role="SE", notes="reason")
         m = _machine(ecn, ctx)
-        with pytest.raises(GuardFailed, match="originator or an Admin"):
+        with pytest.raises(GuardFailed, match="originator, DC, or an Admin"):
             m.cancel()
 
-    def test_cancel_allowed_for_admin(self):
+    def test_cancel_blocked_without_reason(self):
         ecn = _ecn(ECNStatus.DRAFT)
-        ctx = _ctx(actor_username="admin_user", actor_role="AD")
+        ctx = _ctx(actor_username="jsmith", actor_role="OR")
+        m = _machine(ecn, ctx)
+        with pytest.raises(GuardFailed, match="reason is required"):
+            m.cancel()
+
+    def test_cancel_allowed_for_originator_from_draft(self):
+        ecn = _ecn(ECNStatus.DRAFT)
+        ctx = _ctx(actor_username="jsmith", actor_role="OR", notes="Scope changed — no longer needed")
         m = _machine(ecn, ctx)
         m.cancel()
         assert ecn.status == ECNStatus.CANCELLED
+
+    def test_cancel_allowed_for_admin(self):
+        ecn = _ecn(ECNStatus.DRAFT)
+        ctx = _ctx(actor_username="admin_user", actor_role="AD", notes="Admin cancellation")
+        m = _machine(ecn, ctx)
+        m.cancel()
+        assert ecn.status == ECNStatus.CANCELLED
+
+    def test_cancel_allowed_for_dc(self):
+        ecn = _ecn(ECNStatus.DRAFT)
+        ctx = _ctx(actor_username="dc_user", actor_role="DC", notes="Cancelled by DC")
+        m = _machine(ecn, ctx)
+        m.cancel()
+        assert ecn.status == ECNStatus.CANCELLED
+
+    def test_cancel_from_engineering_review(self):
+        ecn = _ecn(ECNStatus.ENGINEERING_REVIEW)
+        ctx = _ctx(actor_username="dc_user", actor_role="DC", notes="Redundant ECN found")
+        m = _machine(ecn, ctx)
+        m.cancel()
+        assert ecn.status == ECNStatus.CANCELLED
+
+    def test_cancel_from_management_review(self):
+        ecn = _ecn(ECNStatus.MANAGEMENT_REVIEW)
+        ctx = _ctx(actor_username="jsmith", actor_role="OR", notes="Customer withdrew request")
+        m = _machine(ecn, ctx)
+        m.cancel()
+        assert ecn.status == ECNStatus.CANCELLED
+
+    def test_cancel_from_on_hold(self):
+        ecn = _ecn(ECNStatus.ON_HOLD)
+        ctx = _ctx(actor_username="dc_user", actor_role="DC", notes="On hold too long — cancelling")
+        m = _machine(ecn, ctx)
+        m.cancel()
+        assert ecn.status == ECNStatus.CANCELLED
+
+    def test_cancel_blocked_from_approved(self):
+        ecn = _ecn(ECNStatus.APPROVED)
+        ctx = _ctx(actor_username="jsmith", actor_role="OR", notes="reason")
+        m = _machine(ecn, ctx)
+        with pytest.raises(MachineError):
+            m.cancel()
+
+    def test_cancel_blocked_from_implemented(self):
+        ecn = _ecn(ECNStatus.IMPLEMENTED)
+        ctx = _ctx(actor_username="jsmith", actor_role="OR", notes="reason")
+        m = _machine(ecn, ctx)
+        with pytest.raises(MachineError):
+            m.cancel()
+
+    def test_cancel_blocked_from_closed(self):
+        ecn = _ecn(ECNStatus.CLOSED)
+        ctx = _ctx(actor_username="jsmith", actor_role="OR", notes="reason")
+        m = _machine(ecn, ctx)
+        with pytest.raises(MachineError):
+            m.cancel()
 
     @pytest.mark.asyncio
     async def test_invalid_trigger_raises(self):

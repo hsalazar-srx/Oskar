@@ -1,7 +1,7 @@
 # OSKAR — Sprint Backlog
 # Source of truth for all work status.
 # oskar-state.md (gitignored) is for next-session notes only — not for tracking status.
-# Last synced: 2026-06-02 (Sprint 5 staging stack live on apac-plm-ops.srxglobal.local)
+# Last synced: 2026-07-02 (Sprint 6 complete; Sprint 7 planned)
 
 ---
 
@@ -347,6 +347,124 @@ Also fixed: `ECNCreatePage` POST `/api/v1/ecn` missing trailing slash → 401 (F
 
 ---
 
+## Sprint 6 — ECN List & Detail UX Enhancements ✅ COMPLETE (2026-07-02)
+
+> **Result:** 667 tests passing (2 skipped, 17 warnings). All Tier 1 plan items shipped.
+> UAT DB password mismatch diagnosed and resolved. 502 Bad Gateway after CORS update resolved
+> (nginx stale IP — frontend container restart). Sprint plan: `ai/plans/regarding-the-oskar-project-eager-dolphin.md`
+
+### Backend
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| S6-1 | Migration 0017 — `customer_ecn_refs VARCHAR(500)` on `ecn_instances` + GIN FTS index covering `ecn_number, title, description, customer_number, customer_ecn_refs` | `alembic/versions/0017_customer_ecn_refs_and_fts.py` | ✅ |
+| S6-2 | Migration 0018 — `ecn_comments` table (`id, ecn_id, author_username, body, created_at, updated_at`) with cascade delete and `(ecn_id, created_at)` index | `alembic/versions/0018_ecn_comments.py` | ✅ |
+| S6-3 | ECN list endpoint — `sort_by` + `sort_dir` params; `customer_name` join via Movex cache; `customer` + `originator` filter params; FTS search replaces ILIKE | `src/routers/ecn.py` + `src/services/ecn/` | ✅ |
+| S6-4 | `ECNSummary` + `ECNDetail` schemas — add `customer_name`, `customer_ecn_refs` | `src/services/ecn/models.py` | ✅ |
+| S6-5 | `ecn_comments` router — `GET/POST/PATCH/DELETE /api/v1/ecn/{ecn_id}/comments`; author-only edit; DC or author delete; no status restriction | `src/routers/ecn_comments.py` | ✅ |
+| S6-6 | Migration 0015 dedup fix — CTE DELETE before `uq_ecn_items_ecn_id_item_number` unique constraint (dev data had duplicates) | `alembic/versions/0015_ecn_items_unique_item_number.py` | ✅ |
+| S6-7 | Migration 0017 asyncpg apostrophe fix — removed escaped apostrophe from `COMMENT ON COLUMN` string | `alembic/versions/0017_customer_ecn_refs_and_fts.py` | ✅ |
+| S6-8 | `ecn_comments.py` DELETE 204 fix — added `response_model=None` to prevent FastAPI startup `AssertionError` crash-loop | `src/routers/ecn_comments.py` | ✅ |
+
+### Frontend
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| S6-9 | `ECNListPage` — Entry Date column, sortable column headers, Customer column reordered, Cust. ECN column | `frontend/src/pages/ECNListPage.tsx` | ✅ |
+| S6-10 | `ECNListPage` — column-level dropdowns: Customer, Originator, Next Action (client-side from loaded data) | `frontend/src/pages/ECNListPage.tsx` | ✅ |
+| S6-11 | `ECNListPage` — stat cards converted to clickable filter toggles: Active ECNs, Require My Action, Overdue (>7 days); mutual exclusion; client-side filtering on `next_action_users` and `ageDays()` | `frontend/src/pages/ECNListPage.tsx` | ✅ |
+| S6-12 | `ECNCreatePage` — customer combobox: name-first search, "Customer Name (CODE)" labels, AC shown first | `frontend/src/pages/ECNCreatePage.tsx` | ✅ |
+| S6-13 | `ECNCreatePage` — Customer ECN Refs text field (comma-separated) | `frontend/src/pages/ECNCreatePage.tsx` | ✅ |
+| S6-14 | `ECNDetailPage` — customer name shown as "Name (CODE)"; CustomerECN refs as tag chips; customer alias in items list; item count footer | `frontend/src/pages/ECNDetailPage.tsx` | ✅ |
+| S6-15 | `ECNDetailPage` — Import button visible (greyed with tooltip) in non-DRAFT states | `frontend/src/pages/ECNDetailPage.tsx` | ✅ |
+| S6-16 | `ECNCommentsPanel` — chronological comment thread, inline textarea, Ctrl+Enter submit, optimistic update | `frontend/src/components/ecn/ECNCommentsPanel.tsx` | ✅ |
+| S6-17 | `ItemUploadDrawer` + item editor — 30-char truncation warning badge + live `{n}/30` character counter | `frontend/src/components/ecn/ItemUploadDrawer.tsx` | ✅ |
+
+### Fixes & Bug Squashes
+
+| Bug | Root cause | Fix |
+|-----|-----------|-----|
+| Login hang on UAT | `ecn_comments.py` DELETE endpoint missing `response_model=None` → FastAPI startup `AssertionError` → container crash-loop | Added `response_model=None` to DELETE |
+| `ECNCommentsPanel.tsx` build error | Unused `useEffect` in import | Removed from import |
+| `ECNCreatePage.tsx` build error | `CustomerEntry` type import not using `import type` — `verbatimModuleSyntax` violation | Changed to `import { fetchCustomers, type CustomerEntry }` |
+| Stat cards not filtering | `needs_my_action` SQL queried `ecn_role_assignments` (too broad); `next_action_users` is computed post-query and cannot be used as SQL WHERE | Moved all three toggles to client-side filtering on enriched result set |
+| Test `test_invalid_change_type_returns_422` broken | Was using `"DELETE"` which is in `VALID_CHANGE_TYPES` — test was testing a valid value | Changed to `"REMOVE"` (genuinely invalid) |
+| UAT `InvalidPasswordError` | `.env.staging` had `oskar_dev` password; actual DB password was `oskar_staging` | Reset DB password via `ALTER USER oskar WITH PASSWORD 'oskar_staging'`; updated `.env.staging`; runbook updated |
+| UAT 502 Bad Gateway after CORS update | nginx in frontend container had stale IP for `oskar-app-staging` after app container restart | Restarted frontend container; runbook updated |
+
+### UAT Infrastructure Notes (2026-06-29)
+
+- PostgreSQL superuser is `oskar` (not `postgres` — container was initialized with `POSTGRES_USER=oskar`)
+- Database name: `oskar_staging` (not `oskar`)
+- Host port: `5433` (not `5432` — app container connects on `5432` via internal Docker network)
+- All `psql` commands on VM host must use `-U oskar -d oskar_staging -p 5433`
+- Run Alembic migrations from inside the app container, not from VM host: `docker exec oskar-app-staging alembic upgrade head`
+- Full troubleshooting procedure: `docs/runbooks/vm-deployment.md §T-12`
+
+---
+
+## Sprint 7 — ECN Workflow Completions + Administration ⏳ PLANNED
+
+> **Priority order:** D (Cancel ECN) → I (Reassignment) → B (Administration page) → F (Implementation Schedule).
+> C (Role-by-customer) deprioritised — await DB access to allocation data.
+> A (DMR/SharePoint) simplified — no Azure App Registration; store URL/UNC path only.
+
+### D — Cancel ECN with Note
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| S7-D1 | New workflow trigger `cancel` → status 80 (CANCELLED, already in schema); allowed from DRAFT / ENG_REVIEW / MGMT_REVIEW / ON_HOLD; terminal (no resubmit) | `src/workflow/machine.py` | ⏳ |
+| S7-D2 | Cancel modal — "Reason for cancellation" (required text field); stored in `ecn_transition_history.notes` | `frontend/src/components/ecn/ActionModal.tsx` | ⏳ |
+| S7-D3 | Guard: cancellation not allowed from IMPLEMENTED / CLOSED / already CANCELLED | `src/workflow/machine.py` | ⏳ |
+| S7-D4 | CANCELLED badge in ECN list + detail page; CANCELLED ECNs included in list by default (not hidden) | `frontend/src/pages/ECNListPage.tsx` | ⏳ |
+| S7-D5 | Tests: cancel transitions, guard violations, cancel modal submission | `tests/` | ⏳ |
+
+### B — Administration Page
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| S7-B1 | `/admin/roles` — plant role defaults per facility (per-facility table, CRUD); DC-only access; backed by existing `system_role_users` table | `src/routers/admin.py` + `frontend/src/pages/AdminPage.tsx` | ⏳ |
+| S7-B2 | Multiple users per role — render full list per (facility, role_id) in admin UI; currently table supports it but UI shows only one | `frontend/src/pages/AdminPage.tsx` | ⏳ |
+| S7-B3 | `/admin/pn-categories` — manage Procurement Group + Product Group codes; new `pn_categories(code, description, type, is_active)` table + migration | `src/routers/admin.py` + migration | ⏳ |
+| S7-B4 | Tests: admin role check (non-DC blocked 403); CRUD operations | `tests/` | ⏳ |
+
+### A — DMR/SharePoint Link (Simplified — No Azure App Registration)
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| S7-A1 | Add `dmr_url VARCHAR(1000)` to `ecn_instances` via migration; nullable | `alembic/versions/` | ⏳ |
+| S7-A2 | `PATCH /api/v1/ecn/{id}` — accept `dmr_url` field; DC or originator only | `src/routers/ecn.py` | ⏳ |
+| S7-A3 | ECNDetailPage — show DMR URL as clickable link in metadata card; inline edit field (DC/originator); paste SharePoint URL or UNC path | `frontend/src/pages/ECNDetailPage.tsx` | ⏳ |
+
+### F — Implementation Schedule (Post-Approved Checklist)
+
+> **Analysis complete (2026-07-02).** Stargile source analysed: Section 1 (MES checkbox),
+> Section 2 (WIP/open order impact + "View Open Orders"), Section 3 (never used — omit).
+> Planned approach: post-APPROVED checklist stored in `ecn_instances.extra_data JSONB` — no migration needed.
+> Source files: `context/ecn-history/Oskar_Feeback_250626.txt:63-75`,
+> `ai/memory/05-stargile-ecn-reference.md`, `context/ecn-history/Initial_Meeting_Nick_and_Branko_290426/BOM Upload and Verification -VSM.md`,
+> `STARGILE-VS-OSKAR.md:37`
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| S7-F1 | Post-approval checklist stored in `extra_data JSONB` — keys: `impl_checklist[]` each with `{item, required, completed, completed_by, completed_at, notes}`; default items seeded at IMPLEMENTED transition | `src/services/ecn/workflow.py` | ⏳ |
+| S7-F2 | Default checklist items (from VSM + Stargile analysis): (1) MES update required?, (2) AOI programs to update?, (3) New wave pallets required?, (4) Valor MSS update required?, (5) PDS001/G routing text | — | ⏳ |
+| S7-F3 | `PATCH /api/v1/ecn/{id}/checklist` — update individual checklist item (completed toggle + notes); DC or originator only; marks `completed_by` + `completed_at` | `src/routers/ecn.py` | ⏳ |
+| S7-F4 | Open Orders panel — `GET /api/v1/ecn/{id}/open-orders`; calls `MMS100MI.LstMO` via movex-rest-api filtered by ECN item numbers; returns MO number, item, qty, due date, facility; read-only | `src/routers/ecn.py` + `src/adapters/erp/movex.py` | ⏳ |
+| S7-F5 | Implementation Schedule tab/section in ECNDetailPage — visible after status ≥ 60 (IMPLEMENTED); shows checklist with checkboxes + notes; Open Orders panel with "Refresh" button; DMR link field | `frontend/src/pages/ECNDetailPage.tsx` | ⏳ |
+| S7-F6 | PDS001/G routing text helper — pre-fills a textarea with ECN number + item list template; user edits and copies; no Movex write | `frontend/src/pages/ECNDetailPage.tsx` | ⏳ |
+
+### Deferred from Sprint 7
+
+| Item | Reason |
+|------|--------|
+| I — Originator reassignment | Workflow transitions and role reassignment (all roles except OR) are fully functional. OR reassignment is a low-frequency edge case; moved to Iteration 2. |
+| C — Role assignment by customer (allocation page scraping) | Await direct DB access to allocation data; scraping approach too fragile |
+| CRS620 manufacturer ID auto-resolve | Sprint 8 — alongside mounting type (J) |
+| E — Notification template management | Sprint 8 |
+
+---
+
 ## Post-Go-Live — OpenBao Secrets Vault
 
 **Pre-conditions:** Production stable ≥30 days, Devian + Manal available.
@@ -382,6 +500,8 @@ Also fixed: `ECNCreatePage` POST `/api/v1/ecn` missing trailing slash → 401 (F
 ## Iteration 2 — Backlog (Post-PoC)
 
 > Items confirmed as out of scope for Iteration 1 and queued for Iteration 2 planning.
+> Last updated 2026-07-02: DMR simplified (no Azure App Reg — Sprint 7-A); allocation scraping
+> deprioritised (await DB access); Implementation Schedule moved to Sprint 7-F.
 
 | # | Item | Source | Notes |
 |---|------|--------|-------|
@@ -392,6 +512,13 @@ Also fixed: `ECNCreatePage` POST `/api/v1/ecn` missing trailing slash → 401 (F
 | I2-5 | ECN version/revision lineage — UI display of SHA-256 audit chain | S2-17 deferred | Audit chain ✅ in DB |
 | I2-6 | BOM concurrency detection — delta detection at DC_APPROVED gate | S2-18 deferred | Schema ✅ |
 | I2-7 | Routing operations UI | S2-23 deferred | Schema + CRUD API ✅ |
+| I2-8 | CRS620 manufacturer ID auto-resolve — when MPN entered, auto-lookup Manufacturer Code (status 30) via `CRS620MI` and pre-fill; eliminates manual lookup. Depends on movex-rest-api extension. | Sprint 7 analysis | Alongside S8-J (mounting type) |
+| I2-9 | E — Notification template management — admin page `/admin/notifications`; Jinja2 templates in `notification_templates` DB table; migrate hardcoded templates from `src/tasks/ecn_notifications.py` | Sprint 8 | `notification_templates` table new |
+| I2-10 | J — Part TH/SMD mounting type — `mounting_type (TH\|SMD\|OTHER)` on `ecn_items`; auto-populate from DigiKey via `/parts/autofill` extension | Sprint 8 | Schema change + DigiKey adapter extension |
+| I2-11 | K — Quotation Team bulk price/lead-time update — two-phase upload (Engineering template then QT template); QT updates allowed on APPROVED/IMPLEMENTED for protected fields only | Iteration 2 | New upload template |
+| I2-12 | G — BOM enhancements — TXT format export, cross-reference ECN deletion vs active BOM, DigiKey attribute lookup, MPN not-found flow → new ECN | Iteration 2/3 | Full analysis in plan file |
+| I2-13 | H — Transmittal & SharePoint document management — Oskar-native PDF transmittal generation; email distribution; legacy DMR path redirect | Iteration 2/3 | Requires SharePoint Graph API |
+| I2-14 | I — Originator reassignment — `PATCH /api/v1/ecn/{id}/reassign`; DC-only; bypasses OR lock; transition history entry; notification email. Low-frequency edge case (user leaves, handover). | Moved from Sprint 7 | OR role is explicitly blocked from `assign_role`; needs dedicated endpoint |
 
 ---
 

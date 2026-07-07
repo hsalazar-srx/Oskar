@@ -1,23 +1,26 @@
 """
 OSKAR — ECN core endpoints.
 
-POST   /ecn/                          Create ECN
-GET    /ecn/                          List ECNs (filters + next_action_users)
-GET    /ecn/{ecn_id}                  Get ECN detail (+ Last-Modified header)
-PATCH  /ecn/{ecn_id}                  Update writable fields
-PATCH  /ecn/{ecn_id}/status           Fire workflow trigger
-POST   /ecn/{ecn_id}/role-assignments Reassign a role (DC only)
-POST   /ecn/{ecn_id}/resubmit         Resubmit after rejection
+POST   /ecn/                               Create ECN
+GET    /ecn/                               List ECNs (filters + next_action_users)
+GET    /ecn/{ecn_id}                       Get ECN detail (+ Last-Modified header)
+PATCH  /ecn/{ecn_id}                       Update writable fields
+PATCH  /ecn/{ecn_id}/status               Fire workflow trigger
+POST   /ecn/{ecn_id}/role-assignments     Reassign a role (DC only)
+POST   /ecn/{ecn_id}/resubmit             Resubmit after rejection
 PATCH  /ecn/{ecn_id}/items/{item_id}/drawing  Set drawing number (DC only)
-POST   /ecn/{ecn_id}/approve          Approve a management-review step
+POST   /ecn/{ecn_id}/approve              Approve a management-review step
+PATCH  /ecn/{ecn_id}/checklist            Update one implementation checklist item
+GET    /ecn/{ecn_id}/open-orders          List open Movex MOs for ECN items
 """
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapters.erp.movex import MovexRestAdapter
@@ -103,6 +106,8 @@ async def create_ecn(
         routing_changes=body.routing_changes,
         operation_changes=body.operation_changes,
         new_parts=body.new_parts,
+        change_parts=body.change_parts,
+        bom_changes=body.bom_changes,
         lead_time_changes=body.lead_time_changes,
         change_to_documents=body.change_to_documents,
         wapc_delta_pct=body.wapc_delta_pct,
@@ -237,6 +242,8 @@ async def update_ecn(
         routing_changes=body.routing_changes,
         operation_changes=body.operation_changes,
         new_parts=body.new_parts,
+        change_parts=body.change_parts,
+        bom_changes=body.bom_changes,
         lead_time_changes=body.lead_time_changes,
         change_to_documents=body.change_to_documents,
         wapc_delta_pct=body.wapc_delta_pct,
@@ -469,3 +476,67 @@ async def approve_role(
     except ECNValidationError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
     return detail_out(detail)
+
+
+# ── Implementation Schedule ───────────────────────────────────────────────────
+
+class ChecklistPatchBody(BaseModel):
+    item_id: str
+    applicable: bool | None = None
+    completed: bool | None = None
+    notes: str | None = None
+
+
+def _require_dc_or_originator(user: CurrentUser, ecn: Any) -> None:
+    is_dc = "OSKAR-DC" in user.groups
+    is_originator = user.username == ecn.originator_username
+    if not (is_dc or is_originator):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the originator or a Document Controller may update the checklist.",
+        )
+
+
+@ecn_core_router.patch("/{ecn_id}/checklist", response_model=ECNDetailOut)
+async def patch_checklist_item(
+    ecn_id: str,
+    body: ChecklistPatchBody,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    erp: Annotated[MovexRestAdapter, Depends(_get_erp_adapter)],
+) -> ECNDetailOut:
+    svc = ECNService(session)
+    try:
+        ecn = await svc.get(ecn_id)
+    except ECNNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ECN not found")
+    _require_dc_or_originator(user, ecn)
+    try:
+        detail = await svc.patch_checklist_item(
+            ecn_id,
+            item_id=body.item_id,
+            applicable=body.applicable,
+            completed=body.completed,
+            notes=body.notes,
+            actor_username=user.username,
+        )
+    except ECNNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ECNValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    detail.customer_name = await _resolve_customer_name(erp, detail.customer_number)
+    return detail_out(detail)
+
+
+@ecn_core_router.get("/{ecn_id}/open-orders")
+async def get_open_orders(
+    ecn_id: str,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    erp: Annotated[MovexRestAdapter, Depends(_get_erp_adapter)],
+) -> list[dict[str, Any]]:
+    svc = ECNService(session)
+    try:
+        return await svc.get_open_orders(ecn_id, erp=erp)
+    except ECNNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ECN not found")

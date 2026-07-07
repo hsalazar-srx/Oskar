@@ -11,13 +11,13 @@ Or directly if you have Python + deps installed on the host:
 
 What it creates
 ---------------
-1. DRAFT          — "SMT line capacitor substitution"         (hsalazar)
-2. ENGINEERING_REVIEW — "Replace connector J4 on PCB-A-001"  (hsalazar, submitted)
-3. MANAGEMENT_REVIEW  — "New IC — LM2596 buck converter"      (hsalazar, SE approved)
-4. DC_APPROVED    — "Routing change — remove wave solder op"   (hsalazar, full approval)
-5. APPROVED       — "BOM rationalisation — Q2 2026"            (hsalazar, DC approved)
-6. REJECTED       — "Add conformal coating step"               (eng_user, rejected by SE)
-7. CLOSED         — "Phase 1 EOL component swap"               (hsalazar, archived)
+1. DRAFT              — "SMT line capacitor substitution"        (hsalazar)
+2. ENGINEERING_REVIEW — "Replace connector J4 on PCB-A-001"     (hsalazar, submitted)
+3. MANAGEMENT_REVIEW  — "New IC — LM2596 buck converter"         (hsalazar, SE approved)
+4. DC_APPROVED        — "Routing change — remove wave solder op" (hsalazar, full approval)
+5. APPROVED           — "BOM rationalisation — Q2 2026"          (hsalazar, DC approved)
+6. REJECTED           — "Add conformal coating step"             (eng_user, rejected by SE)
+7. CLOSED             — "Phase 1 EOL component swap"             (hsalazar, archived)
 
 Each ECN has:
   - 1–3 line items with realistic part numbers and descriptions
@@ -28,11 +28,31 @@ Each ECN has:
 Idempotent: deletes existing demo ECNs by title prefix "[DEMO]" before re-creating.
 Safe to run against dev DB. Never touches the test DB (port 5433).
 
-Demo personas (all in DEV_USERS, no LDAP needed):
-  hsalazar  — Originator / DC
-  eng_user  — Senior Engineer (SE)
-  qm_user   — Quality Manager (QM)
-  dc_user   — Document Controller (DC)
+Role reference (all roles seeded with 3 users per role for facility D (Melbourne) and L (Johor Bahru)):
+  DC  Document Controller  — coordinates all gates
+  SE  Senior Engineer      — technical review (Engineering Review stage)
+  CE  Chief Engineer       — escalation co-reviewer alongside SE
+  EM  Engineering Manager  — mandatory Management Review approver
+  QM  Quality Manager      — mandatory Management Review approver (ISO 13485)
+  PM  Production Manager   — conditional: routing_changes or operation_changes
+  SC  Supply Chain         — conditional: new_parts or lead_time_changes
+  FN  Finance              — conditional: wapc_delta_pct > threshold
+  CA  Cost Accountant      — cost observer; no veto
+  AD  Administrator        — platform admin; place-on-hold and override
+  RD  R&D / Product Eng.   — observer; notified when product family affected
+  TE  Test Engineering     — observer; notified when change_to_documents=TRUE
+  MQ  Manufacturing Quality— observer; notified at CLOSED
+
+Demo login personas (all in DEV_USERS, no LDAP needed):
+  hsalazar   Hector Salazar       — Originator / also DC for demo
+  eng_user   Nick Lim             — Senior Engineer (SE)
+  qm_user    Divya Sharma         — Quality Manager (QM)
+  dc_user    Karen Tan            — Document Controller (DC, backup)
+  em_user    Karen Chen           — Engineering Manager (EM)
+  ce_user    Branko Petrovic      — Chief Engineer (CE)
+  pm_user    Jason Teo            — Production Manager (PM)
+  sc_user    Michelle Tan         — Supply Chain Manager (SC)
+  fn_user    Grace Lau            — Finance Manager (FN)
 """
 from __future__ import annotations
 
@@ -67,13 +87,18 @@ if "ssl=" not in _DB_URL:
 
 
 # ---------------------------------------------------------------------------
-# Personas
+# Personas — primary actor per role used during ECN transitions
 # ---------------------------------------------------------------------------
 
-OR = "hsalazar"       # Originator / also DC for demo simplicity
-SE = "eng_user"       # Senior Engineer
-QM = "qm_user"        # Quality Manager
-DC = "dc_user"        # Document Controller
+OR = "hsalazar"    # Originator / also DC for demo simplicity
+SE = "eng_user"    # Senior Engineer
+QM = "qm_user"     # Quality Manager
+DC = "dc_user"     # Document Controller (backup — hsalazar is primary)
+EM = "em_user"     # Engineering Manager
+CE = "ce_user"     # Chief Engineer
+PM = "pm_user"     # Production Manager
+SC = "sc_user"     # Supply Chain Manager
+FN = "fn_user"     # Finance Manager
 
 
 # ---------------------------------------------------------------------------
@@ -122,51 +147,92 @@ async def _wipe_demo_ecns(session: AsyncSession) -> int:
 
 
 async def _ensure_role_users(session: AsyncSession) -> None:
-    """Set exactly one user per role for facilities L and D.
+    """Seed 3 users per role for facilities D (Melbourne, primary) and L (Johor Bahru).
 
-    _auto_assign_roles sets username=None when multiple users share a role,
-    which violates the NOT NULL constraint. We clear and rebuild with one
-    canonical persona per role so auto-assignment always resolves.
+    _auto_assign_roles uses the first row per (facility, role_id) ordered by
+    insertion order when exactly one is configured. With multiple rows it sets
+    username=None — which is correct: DC manually assigns the specific engineer.
 
-    Facility D (Melbourne) mirrors L (Johor Bahru) with the same dev personas —
-    real Melbourne role owners are not yet confirmed; update this table once
-    they are (see ai/memory/02-movex-erp-authority.md or equivalent UAT doc).
+    The first row per role is the canonical demo actor used in ECN builders above.
     """
-    # Remove all existing facility L/D role users and start clean
     await session.execute(
-        sa.text("DELETE FROM system_role_users WHERE facility IN ('L', 'D')")
+        sa.text("DELETE FROM system_role_users WHERE facility IN ('D', 'L')")
     )
 
-    # One canonical user per role — roles that map to the same person are fine
+    # (facility, role_id, username, display_name)
+    # First row per role = primary actor used in demo ECN builders.
     users = [
-        ("L", "DC", DC,  "Doc Controller",    f"{DC}@srxglobal.local"),
-        ("L", "SE", SE,  "Engineering User",  f"{SE}@srxglobal.local"),
-        ("L", "QM", QM,  "Quality Manager",   f"{QM}@srxglobal.local"),
-        ("L", "EM", SE,  "Engineering User",  f"{SE}@srxglobal.local"),
-        ("L", "PM", QM,  "Quality Manager",   f"{QM}@srxglobal.local"),
-        ("L", "SC", QM,  "Quality Manager",   f"{QM}@srxglobal.local"),
-        ("L", "FN", QM,  "Quality Manager",   f"{QM}@srxglobal.local"),
-        ("L", "AD", OR,  "Hector Salazar",    f"{OR}@srxglobal.local"),
-        ("L", "CE", SE,  "Engineering User",  f"{SE}@srxglobal.local"),
-        ("L", "RD", SE,  "Engineering User",  f"{SE}@srxglobal.local"),
-        ("L", "TE", SE,  "Engineering User",  f"{SE}@srxglobal.local"),
-        ("L", "MQ", QM,  "Quality Manager",   f"{QM}@srxglobal.local"),
-        ("L", "CA", DC,  "Doc Controller",    f"{DC}@srxglobal.local"),
-        ("D", "DC", DC,  "Doc Controller",    f"{DC}@srxglobal.local"),
-        ("D", "SE", SE,  "Engineering User",  f"{SE}@srxglobal.local"),
-        ("D", "QM", QM,  "Quality Manager",   f"{QM}@srxglobal.local"),
-        ("D", "EM", SE,  "Engineering User",  f"{SE}@srxglobal.local"),
-        ("D", "PM", QM,  "Quality Manager",   f"{QM}@srxglobal.local"),
-        ("D", "SC", QM,  "Quality Manager",   f"{QM}@srxglobal.local"),
-        ("D", "FN", QM,  "Quality Manager",   f"{QM}@srxglobal.local"),
-        ("D", "AD", OR,  "Hector Salazar",    f"{OR}@srxglobal.local"),
-        ("D", "CE", SE,  "Engineering User",  f"{SE}@srxglobal.local"),
-        ("D", "RD", SE,  "Engineering User",  f"{SE}@srxglobal.local"),
-        ("D", "TE", SE,  "Engineering User",  f"{SE}@srxglobal.local"),
-        ("D", "MQ", QM,  "Quality Manager",   f"{QM}@srxglobal.local"),
-        ("D", "CA", DC,  "Doc Controller",    f"{DC}@srxglobal.local"),
+        # DC — Document Controller
+        ("D", "DC", OR,        "Hector Salazar"),
+        ("D", "DC", DC,        "Karen Tan"),
+        ("D", "DC", "dc_alt",  "Raj Kumar"),
+
+        # SE — Senior Engineer
+        ("D", "SE", SE,        "Nick Lim"),
+        ("D", "SE", "se_user2","Aisha Mohd"),
+        ("D", "SE", "se_user3","Wei Lin"),
+
+        # CE — Chief Engineer
+        ("D", "CE", CE,        "Branko Petrovic"),
+        ("D", "CE", "ce_user2","Sandra Wong"),
+        ("D", "CE", "ce_user3","Dinesh Nair"),
+
+        # EM — Engineering Manager
+        ("D", "EM", EM,        "Karen Chen"),
+        ("D", "EM", "em_user2","Thomas Ng"),
+        ("D", "EM", "em_user3","Priya Rajan"),
+
+        # QM — Quality Manager
+        ("D", "QM", QM,        "Divya Sharma"),
+        ("D", "QM", "qm_user2","Lee Mei Ling"),
+        ("D", "QM", "qm_user3","Ahmad Fadzil"),
+
+        # PM — Production Manager
+        ("D", "PM", PM,        "Jason Teo"),
+        ("D", "PM", "pm_user2","Siti Rahimah"),
+        ("D", "PM", "pm_user3","Lim Boon Keat"),
+
+        # SC — Supply Chain / Purchasing
+        ("D", "SC", SC,        "Michelle Tan"),
+        ("D", "SC", "sc_user2","Farid Hassan"),
+        ("D", "SC", "sc_user3","Chloe Yap"),
+
+        # FN — Finance
+        ("D", "FN", FN,        "Grace Lau"),
+        ("D", "FN", "fn_user2","Azlan Ibrahim"),
+        ("D", "FN", "fn_user3","Cindy Ho"),
+
+        # CA — Cost Accountant (observer-plus)
+        ("D", "CA", "ca_user", "Bernard Ong"),
+        ("D", "CA", "ca_user2","Nurul Ain"),
+        ("D", "CA", "ca_user3","Steven Koh"),
+
+        # AD — Administrator
+        ("D", "AD", OR,        "Hector Salazar"),
+        ("D", "AD", DC,        "Karen Tan"),
+        ("D", "AD", "ad_user", "Manal Al-Rashid"),
+
+        # RD — R&D / Product Engineering (observer)
+        ("D", "RD", "rd_user", "Victor Tan"),
+        ("D", "RD", "rd_user2","Alicia Foo"),
+        ("D", "RD", "rd_user3","Hafiz Zulkifli"),
+
+        # TE — Test Engineering (observer)
+        ("D", "TE", "te_user", "Marcus Yee"),
+        ("D", "TE", "te_user2","Jasmine Loh"),
+        ("D", "TE", "te_user3","Ravi Subramaniam"),
+
+        # MQ — Manufacturing Quality (observer)
+        ("D", "MQ", "mq_user", "Jenny Chai"),
+        ("D", "MQ", "mq_user2","Zulhilmi Aris"),
+        ("D", "MQ", "mq_user3","Patricia Yong"),
     ]
-    for facility, role_id, username, display_name, email in users:
+
+    # Mirror facility L (Johor Bahru) with same dev personas
+    l_users = [("L", r, u, n) for _, r, u, n in users]
+
+    for facility, role_id, username, display_name in users + l_users:
+        email = f"{username}@srxglobal.local"
         await session.execute(
             sa.text(
                 "INSERT INTO system_role_users "
@@ -180,7 +246,7 @@ async def _ensure_role_users(session: AsyncSession) -> None:
 
 def _req(**kw) -> ECNCreateRequest:
     defaults = dict(
-        facility="L", is_new_item=False, routing_changes=False,
+        facility="D", is_new_item=False, routing_changes=False,
         operation_changes=False, new_parts=False, lead_time_changes=False,
         change_to_documents=False, requires_customer_approval=False,
         regulatory_impact=False,

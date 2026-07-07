@@ -75,6 +75,8 @@ def _row_to_ecn_model(row: dict[str, Any]) -> ECNModel:
         routing_changes=bool(row["routing_changes"]),
         operation_changes=bool(row["operation_changes"]),
         new_parts=bool(row["new_parts"]),
+        change_parts=bool(row["change_parts"]),
+        bom_changes=bool(row["bom_changes"]),
         lead_time_changes=bool(row["lead_time_changes"]),
         change_to_documents=bool(row["change_to_documents"]),
         wapc_delta_pct=float(row["wapc_delta_pct"]) if row["wapc_delta_pct"] is not None else None,

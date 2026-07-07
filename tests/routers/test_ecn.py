@@ -70,6 +70,8 @@ def _detail(
         routing_changes=False,
         operation_changes=False,
         new_parts=False,
+        change_parts=False,
+        bom_changes=False,
         lead_time_changes=False,
         change_to_documents=False,
         wapc_delta_pct=None,

@@ -52,14 +52,22 @@ export async function fireTransition(
     const { data } = await doRequest(updatedAt)
     return data
   } catch (err: any) {
-    // On 409 the backend returns current_updated_at — retry once with the fresh timestamp.
-    const freshTs: string | undefined = err?.response?.data?.current_updated_at
+    // FastAPI wraps 409 detail as { detail: { code, current_updated_at } }
+    const freshTs: string | undefined = err?.response?.data?.detail?.current_updated_at
     if (err?.response?.status === 409 && freshTs) {
       const { data } = await doRequest(freshTs)
       return data
     }
     throw err
   }
+}
+
+export async function approveRole(ecnId: string, actorRole: string, notes?: string) {
+  const { data } = await axiosInstance.post(`/api/v1/ecn/${ecnId}/approve`, {
+    actor_role: actorRole,
+    notes: notes ?? null,
+  })
+  return data
 }
 
 export async function assignRole(ecnId: string, roleId: string, username: string, actorRole: string) {

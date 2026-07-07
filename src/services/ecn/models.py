@@ -32,6 +32,8 @@ class ECNCreateRequest:
     routing_changes: bool = False
     operation_changes: bool = False
     new_parts: bool = False
+    change_parts: bool = False
+    bom_changes: bool = False
     lead_time_changes: bool = False
     change_to_documents: bool = False
     wapc_delta_pct: float | None = None
@@ -51,6 +53,8 @@ class ECNUpdateRequest:
     routing_changes: bool | None = None
     operation_changes: bool | None = None
     new_parts: bool | None = None
+    change_parts: bool | None = None
+    bom_changes: bool | None = None
     lead_time_changes: bool | None = None
     change_to_documents: bool | None = None
     wapc_delta_pct: float | None = None
@@ -180,6 +184,8 @@ class ECNDetail:
     routing_changes: bool
     operation_changes: bool
     new_parts: bool
+    change_parts: bool
+    bom_changes: bool
     lead_time_changes: bool
     change_to_documents: bool
     wapc_delta_pct: float | None

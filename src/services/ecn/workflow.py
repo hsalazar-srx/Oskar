@@ -148,6 +148,7 @@ class ECNWorkflowMixin:
 
         if req.trigger == "movex_write_complete":
             await self._queue_alias_outbox(ecn_id)
+            await self._seed_impl_checklist(ecn_id, dict(row))
 
         if req.trigger == "reject" and req.rejection_reason:
             await self._insert_rejection(ecn_id, actor_username, req, from_status)
@@ -594,6 +595,44 @@ class ECNWorkflowMixin:
                     "ikey": idempotency_key,
                 },
             )
+
+    # ── Implementation checklist ──────────────────────────────────────────────
+
+    async def _seed_impl_checklist(self, ecn_id: str, ecn_row: dict[str, Any]) -> None:
+        """Seed impl_checklist in extra_data when ECN transitions to IMPLEMENTED.
+        Only seeds if not already present (idempotent).
+        """
+        existing = ecn_row.get("extra_data") or {}
+        if isinstance(existing, str):
+            existing = json.loads(existing)
+        if "impl_checklist" in existing:
+            return  # already seeded — no-op
+
+        checklist = [
+            # Section 1 — Engineering (Scanfil APAC)
+            {"id": "mes_update",       "section": 1, "label": "Update MES — apply changes in Manufacturing Execution System", "applicable": None, "completed": False, "completed_by": None, "completed_at": None, "notes": None},
+            {"id": "aoi_programs",     "section": 1, "label": "AOI programs & profile update",                                "applicable": None, "completed": False, "completed_by": None, "completed_at": None, "notes": None},
+            {"id": "wave_pallets",     "section": 1, "label": "New wave pallets required",                                     "applicable": None, "completed": False, "completed_by": None, "completed_at": None, "notes": None},
+            {"id": "valor_mss",        "section": 1, "label": "Valor MSS update required",                                    "applicable": None, "completed": False, "completed_by": None, "completed_at": None, "notes": None},
+            {"id": "pds001g_routing",  "section": 1, "label": "PDS001/G routing text updated",                                "applicable": None, "completed": False, "completed_by": None, "completed_at": None, "notes": None},
+            {"id": "shopfloor_docs",   "section": 1, "label": "Documents issued to Shopfloor",                                "applicable": None, "completed": False, "completed_by": None, "completed_at": None, "notes": None},
+            {"id": "re_validation",    "section": 1, "label": "Re-validation required (medical customers only)",              "applicable": None, "completed": False, "completed_by": None, "completed_at": None, "notes": None},
+            {"id": "first_article",    "section": 1, "label": "Production First Article required (form PFM-0007-STX)",        "applicable": None, "completed": False, "completed_by": None, "completed_at": None, "notes": None},
+            # Section 2 — Program Manager / WIP Impact
+            {"id": "wip_orders",       "section": 2, "label": "Current work orders affected",      "applicable": None, "completed": False, "completed_by": None, "completed_at": None, "notes": None},
+            {"id": "customer_po",      "section": 2, "label": "Customer PO required",              "applicable": None, "completed": False, "completed_by": None, "completed_at": None, "notes": None},
+            {"id": "forecast",         "section": 2, "label": "Order forecast affected",           "applicable": None, "completed": False, "completed_by": None, "completed_at": None, "notes": None},
+            {"id": "obsolete_material","section": 2, "label": "Obsolete material to disposition",  "applicable": None, "completed": False, "completed_by": None, "completed_at": None, "notes": None},
+        ]
+        merged = {**existing, "impl_checklist": checklist}
+        await self._session.execute(
+            sa.text(
+                "UPDATE ecn_instances SET extra_data = CAST(:extra AS jsonb)"
+                " WHERE id = :id"
+            ),
+            {"extra": json.dumps(merged), "id": ecn_id},
+        )
+        log.info("ecn.impl_checklist.seeded", ecn_id=ecn_id)
 
     # ── Role assignment ───────────────────────────────────────────────────────
 

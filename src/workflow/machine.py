@@ -91,6 +91,8 @@ class ECNModel:
     routing_changes: bool = False
     operation_changes: bool = False
     new_parts: bool = False
+    change_parts: bool = False
+    bom_changes: bool = False
     lead_time_changes: bool = False
     change_to_documents: bool = False
 
@@ -266,9 +268,11 @@ class ECNWorkflowMachine:
         },
 
         # ── Cancellation ───────────────────────────────────────────────────
+        # Allowed from any non-terminal, non-implemented status.
+        # NOT allowed from: APPROVED(50), IMPLEMENTED(60), CLOSED(70), CANCELLED(80).
         {
             "trigger": "cancel",
-            "source":  ["DRAFT"],
+            "source":  ["DRAFT", "ENGINEERING_REVIEW", "MANAGEMENT_REVIEW", "ON_HOLD"],
             "dest":    "CANCELLED",
             "conditions": ["_guard_cancel"],
             "before":  "_before_transition",
@@ -549,9 +553,14 @@ class ECNWorkflowMachine:
         return True
 
     def _guard_cancel(self) -> bool:
-        """Only originator or Admin may cancel; only from DRAFT or SUBMITTED."""
-        if self.ctx.actor_role not in ("AD",) and self.ctx.actor_username != self.ecn.originator_username:
-            raise GuardFailed("Only the originator or an Admin may cancel an ECN.")
+        """Originator, DC, or Admin may cancel. Reason (notes) is mandatory."""
+        if (
+            self.ctx.actor_role not in ("AD", "DC")
+            and self.ctx.actor_username != self.ecn.originator_username
+        ):
+            raise GuardFailed("Only the originator, DC, or an Admin may cancel an ECN.")
+        if not self.ctx.notes or not self.ctx.notes.strip():
+            raise GuardFailed("A cancellation reason is required.")
         return True
 
     def _guard_place_on_hold(self) -> bool:

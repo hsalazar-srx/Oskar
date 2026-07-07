@@ -1,0 +1,89 @@
+On the ECNDetailPage
+- Change customer code for customer name
+- Have the ability to add notes or comments with a date stamp even after the ECN is closed
+
+On the ECNListPage
+- Add filters by column
+- Add entry date as column and enable sorting by
+- Enabled "Require my attention" and "Overdue" as buttons to filter the ECNs
+- Enable the search field to find any text within the ECN not just ECN number and title extend the search to all text 
+- Add CustomerECN is their customers' ECN they use to track, this has to manage multiple ECNs comma separated
+- Also add Customer ECN as a column 
+- Rearrange the columns locate Customer Column between ECN number and ECN Title
+- Add filters for Customer, Originator, Next Action similar to Excel Spreadsheet filtering
+
+On ECNCreatePage
+- Enable typing search for customer input field
+- For the Customer input field would be better to have the name at the beginning and the code in brackets later
+
+Drawing
+- The drawing are not currently stored on Stargile the go to a location in Sharepoint called DMR (Document Master Repository) The actual file gets loaded there. When creating an ECN that needs to add a document or drawing the user needs to have the functionality to add a document that goes directly into DMR and store the location to that document in Oskar
+
+Add and Administration Page
+- Have an admin page per plant to set the default users like the purchasing, Program Admin, Finance
+- When creating an ECN the system needs to get the assigned roles by customer from the following page: http://apps2.srxglobal.com/srx_allocation/tbl_allocation_list.php?qs=LIQ&criteria=or
+- PM and SE are assigned by customer the rest are fixed
+- Be able to add more than one per role but also to create roles
+- Have a cancel ECN option with the ability to leave a note on why before implementing into Movex
+- Have an admin page to keep up to date the PN code/categories from the Procurement Group and Product Group
+
+ECN Detail Page
+ - Show PN / Description / Alias
+ - Not sure if this scope is defined as the BOM iteration but after Movex gets updated is needed to add the implementation schedule section defined in Stargile
+- The import button is not clearly enabled
+- After uploading items into the ECN, would be nice to have a total at the bottom
+
+Notes
+- What could happen if you want to reassign ECN?
+- When creating a PN, is very useful to get if a part is TH or SMD
+- Have a way to manage the notifications templates (new part, routing, etc) from the Change Scope section when you create a new ECN the ticks when you create a new ECN. Have the ability to create new ones as needed
+- Enable a different style of uploading values into each item from the Quotation Team to update items information in bulk first from the Engineering Team then from the Quotation Team
+- There should be a way to update an ECN even after approved or completed from the QT to update pricing, lead time, who the buyer is
+- When a description is longer than 30 characters, have the ability to upload a document anyway by truncating it and highlight it on the already uploaded items and let the user know that the description was truncated anyway
+- The implementation date should be at the ECN level not at the individual item level
+- For routing the time defined on the template is in minutes
+- When uploading the BOM template it calculates the amount of designators
+
+Related to BOM
+- For BOM, Stargile needs to be in txt type
+- Make all the newly uploaded items searchable
+- Regarding BOM, a user can create a ECN to delete and item from the BOM and it's useful to cross reference your work
+- When change SOP is related to SharePoint Windows 7
+- Transmittal, sending an inefficient way to share documents from Stargile
+- When into the ECN the transmittal, filled out (stx-sharepoint.corp.startronics.com)
+  - Document Title
+  -
+Related to DMR
+- Document Management System (DMR) needs to be replace or redirected into New Sharepoint
+- Save the path with an active link to the DMR within the ECN Implementation Schedule
+
+For Item related
+- The effectivity date usually goes by MO
+
+Related to the Implementation Schedule which is the section from Stargile that gets filled up after submitting/saving the ECN into Movex
+
+Section 1
+- Update MES, have a check that ask you if you want to update MES automatically or not
+
+Section 2
+- Will be useful to know if an ECN is impacting WIP or future products, and it would be nice to know the impact of that ECN
+- Update MES, 
+- Button "View Open Order" query Movex to retrieve related MOs 
+
+- Section 3 from Stargile never used
+
+- When dealing with MPNs within the template they have to look up for the Manufacturer ID, this shouldn't be needed this should be automated using CRS620 to retrieve the manufacturer Code with status 30
+
+
+BOM related
+- After uploading the BOM into the ECN they use the PDS001 and manually update the revision 
+- After the MOVEX update is done for each ECN, after or NEXT the PDS001/G there is a Text Area to insert update.
+- Usually there is a cross check between the BOM registered in SRX and the BOM from Customer. It's done via Excel or using the PLM+ BOM comparison tool
+- From SharePoint/ stx-sharepoint / Stargile ECN Procedure
+- Has an advance search to include all the fields and content within an ECN
+- 
+
+From Engineering Team
+- They use PLM only the Component Atts Search to get the description from DigiKey to improve the descriptions provided by the customers. this is related to BOM. They use this step before creating or uploading the BOM template into the ECN 
+- The Mounting Type is very useful also get that info from DigiKey
+- When a MPN is not located within our database and needs approval from the customer, a new ECN is created to attached the email of approval and that email goes into the DMR (Customer/Generic/ECN) based on the ECN. Would be nice to have a way to attach an email from outlook into an ECN.

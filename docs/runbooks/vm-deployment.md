@@ -1,7 +1,7 @@
 # Runbook — OSKAR VM Deployment
 # Target: apac-plm-ops.srxglobal.local (Ubuntu 24.04 LTS, VMware)
 # Owner: Lead Engineer (hsalazar)
-# Last updated: 2026-06-02 (Sprint 5 complete — staging stack live)
+# Last updated: 2026-06-29 (Sprint 6 — added T-12 DB password mismatch troubleshooting)
 #
 # This runbook covers first deployment (staging) and production promotion.
 # Harbor installation is a separate prerequisite: docs/runbooks/harbor-installation.md
@@ -521,6 +521,60 @@ sudo cp /opt/oskar-src/Oskar-master/docker/docker-compose.staging.yml /opt/oskar
 ```
 
 Then re-apply any environment overrides by editing `.env.staging` instead.
+
+---
+
+### T-12 — `alembic upgrade head` fails: `password authentication failed for user "oskar"`
+
+**Symptom:** Running `alembic upgrade head` (either on the VM host or via `docker exec`) fails
+with `asyncpg.exceptions.InvalidPasswordError: password authentication failed for user "oskar"`.
+
+**Cause:** The password in `DATABASE_URL` does not match the password set on the `oskar` PostgreSQL
+role inside the `oskar-db-staging` container. This typically happens after the DB container is
+recreated — Docker re-initialises the postgres volume with the `POSTGRES_PASSWORD` from the compose
+env file, but `.env.staging` still carries the old password (or vice versa).
+
+**Diagnosis:**
+```bash
+# 1. What password is the app trying to use?
+docker exec oskar-app-staging printenv DATABASE_URL
+
+# 2. What databases and users exist in the DB container?
+#    (connect via the default 'postgres' database — 'oskar' DB may not exist yet)
+docker exec oskar-db-staging psql -U oskar -d postgres -c "\l"
+docker exec oskar-db-staging psql -U oskar -d postgres -c "\du"
+```
+
+Note: there is no `postgres` superuser — the container was initialised with `POSTGRES_USER=oskar`,
+so `oskar` is the superuser. Always use `-U oskar` for psql commands.
+
+**Fix — reset the DB password to match `DATABASE_URL`:**
+```bash
+# Set the DB password to whatever value DATABASE_URL contains (e.g. oskar_staging)
+docker exec oskar-db-staging psql -U oskar -d postgres \
+  -c "ALTER USER oskar WITH PASSWORD 'oskar_staging';"
+```
+
+**Or fix `DATABASE_URL` to match the actual DB password:**
+```bash
+# Update .env.staging with the real password
+sed -i 's|oskar:oskar_dev@|oskar:oskar_staging@|' /opt/oskar/.env.staging
+
+# Restart app containers to pick up the new value
+cd /opt/oskar
+docker compose -f docker-compose.staging.yml --env-file .env.staging up -d \
+  oskar-app-staging oskar-worker-staging oskar-beat-staging
+```
+
+**Then run migrations via the app container** (not the VM host — the container resolves
+`oskar-db-staging` by container name over the Docker network):
+```bash
+docker exec oskar-app-staging alembic upgrade head
+```
+
+> The VM host cannot use `localhost:5432` — the DB port is mapped to **5433** on the host
+> (`0.0.0.0:5433->5432/tcp`). Only the app container connects on port 5432 via the internal
+> Docker network.
 
 ---
 

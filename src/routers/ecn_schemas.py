@@ -53,6 +53,8 @@ class ECNCreateBody(BaseModel):
     routing_changes: bool = False
     operation_changes: bool = False
     new_parts: bool = False
+    change_parts: bool = False
+    bom_changes: bool = False
     lead_time_changes: bool = False
     change_to_documents: bool = False
     wapc_delta_pct: float | None = None
@@ -84,6 +86,8 @@ class ECNUpdateBody(BaseModel):
     routing_changes: bool | None = None
     operation_changes: bool | None = None
     new_parts: bool | None = None
+    change_parts: bool | None = None
+    bom_changes: bool | None = None
     lead_time_changes: bool | None = None
     change_to_documents: bool | None = None
     wapc_delta_pct: float | None = None
@@ -373,6 +377,8 @@ class ECNDetailOut(BaseModel):
     routing_changes: bool
     operation_changes: bool
     new_parts: bool
+    change_parts: bool
+    bom_changes: bool
     lead_time_changes: bool
     change_to_documents: bool
     wapc_delta_pct: float | None
@@ -522,6 +528,8 @@ def detail_out(d: ECNDetail) -> ECNDetailOut:
         routing_changes=d.routing_changes,
         operation_changes=d.operation_changes,
         new_parts=d.new_parts,
+        change_parts=d.change_parts,
+        bom_changes=d.bom_changes,
         lead_time_changes=d.lead_time_changes,
         change_to_documents=d.change_to_documents,
         wapc_delta_pct=d.wapc_delta_pct,
