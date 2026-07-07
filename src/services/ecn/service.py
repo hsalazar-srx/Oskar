@@ -68,6 +68,8 @@ def _row_to_detail(
         routing_changes=bool(row["routing_changes"]),
         operation_changes=bool(row["operation_changes"]),
         new_parts=bool(row["new_parts"]),
+        change_parts=bool(row["change_parts"]),
+        bom_changes=bool(row["bom_changes"]),
         lead_time_changes=bool(row["lead_time_changes"]),
         change_to_documents=bool(row["change_to_documents"]),
         wapc_delta_pct=float(row["wapc_delta_pct"]) if row["wapc_delta_pct"] is not None else None,
@@ -120,6 +122,7 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
                 "(id, ecn_number, facility, customer_number, customer_ecn_refs, title, description, "
                 " originator_username, "
                 " is_new_item, routing_changes, operation_changes, new_parts, "
+                " change_parts, bom_changes, "
                 " lead_time_changes, change_to_documents, wapc_delta_pct, "
                 " wapc_threshold_override, requires_customer_approval, "
                 " customer_approval_reference, regulatory_impact, extra_data) "
@@ -127,6 +130,7 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
                 "(:id, :ecn_number, :facility, :customer_number, :customer_ecn_refs, :title, :description, "
                 " :originator, "
                 " :is_new_item, :routing_changes, :operation_changes, :new_parts, "
+                " :change_parts, :bom_changes, "
                 " :lead_time_changes, :change_to_documents, :wapc_delta_pct, "
                 " :wapc_threshold_override, :requires_customer_approval, "
                 " :customer_approval_reference, :regulatory_impact, CAST(:extra_data AS jsonb))"
@@ -139,6 +143,7 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
                 "originator": actor_username,
                 "is_new_item": req.is_new_item, "routing_changes": req.routing_changes,
                 "operation_changes": req.operation_changes, "new_parts": req.new_parts,
+                "change_parts": req.change_parts, "bom_changes": req.bom_changes,
                 "lead_time_changes": req.lead_time_changes, "change_to_documents": req.change_to_documents,
                 "wapc_delta_pct": req.wapc_delta_pct, "wapc_threshold_override": req.wapc_threshold_override,
                 "requires_customer_approval": req.requires_customer_approval,
@@ -215,7 +220,8 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
         _maybe("customer_ecn_refs", req.customer_ecn_refs)
         for flag in (
             "is_new_item", "routing_changes", "operation_changes",
-            "new_parts", "lead_time_changes", "change_to_documents",
+            "new_parts", "change_parts", "bom_changes",
+            "lead_time_changes", "change_to_documents",
             "wapc_threshold_override", "requires_customer_approval", "regulatory_impact",
         ):
             val = getattr(req, flag)
@@ -357,3 +363,97 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
                 )
             )
         return summaries
+
+    # ── Implementation Schedule ───────────────────────────────────────────────
+
+    async def patch_checklist_item(
+        self,
+        ecn_id: str,
+        *,
+        item_id: str,
+        applicable: bool | None = None,
+        completed: bool | None = None,
+        notes: str | None = None,
+        actor_username: str,
+    ) -> ECNDetail:
+        detail = await self.get(ecn_id)
+        if detail.status < 60:  # must be IMPLEMENTED or later
+            raise ECNValidationError(
+                "Implementation checklist only available after IMPLEMENTED"
+            )
+        checklist: list[dict[str, Any]] = (
+            (detail.extra_data or {}).get("impl_checklist", [])
+        )
+        item = next((i for i in checklist if i["id"] == item_id), None)
+        if item is None:
+            raise ECNNotFound(f"Checklist item '{item_id}' not found")
+
+        if applicable is not None:
+            item["applicable"] = applicable
+        if completed is not None:
+            item["completed"] = completed
+            if completed:
+                item["completed_by"] = actor_username
+                item["completed_at"] = datetime.now(timezone.utc).isoformat()
+            else:
+                item["completed_by"] = None
+                item["completed_at"] = None
+        if notes is not None:
+            item["notes"] = notes
+
+        extra = dict(detail.extra_data or {})
+        extra["impl_checklist"] = checklist
+        import json
+        await self._session.execute(
+            sa.text(
+                "UPDATE ecn_instances SET extra_data = CAST(:extra AS jsonb), "
+                "updated_at = now() WHERE id = :id"
+            ),
+            {"extra": json.dumps(extra), "id": ecn_id},
+        )
+        log.info("ecn.checklist.patched", ecn_id=ecn_id, item_id=item_id)
+        return await self.get(ecn_id)
+
+    async def get_open_orders(
+        self, ecn_id: str, *, erp: Any
+    ) -> list[dict[str, Any]]:
+        """Query movex-rest-api for open MOs related to ECN items (PMS100MI.Select)."""
+        detail = await self.get(ecn_id)
+        item_numbers = [
+            r["item_number"]
+            for r in (
+                await self._session.execute(
+                    sa.text(
+                        "SELECT item_number FROM ecn_items WHERE ecn_id = :id"
+                        " AND item_number IS NOT NULL"
+                    ),
+                    {"id": ecn_id},
+                )
+            ).mappings()
+        ]
+        if not item_numbers:
+            return []
+        try:
+            raw = await erp.list_open_orders(
+                item_numbers=item_numbers, facility=detail.facility
+            )
+        except Exception as exc:
+            log.warning("ecn.open_orders.erp_error", ecn_id=ecn_id, error=str(exc))
+            return []
+
+        return [
+            {
+                "mo_number":        str(r.get("MFNO", "")).strip(),
+                "item_number":      str(r.get("PRNO", "")).strip(),
+                "item_description": str(r.get("ITDS", "")).strip(),
+                "facility":         str(r.get("FACI", "")).strip(),
+                "status":           str(r.get("WHST", "")).strip(),
+                "quantity":         r.get("ORQT"),
+                "manufactured_qty": r.get("MAQT"),
+                "due_date":         r.get("DUED"),
+                "start_date":       r.get("STDT"),
+                "finish_date":      r.get("FIDT"),
+                "warehouse":        str(r.get("WHLO", "")).strip(),
+            }
+            for r in raw
+        ]

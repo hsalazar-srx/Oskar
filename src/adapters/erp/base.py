@@ -152,6 +152,21 @@ class ERPAdapter(ABC):
         ...
 
     @abstractmethod
+    async def list_open_orders(
+        self, item_numbers: list[str], facility: str
+    ) -> list[dict[str, Any]]:
+        """List open manufacturing orders for a set of item numbers (PMS100MI.Select).
+
+        Calls PMS100MI.Select with STSF=10, STST=40 (planned → started, excludes
+        completed status 90) for the given facility, then filters results to only
+        the provided item_numbers in Python. CONO is injected by the adapter.
+
+        Returns list of MO dicts with keys: MFNO, PRNO, FACI, WHST, ORQT, MAQT,
+        STDT, FIDT, DUED, WHLO. Returns [] if no open orders exist.
+        """
+        ...
+
+    @abstractmethod
     async def health_check(self) -> bool:
         """Return True if the ERP connection is healthy.
 

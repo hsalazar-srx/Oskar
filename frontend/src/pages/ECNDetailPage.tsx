@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Spinner } from "@/components/ui/spinner"
 import { useAuthStore } from "@/store/auth"
-import { fetchECN, fetchItems, fireTransition, assignRole } from "@/api/ecn"
+import { fetchECN, fetchItems, fireTransition, assignRole, approveRole } from "@/api/ecn"
 import { statusLabel, statusBadgeVariant } from "@/lib/ecn-status"
 import {
   ACTIONS_BY_STATUS, HEADER_ACTION_TRIGGERS, TRIGGER_LABEL, type ActionDef,
@@ -14,6 +14,8 @@ import ECNCard from "@/components/ecn/ECNCard"
 import WorkflowPanel from "@/components/ecn/WorkflowPanel"
 import ECNItemPanel from "@/components/ECNItemPanel"
 import ECNCommentsPanel from "@/components/ecn/ECNCommentsPanel"
+import ImplementationSchedulePanel from "@/components/ecn/ImplementationSchedulePanel"
+import type { ChecklistItem } from "@/components/ecn/ImplementationSchedulePanel"
 import { ActionModal, ModalField } from "@/components/ecn/ActionModal"
 import { ItemUploadDrawer } from "@/components/ecn/ItemUploadDrawer"
 
@@ -49,6 +51,8 @@ export default function ECNDetailPage() {
     queryKey: ["ecn", id],
     queryFn: () => fetchECN(id!),
     enabled: !!id,
+    staleTime: 0,
+    gcTime: 0,
   })
 
   const { data: items = [] } = useQuery({
@@ -65,16 +69,20 @@ export default function ECNDetailPage() {
   })
 
   const transition = useMutation({
-    mutationFn: ({ trigger, role, extra }: { trigger: string; role: string; extra?: Record<string, string> }) =>
-      fireTransition(id!, trigger, role, ecn?.updated_at, extra),
-    onSuccess: (_, vars) => {
-      qc.invalidateQueries({ queryKey: ["ecn", id] })
+    mutationFn: ({ trigger, role, extra }: { trigger: string; role: string; extra?: Record<string, string> }) => {
+      // Always read updated_at from the live cache, not the render closure.
+      // React Query may silently refetch in the background; the closure value can be
+      // one version behind, causing a spurious 409 even when no real conflict exists.
+      const liveEcn = qc.getQueryData<typeof ecn>(["ecn", id])
+      return fireTransition(id!, trigger, role, liveEcn?.updated_at ?? ecn?.updated_at, extra)
+    },
+    onSuccess: (updated, vars) => {
+      qc.setQueryData(["ecn", id], updated)        // write new ECN data immediately
       qc.invalidateQueries({ queryKey: ["ecn-items", id] })
-      qc.invalidateQueries({ queryKey: ["ecns"] })
+      qc.invalidateQueries({ queryKey: ["ecns"], refetchType: "all" })
       showToast(statusLabel(ecn?.status ?? 0), TRIGGER_LABEL[vars.trigger] ?? "updated")
     },
     onError: () => {
-      // Refresh stale cache so the next attempt uses a fresh updated_at / status
       qc.invalidateQueries({ queryKey: ["ecn", id] })
     },
   })
@@ -85,13 +93,32 @@ export default function ECNDetailPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["ecn", id] }),
   })
 
+  const approveStep = useMutation({
+    mutationFn: ({ role }: { role: string }) => approveRole(id!, role),
+    onSuccess: (updated) => {
+      qc.setQueryData(["ecn", id], updated)
+      qc.invalidateQueries({ queryKey: ["ecns"], refetchType: "all" })
+    },
+  })
+
   if (isLoading) return <Loading />
   if (isError || !ecn) return <ErrorState onBack={() => navigate("/ecn")} />
 
   const actions = ACTIONS_BY_STATUS[ecn.status] ?? []
   const userGroups: string[] = user?.groups ?? []
 
-  function defaultRole(action: ActionDef) { return action.role ?? "OR" }
+  function defaultRole(action: ActionDef): string {
+    // For approve_engineering the actor_role must be the user's actual role on this ECN
+    // (SE or CE) — not the hardcoded default. Look up from role_assignments.
+    if (action.trigger === "approve_engineering") {
+      const assignments = (ecn.role_assignments ?? []) as Array<{ role_id: string; username: string }>
+      const mine = assignments.find(
+        (r) => r.username === user?.username && (r.role_id === "SE" || r.role_id === "CE")
+      )
+      if (mine) return mine.role_id
+    }
+    return action.role ?? "OR"
+  }
 
   function handleAction(action: ActionDef) {
     if (action.needsModal) { setModal({ action }); return }
@@ -137,12 +164,12 @@ export default function ECNDetailPage() {
       </header>
 
       <main className="flex-1 mx-auto w-full max-w-4xl px-6 py-6 space-y-4">
-        {transition.isError && (
+        {(transition.isError || approveStep.isError) && (
           <div className="flex items-start gap-2.5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             <svg className="w-4 h-4 shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
               <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z" clipRule="evenodd"/>
             </svg>
-            <span>{transitionErrorMessage(transition.error)}</span>
+            <span>{transitionErrorMessage(transition.error ?? approveStep.error)}</span>
           </div>
         )}
 
@@ -153,9 +180,9 @@ export default function ECNDetailPage() {
           currentUsername={user?.username ?? ""}
           isUserDC={userGroups.includes("OSKAR-DC")}
           roleAssignIsPending={roleAssign.isPending}
-          transitionIsPending={transition.isPending}
+          transitionIsPending={transition.isPending || approveStep.isPending}
           onRoleAssign={(roleId, username) => roleAssign.mutate({ roleId, username, actorRole: "DC" })}
-          onApproveRole={(role) => transition.mutate({ trigger: "approve_role", role })}
+          onApproveRole={(role) => approveStep.mutate({ role })}
           onAction={handleAction}
         />
 
@@ -231,6 +258,15 @@ export default function ECNDetailPage() {
           )}
         </Section>
         <ECNCommentsPanel ecnId={id!} />
+
+        {ecn.status >= 60 && (
+          <ImplementationSchedulePanel
+            ecnId={id!}
+            checklist={(ecn.extra_data?.impl_checklist ?? []) as ChecklistItem[]}
+            isUserDC={userGroups.includes("OSKAR-DC")}
+            isOriginator={user?.username === ecn.originator_username}
+          />
+        )}
       </main>
 
       {selectedItemId && (
@@ -274,6 +310,20 @@ export default function ECNDetailPage() {
         >
           <ModalField label="Hold reason" name="reason" required placeholder="Describe why the ECN is being placed on hold…" multiline />
           <ModalField label="Expected resume date" name="date" required type="date" />
+        </ActionModal>
+      )}
+
+      {modal?.action.needsModal === "cancel" && (
+        <ActionModal
+          title="Cancel ECN"
+          description="This action is terminal. The ECN cannot be resubmitted once cancelled."
+          onCancel={() => setModal(null)}
+          onConfirm={(values) => fireModal({ notes: values.reason })}
+          isPending={transition.isPending}
+          confirmLabel="Cancel ECN"
+          confirmVariant="destructive"
+        >
+          <ModalField label="Reason for cancellation" name="reason" required placeholder="Describe why this ECN is being cancelled…" multiline />
         </ActionModal>
       )}
 

@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react"
 import { Link, useNavigate } from "react-router-dom"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Spinner } from "@/components/ui/spinner"
@@ -44,6 +44,7 @@ const STATUS_OPTIONS = [
   { value: "60", label: "Implemented" },
   { value: "65", label: "Rejected" },
   { value: "70", label: "Closed" },
+  { value: "80", label: "Cancelled" },
   { value: "90", label: "On Hold" },
 ]
 
@@ -51,6 +52,7 @@ const TERMINAL = [60, 65, 70, 80]
 
 export default function ECNListPage() {
   const navigate = useNavigate()
+  const qc = useQueryClient()
   const logout = useAuthStore((s) => s.logout)
   const user = useAuthStore((s) => s.user)
 
@@ -153,6 +155,14 @@ export default function ECNListPage() {
             <span className="text-xs text-[#94a3b8] hidden sm:block">
               <span className="font-medium text-[#475569]">{user.username}</span>
             </span>
+          )}
+          {user?.groups?.includes("OSKAR-DC") && (
+            <button
+              onClick={() => navigate("/admin")}
+              className="text-xs text-[#94a3b8] hover:text-[#475569] transition-colors duration-150"
+            >
+              Admin
+            </button>
           )}
           <Button size="sm" onClick={() => navigate("/ecn/new")}>
             + New ECN
@@ -332,7 +342,7 @@ export default function ECNListPage() {
                       className={`cursor-pointer transition-colors duration-150 border-b border-[#f1f5f9] last:border-0 ${
                         isMyAction ? "bg-[#eff6ff] hover:bg-[#dbeafe]/60" : "hover:bg-[#f8fafc]"
                       }`}
-                      onClick={() => navigate(`/ecn/${ecn.id}`)}
+                      onClick={() => { qc.removeQueries({ queryKey: ["ecn", ecn.id] }); navigate(`/ecn/${ecn.id}`) }}
                     >
                       <TableCell className="py-3.5">
                         <Link

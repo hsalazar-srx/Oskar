@@ -282,6 +282,31 @@ class MovexRestAdapter(ERPAdapter):
         resp = await self._get(f"/ecn/{ecn_id}")
         return resp.json()
 
+    async def list_open_orders(
+        self, item_numbers: list[str], facility: str
+    ) -> list[dict[str, Any]]:
+        """Open MOs for the given item numbers via PMS100MI.Select.
+
+        Selects all MOs with WHST 10–40 (planned/released/started) for the facility,
+        then filters to the provided item_numbers in Python.
+        """
+        if not item_numbers:
+            return []
+        resp = await self._post(
+            "/PMS100MI/Select",
+            json={
+                "CONO": self.cono,
+                "FACF": facility,
+                "FACT": facility,
+                "STSF": "10",
+                "STST": "40",
+            },
+        )
+        payload = resp.json()
+        records: list[dict[str, Any]] = payload.get("data", {}).get("records", [])
+        item_set = {n.strip().upper() for n in item_numbers}
+        return [r for r in records if str(r.get("PRNO", "")).strip().upper() in item_set]
+
     async def health_check(self) -> bool:
         try:
             resp = await self._http.get("/health", timeout=5.0)

@@ -12,12 +12,46 @@ import axiosInstance from "@/api/axios"
 import { fetchCustomers, type CustomerEntry } from "@/api/ecn"
 
 const SCOPE_OPTIONS = [
-  { id: "new_parts",           label: "New parts",         desc: "Introducing parts not yet in Movex" },
-  { id: "routing_changes",     label: "Routing change",    desc: "Add, update or remove routing steps" },
-  { id: "operation_changes",   label: "Operation change",  desc: "Modify work centre or run time" },
-  { id: "lead_time_changes",   label: "Lead time change",  desc: "Supplier lead time affected" },
-  { id: "change_to_documents", label: "Document change",   desc: "Drawing, spec or work instruction" },
-  { id: "regulatory_impact",   label: "Regulatory impact", desc: "IPC, RoHS, REACH, customer standard" },
+  {
+    id: "new_parts",
+    label: "New parts",
+    desc: "One or more part numbers being introduced that do not yet exist in Movex — triggers Supply Chain review",
+  },
+  {
+    id: "change_parts",
+    label: "Change to existing parts",
+    desc: "Modifying an existing part's specification, unit of measure, or status in Movex — triggers Supply Chain review",
+  },
+  {
+    id: "bom_changes",
+    label: "BOM structure change",
+    desc: "Adding, removing or re-quantifying components in an existing Bill of Materials — triggers Engineering Manager review",
+  },
+  {
+    id: "routing_changes",
+    label: "Routing / process change",
+    desc: "Adding, removing or resequencing manufacturing operations (e.g. SMT, wave solder, conformal coat) — triggers Production Manager review",
+  },
+  {
+    id: "operation_changes",
+    label: "Work centre or run-time change",
+    desc: "Modifying an existing operation's work centre code, run time or setup time without adding or removing the operation itself — triggers Production Manager review",
+  },
+  {
+    id: "lead_time_changes",
+    label: "Supplier lead time affected",
+    desc: "The change is expected to alter the procurement lead time for one or more parts — triggers Supply Chain review",
+  },
+  {
+    id: "change_to_documents",
+    label: "Drawing or document update",
+    desc: "A controlled document is being revised: assembly drawing, schematic, work instruction, test spec or similar — notifies Test Engineering",
+  },
+  {
+    id: "regulatory_impact",
+    label: "Regulatory / compliance impact",
+    desc: "The change may affect RoHS, REACH, IPC class, customer qualification, or product certification (e.g. UL, CE mark) — triggers mandatory Quality Manager review under ISO 13485 §7.3.9",
+  },
 ] as const
 
 const schema = z.object({
@@ -31,9 +65,21 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>
 
 async function createECN(body: FormValues) {
+  const scope = new Set(body.change_scope)
   const payload = {
-    ...body,
+    title: body.title,
+    description: body.description ?? null,
+    facility: body.facility,
+    customer_number: body.customer_number,
     customer_ecn_refs: body.customer_ecn_refs || null,
+    new_parts:           scope.has("new_parts"),
+    change_parts:        scope.has("change_parts"),
+    bom_changes:         scope.has("bom_changes"),
+    routing_changes:     scope.has("routing_changes"),
+    operation_changes:   scope.has("operation_changes"),
+    lead_time_changes:   scope.has("lead_time_changes"),
+    change_to_documents: scope.has("change_to_documents"),
+    regulatory_impact:   scope.has("regulatory_impact"),
   }
   const { data } = await axiosInstance.post("/api/v1/ecn/", payload)
   return data
@@ -199,7 +245,7 @@ export default function ECNCreatePage() {
   const mutation = useMutation({
     mutationFn: createECN,
     onSuccess: (ecn) => {
-      qc.invalidateQueries({ queryKey: ["ecns"] })
+      qc.invalidateQueries({ queryKey: ["ecns"], refetchType: "all" })
       navigate(`/ecn/${ecn.id}`, { replace: true })
     },
   })

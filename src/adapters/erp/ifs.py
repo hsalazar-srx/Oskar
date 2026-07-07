@@ -65,6 +65,11 @@ class IFSAdapter(ERPAdapter):
     async def get_ecn(self, ecn_id: str) -> dict[str, Any]:
         raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
 
+    async def list_open_orders(
+        self, item_numbers: list[str], facility: str
+    ) -> list[dict[str, Any]]:
+        raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
+
     async def health_check(self) -> bool:
         return False  # Stub always reports unhealthy — not a failure, by design
 

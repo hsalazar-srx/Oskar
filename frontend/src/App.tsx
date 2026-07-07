@@ -5,6 +5,7 @@ import LoginPage from "@/pages/LoginPage"
 import ECNListPage from "@/pages/ECNListPage"
 import ECNCreatePage from "@/pages/ECNCreatePage"
 import ECNDetailPage from "@/pages/ECNDetailPage"
+import AdminPage from "@/pages/AdminPage"
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.accessToken)
@@ -35,6 +36,10 @@ export default function App() {
           <Route
             path="/ecn/:id"
             element={<ProtectedRoute><ECNDetailPage /></ProtectedRoute>}
+          />
+          <Route
+            path="/admin"
+            element={<ProtectedRoute><AdminPage /></ProtectedRoute>}
           />
           <Route path="/" element={<Navigate to="/ecn" replace />} />
         </Routes>
