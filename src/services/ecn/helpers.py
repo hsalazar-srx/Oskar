@@ -243,8 +243,9 @@ async def _auto_assign_roles(
     for role_id, users in role_users.items():
         if role_id == "OR":
             continue
-        username = users[0] if len(users) == 1 else None
-        is_auto = len(users) == 1
+        if len(users) != 1:
+            # Multiple candidates — DC assigns manually; no placeholder row needed.
+            continue
         await session.execute(
             sa.text(
                 "INSERT INTO ecn_role_assignments "
@@ -257,8 +258,8 @@ async def _auto_assign_roles(
                 "ecn_id": ecn_id,
                 "facility": facility,
                 "role_id": role_id,
-                "username": username,
-                "is_auto": is_auto,
+                "username": users[0],
+                "is_auto": True,
                 "assigned_by": assigned_by,
             },
         )
