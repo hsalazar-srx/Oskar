@@ -411,6 +411,7 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
             ),
             {"extra": json.dumps(extra), "id": ecn_id},
         )
+        await self._session.commit()
         log.info("ecn.checklist.patched", ecn_id=ecn_id, item_id=item_id)
         return await self.get(ecn_id)
 
