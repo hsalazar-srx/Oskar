@@ -6,7 +6,7 @@ export const STATUS_LABELS: Record<number, string> = {
   40: "Mgmt Review",
   25: "DC Approved",
   50: "Approved",
-  60: "Implemented",
+  60: "Movex Updated",
   65: "Rejected",
   70: "Closed",
   80: "Cancelled",

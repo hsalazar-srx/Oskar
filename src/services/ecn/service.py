@@ -72,6 +72,7 @@ def _row_to_detail(
         bom_changes=bool(row["bom_changes"]),
         lead_time_changes=bool(row["lead_time_changes"]),
         change_to_documents=bool(row["change_to_documents"]),
+        add_mpn=bool(row["add_mpn"]),
         wapc_delta_pct=float(row["wapc_delta_pct"]) if row["wapc_delta_pct"] is not None else None,
         wapc_threshold_override=bool(row["wapc_threshold_override"]),
         requires_customer_approval=bool(row["requires_customer_approval"]),
@@ -123,7 +124,7 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
                 " originator_username, "
                 " is_new_item, routing_changes, operation_changes, new_parts, "
                 " change_parts, bom_changes, "
-                " lead_time_changes, change_to_documents, wapc_delta_pct, "
+                " lead_time_changes, change_to_documents, add_mpn, wapc_delta_pct, "
                 " wapc_threshold_override, requires_customer_approval, "
                 " customer_approval_reference, regulatory_impact, extra_data) "
                 "VALUES "
@@ -131,7 +132,7 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
                 " :originator, "
                 " :is_new_item, :routing_changes, :operation_changes, :new_parts, "
                 " :change_parts, :bom_changes, "
-                " :lead_time_changes, :change_to_documents, :wapc_delta_pct, "
+                " :lead_time_changes, :change_to_documents, :add_mpn, :wapc_delta_pct, "
                 " :wapc_threshold_override, :requires_customer_approval, "
                 " :customer_approval_reference, :regulatory_impact, CAST(:extra_data AS jsonb))"
             ),
@@ -145,6 +146,7 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
                 "operation_changes": req.operation_changes, "new_parts": req.new_parts,
                 "change_parts": req.change_parts, "bom_changes": req.bom_changes,
                 "lead_time_changes": req.lead_time_changes, "change_to_documents": req.change_to_documents,
+                "add_mpn": req.add_mpn,
                 "wapc_delta_pct": req.wapc_delta_pct, "wapc_threshold_override": req.wapc_threshold_override,
                 "requires_customer_approval": req.requires_customer_approval,
                 "customer_approval_reference": req.customer_approval_reference,
@@ -221,7 +223,7 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
         for flag in (
             "is_new_item", "routing_changes", "operation_changes",
             "new_parts", "change_parts", "bom_changes",
-            "lead_time_changes", "change_to_documents",
+            "lead_time_changes", "change_to_documents", "add_mpn",
             "wapc_threshold_override", "requires_customer_approval", "regulatory_impact",
         ):
             val = getattr(req, flag)

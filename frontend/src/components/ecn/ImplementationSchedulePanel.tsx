@@ -267,7 +267,7 @@ function ChecklistRow({
           <span
             className={`text-sm leading-snug ${
               isDone
-                ? "text-[#94a3b8] line-through"
+                ? "text-[#94a3b8]"
                 : isNA
                 ? "text-[#cbd5e1]"
                 : "text-[#0f172a]"

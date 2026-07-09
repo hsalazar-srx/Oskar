@@ -95,6 +95,7 @@ class ECNModel:
     bom_changes: bool = False
     lead_time_changes: bool = False
     change_to_documents: bool = False
+    add_mpn: bool = False
 
     # Cost
     wapc_delta_pct: float | None = None
@@ -457,8 +458,6 @@ class ECNWorkflowMachine:
             raise GuardFailed("Only the originator can submit an ECN.")
         if not self.ecn.title or not self.ecn.title.strip():
             raise GuardFailed("ECN title is required before submission.")
-        if self.ecn.item_count < 1:
-            raise GuardFailed("At least one ECN item must be defined before submission.")
         return True
 
     def _guard_is_dc(self) -> bool:

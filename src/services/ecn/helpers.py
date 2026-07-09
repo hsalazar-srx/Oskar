@@ -79,6 +79,7 @@ def _row_to_ecn_model(row: dict[str, Any]) -> ECNModel:
         bom_changes=bool(row["bom_changes"]),
         lead_time_changes=bool(row["lead_time_changes"]),
         change_to_documents=bool(row["change_to_documents"]),
+        add_mpn=bool(row["add_mpn"]),
         wapc_delta_pct=float(row["wapc_delta_pct"]) if row["wapc_delta_pct"] is not None else None,
         wapc_threshold_override=bool(row["wapc_threshold_override"]),
         requires_customer_approval=bool(row["requires_customer_approval"]),

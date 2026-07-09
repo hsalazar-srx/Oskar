@@ -57,6 +57,7 @@ class ECNCreateBody(BaseModel):
     bom_changes: bool = False
     lead_time_changes: bool = False
     change_to_documents: bool = False
+    add_mpn: bool = False
     wapc_delta_pct: float | None = None
     wapc_threshold_override: bool = False
     requires_customer_approval: bool = False
@@ -90,6 +91,7 @@ class ECNUpdateBody(BaseModel):
     bom_changes: bool | None = None
     lead_time_changes: bool | None = None
     change_to_documents: bool | None = None
+    add_mpn: bool | None = None
     wapc_delta_pct: float | None = None
     wapc_threshold_override: bool | None = None
     requires_customer_approval: bool | None = None
@@ -381,6 +383,7 @@ class ECNDetailOut(BaseModel):
     bom_changes: bool
     lead_time_changes: bool
     change_to_documents: bool
+    add_mpn: bool
     wapc_delta_pct: float | None
     wapc_threshold_override: bool
     requires_customer_approval: bool
@@ -532,6 +535,7 @@ def detail_out(d: ECNDetail) -> ECNDetailOut:
         bom_changes=d.bom_changes,
         lead_time_changes=d.lead_time_changes,
         change_to_documents=d.change_to_documents,
+        add_mpn=d.add_mpn,
         wapc_delta_pct=d.wapc_delta_pct,
         wapc_threshold_override=d.wapc_threshold_override,
         requires_customer_approval=d.requires_customer_approval,

@@ -36,6 +36,7 @@ class ECNCreateRequest:
     bom_changes: bool = False
     lead_time_changes: bool = False
     change_to_documents: bool = False
+    add_mpn: bool = False
     wapc_delta_pct: float | None = None
     wapc_threshold_override: bool = False
     requires_customer_approval: bool = False
@@ -57,6 +58,7 @@ class ECNUpdateRequest:
     bom_changes: bool | None = None
     lead_time_changes: bool | None = None
     change_to_documents: bool | None = None
+    add_mpn: bool | None = None
     wapc_delta_pct: float | None = None
     wapc_threshold_override: bool | None = None
     requires_customer_approval: bool | None = None
@@ -202,6 +204,7 @@ class ECNDetail:
     customer_number: str | None = None
     customer_name: str | None = None
     customer_ecn_refs: str | None = None
+    add_mpn: bool = False
     role_assignments: list[RoleAssignment] = field(default_factory=list)
     approval_steps: list[ApprovalStep] = field(default_factory=list)
     extra_data: dict[str, Any] | None = None

@@ -72,7 +72,7 @@ export const TIMELINE_STAGES = [
   { status: 40, label: "Management Review",         roleId: null, parallel: true  },
   { status: 25, label: "DC Approval",               roleId: "DC", parallel: false },
   { status: 50, label: "Approved — Movex Write",    roleId: null, parallel: false },
-  { status: 60, label: "Implemented",               roleId: null, parallel: false },
+  { status: 60, label: "Movex Updated",              roleId: null, parallel: false },
   { status: 70, label: "Closed",                    roleId: null, parallel: false },
 ] as const
 
@@ -88,6 +88,7 @@ export const SCOPE_FLAGS: { key: string; label: string }[] = [
   { key: "operation_changes",          label: "Operation change" },
   { key: "lead_time_changes",          label: "Lead time change" },
   { key: "change_to_documents",        label: "Document change" },
+  { key: "add_mpn",                     label: "MPN update" },
   { key: "regulatory_impact",          label: "Regulatory impact" },
   { key: "requires_customer_approval", label: "Customer approval" },
 ]
@@ -98,7 +99,7 @@ export const TRIGGER_LABEL: Record<string, string> = {
   approve_role:               "Management Review",
   complete_management_review: "DC Approved",
   dc_approve:                 "Approved — pending Movex write",
-  movex_write_complete:       "Implemented",
+  movex_write_complete:       "Movex Updated",
   auto_close:                 "Closed",
   reject:                     "Rejected",
   resubmit:                   "Engineering Review",

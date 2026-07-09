@@ -155,12 +155,12 @@ class TestGuards:
         with pytest.raises(GuardFailed, match="Only the originator"):
             m.submit()
 
-    def test_submit_blocked_if_no_items(self):
+    def test_submit_allowed_with_no_items(self):
         ecn = _ecn(ECNStatus.DRAFT, item_count=0)
         ctx = _ctx(actor_username="jsmith")
         m = _machine(ecn, ctx)
-        with pytest.raises(GuardFailed, match="[Aa]t least one"):
-            m.submit()
+        m.submit()
+        assert m.ecn.status == ECNStatus.ENGINEERING_REVIEW
 
     def test_submit_blocked_if_no_title(self):
         ecn2 = ECNModel(

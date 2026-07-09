@@ -48,6 +48,11 @@ const SCOPE_OPTIONS = [
     desc: "A controlled document is being revised: assembly drawing, schematic, work instruction, test spec or similar — notifies Test Engineering",
   },
   {
+    id: "add_mpn",
+    label: "Add or update an MPN",
+    desc: "A Manufacturer Part Number is being introduced or changed — triggers Supply Chain review to validate the supplier and sourcing data in Movex",
+  },
+  {
     id: "regulatory_impact",
     label: "Regulatory / compliance impact",
     desc: "The change may affect RoHS, REACH, IPC class, customer qualification, or product certification (e.g. UL, CE mark) — triggers mandatory Quality Manager review under ISO 13485 §7.3.9",
@@ -79,6 +84,7 @@ async function createECN(body: FormValues) {
     operation_changes:   scope.has("operation_changes"),
     lead_time_changes:   scope.has("lead_time_changes"),
     change_to_documents: scope.has("change_to_documents"),
+    add_mpn:             scope.has("add_mpn"),
     regulatory_impact:   scope.has("regulatory_impact"),
   }
   const { data } = await axiosInstance.post("/api/v1/ecn/", payload)

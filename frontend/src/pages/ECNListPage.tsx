@@ -41,7 +41,7 @@ const STATUS_OPTIONS = [
   { value: "40", label: "Management Review" },
   { value: "25", label: "DC Approved" },
   { value: "50", label: "Approved" },
-  { value: "60", label: "Implemented" },
+  { value: "60", label: "Movex Updated" },
   { value: "65", label: "Rejected" },
   { value: "70", label: "Closed" },
   { value: "80", label: "Cancelled" },

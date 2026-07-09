@@ -78,6 +78,7 @@ export default function ECNDetailPage() {
     },
     onSuccess: (updated, vars) => {
       qc.setQueryData(["ecn", id], updated)        // write new ECN data immediately
+      qc.invalidateQueries({ queryKey: ["ecn", id] })  // ensure refetch on next mount
       qc.invalidateQueries({ queryKey: ["ecn-items", id] })
       qc.invalidateQueries({ queryKey: ["ecns"], refetchType: "all" })
       showToast(statusLabel(ecn?.status ?? 0), TRIGGER_LABEL[vars.trigger] ?? "updated")
