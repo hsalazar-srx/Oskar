@@ -58,6 +58,7 @@ def _row_to_detail(
         customer_number=row.get("customer_number"),
         customer_name=customer_name,
         customer_ecn_refs=row.get("customer_ecn_refs"),
+        dmr_url=row.get("dmr_url"),
         title=row["title"],
         description=row.get("description"),
         status=status_int,
@@ -220,6 +221,7 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
 
         _maybe("description", req.description)
         _maybe("customer_ecn_refs", req.customer_ecn_refs)
+        _maybe("dmr_url", req.dmr_url)
         for flag in (
             "is_new_item", "routing_changes", "operation_changes",
             "new_parts", "change_parts", "bom_changes",

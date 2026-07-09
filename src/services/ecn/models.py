@@ -28,6 +28,7 @@ class ECNCreateRequest:
     facility: str = "D"
     customer_number: str | None = None
     customer_ecn_refs: str | None = None
+    dmr_url: str | None = None
     is_new_item: bool = False
     routing_changes: bool = False
     operation_changes: bool = False
@@ -64,6 +65,7 @@ class ECNUpdateRequest:
     requires_customer_approval: bool | None = None
     customer_approval_reference: str | None = None
     regulatory_impact: bool | None = None
+    dmr_url: str | None = None
     extra_data: dict[str, Any] | None = None
 
 
@@ -204,6 +206,7 @@ class ECNDetail:
     customer_number: str | None = None
     customer_name: str | None = None
     customer_ecn_refs: str | None = None
+    dmr_url: str | None = None
     add_mpn: bool = False
     role_assignments: list[RoleAssignment] = field(default_factory=list)
     approval_steps: list[ApprovalStep] = field(default_factory=list)

@@ -253,6 +253,7 @@ async def update_ecn(
         requires_customer_approval=body.requires_customer_approval,
         customer_approval_reference=body.customer_approval_reference,
         regulatory_impact=body.regulatory_impact,
+        dmr_url=body.dmr_url,
         extra_data=body.extra_data,
     )
     ts = parse_if_unmodified_since(if_unmodified_since)

@@ -127,6 +127,15 @@ export async function createItem(ecnId: string, lineNumber: number, body: Record
   return data
 }
 
+export async function updateEcn(ecnId: string, body: Record<string, unknown>, updatedAt: string) {
+  const { data } = await axiosInstance.patch(
+    `/api/v1/ecn/${ecnId}`,
+    body,
+    { headers: { "If-Unmodified-Since": new Date(updatedAt).toUTCString() } },
+  )
+  return data
+}
+
 export async function updateItem(ecnId: string, itemId: string, body: Record<string, unknown>) {
   const { data } = await axiosInstance.patch(
     `/api/v1/ecn/${ecnId}/items/${itemId}`,

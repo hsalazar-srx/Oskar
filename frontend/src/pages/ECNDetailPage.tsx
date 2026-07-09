@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Spinner } from "@/components/ui/spinner"
 import { useAuthStore } from "@/store/auth"
-import { fetchECN, fetchItems, fireTransition, assignRole, approveRole } from "@/api/ecn"
+import { fetchECN, fetchItems, fireTransition, assignRole, approveRole, updateEcn } from "@/api/ecn"
 import { statusLabel, statusBadgeVariant } from "@/lib/ecn-status"
 import {
   ACTIONS_BY_STATUS, HEADER_ACTION_TRIGGERS, TRIGGER_LABEL, type ActionDef,
@@ -102,6 +102,14 @@ export default function ECNDetailPage() {
     },
   })
 
+  const dmrUpdate = useMutation({
+    mutationFn: (url: string | null) =>
+      updateEcn(id!, { dmr_url: url }, ecn?.updated_at ?? ""),
+    onSuccess: (updated) => {
+      qc.setQueryData(["ecn", id], updated)
+    },
+  })
+
   if (isLoading) return <Loading />
   if (isError || !ecn) return <ErrorState onBack={() => navigate("/ecn")} />
 
@@ -174,7 +182,14 @@ export default function ECNDetailPage() {
           </div>
         )}
 
-        <ECNCard ecn={ecn} />
+        <ECNCard
+          ecn={ecn}
+          canEditDmrUrl={
+            userGroups.includes("ecn-doc-controller") ||
+            ecn.originator_username === user?.username
+          }
+          onSaveDmrUrl={(url) => dmrUpdate.mutate(url)}
+        />
 
         <WorkflowPanel
           ecn={ecn}

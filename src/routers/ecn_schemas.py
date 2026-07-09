@@ -97,6 +97,7 @@ class ECNUpdateBody(BaseModel):
     requires_customer_approval: bool | None = None
     customer_approval_reference: str | None = None
     regulatory_impact: bool | None = None
+    dmr_url: str | None = Field(None, max_length=2000)
     extra_data: dict[str, Any] | None = None
 
 
@@ -369,6 +370,7 @@ class ECNDetailOut(BaseModel):
     customer_number: str | None
     customer_name: str | None
     customer_ecn_refs: str | None
+    dmr_url: str | None
     title: str
     description: str | None
     status: int
@@ -521,6 +523,7 @@ def detail_out(d: ECNDetail) -> ECNDetailOut:
         customer_number=d.customer_number,
         customer_name=d.customer_name,
         customer_ecn_refs=d.customer_ecn_refs,
+        dmr_url=d.dmr_url,
         title=d.title,
         description=d.description,
         status=d.status,

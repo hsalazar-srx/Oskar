@@ -1,3 +1,4 @@
+import { useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { ageDays, SCOPE_FLAGS } from "@/lib/ecn-workflow"
 
@@ -18,9 +19,11 @@ function Meta({ label, value, mono, warn }: { label: string; value: string; mono
 
 interface Props {
   ecn: Record<string, unknown>
+  canEditDmrUrl?: boolean
+  onSaveDmrUrl?: (url: string | null) => void
 }
 
-export default function ECNCard({ ecn }: Props) {
+export default function ECNCard({ ecn, canEditDmrUrl = false, onSaveDmrUrl }: Props) {
   const activeFlags = SCOPE_FLAGS.filter((f) => ecn[f.key])
   const age = ageDays(ecn.created_at as string)
 
@@ -34,6 +37,16 @@ export default function ECNCard({ ecn }: Props) {
   const refTags = customerEcnRefs
     ? customerEcnRefs.split(",").map((s) => s.trim()).filter(Boolean)
     : []
+
+  const dmrUrl = (ecn.dmr_url as string | null) ?? null
+  const [editingDmr, setEditingDmr] = useState(false)
+  const [dmrInput, setDmrInput] = useState(dmrUrl ?? "")
+
+  function handleDmrSave() {
+    const trimmed = dmrInput.trim() || null
+    onSaveDmrUrl?.(trimmed)
+    setEditingDmr(false)
+  }
 
   return (
     <div className="rounded-xl border border-[#e8ecf0] bg-white shadow-[var(--shadow-sm)] overflow-hidden">
@@ -80,6 +93,49 @@ export default function ECNCard({ ecn }: Props) {
             </div>
           </div>
         )}
+
+        {/* DMR / SharePoint link */}
+        <div className="flex flex-col gap-1 pt-1 border-t border-[#f1f5f9]">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-[#94a3b8]">DMR Document</span>
+            {canEditDmrUrl && !editingDmr && (
+              <button
+                onClick={() => { setDmrInput(dmrUrl ?? ""); setEditingDmr(true) }}
+                className="text-[11px] text-[#0066cc] hover:underline"
+              >
+                {dmrUrl ? "Edit" : "Add link"}
+              </button>
+            )}
+          </div>
+
+          {editingDmr ? (
+            <div className="flex gap-2 items-center">
+              <input
+                type="url"
+                value={dmrInput}
+                onChange={(e) => setDmrInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleDmrSave(); if (e.key === "Escape") setEditingDmr(false) }}
+                placeholder="https://srxglobal.sharepoint.com/..."
+                autoFocus
+                className="flex-1 text-sm border border-[#cbd5e1] rounded-md px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-[#0066cc]/30 focus:border-[#0066cc]"
+              />
+              <button onClick={handleDmrSave} className="text-xs font-medium text-white bg-[#0066cc] px-3 py-1.5 rounded-md hover:bg-[#0052a3]">Save</button>
+              <button onClick={() => setEditingDmr(false)} className="text-xs text-[#64748b] hover:text-[#0f172a]">Cancel</button>
+            </div>
+          ) : dmrUrl ? (
+            <a
+              href={dmrUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm text-[#0066cc] hover:underline truncate"
+              title={dmrUrl}
+            >
+              {dmrUrl}
+            </a>
+          ) : (
+            <span className="text-sm text-[#94a3b8] italic">No document linked</span>
+          )}
+        </div>
 
         {activeFlags.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
