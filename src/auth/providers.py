@@ -35,7 +35,7 @@ class IdentityProvider(Protocol):
     def get_groups(self, username: str) -> list[str]:
         """Return AD group memberships for the given username.
 
-        Returns CN values of groups the user belongs to, e.g. ['OSKAR-Approvers'].
+        Returns CN values of groups the user belongs to, e.g. ['ecn-approver'].
         Returns empty list on any error — callers treat that as no group membership.
         """
         ...
@@ -313,14 +313,28 @@ class DevIdentityProvider:
     def get_groups(self, username: str) -> list[str]:
         # Return all OSKAR groups so any dev user can exercise all workflow paths
         return [
-            "OSKAR-Engineers",
-            "OSKAR-Approvers",
-            "OSKAR-Admins",
-            "OSKAR-DC",
+            "ecn-initiator",
+            "ecn-approver",
+            "ecn-admin",
+            "ecn-doc-controller",
         ]
 
     def get_email(self, username: str) -> str | None:
         return f"{username}@srxglobal.local"
+
+    def list_application_groups(self) -> list[dict]:
+        base = "OU=Application Roles,OU=Groups,DC=srxglobal,DC=com"
+        dev_user = {
+            "username": "hsalazar",
+            "display_name": "Hector Salazar",
+            "email": "hector.salazar@srxglobal.com",
+        }
+        return [
+            {"cn": "ecn-admin",          "distinguished_name": f"CN=ecn-admin,{base}",          "members": [dev_user]},
+            {"cn": "ecn-approver",        "distinguished_name": f"CN=ecn-approver,{base}",        "members": [dev_user]},
+            {"cn": "ecn-doc-controller",  "distinguished_name": f"CN=ecn-doc-controller,{base}",  "members": [dev_user]},
+            {"cn": "ecn-initiator",       "distinguished_name": f"CN=ecn-initiator,{base}",       "members": [dev_user]},
+        ]
 
 
 def get_identity_provider() -> IdentityProvider:

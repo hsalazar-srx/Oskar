@@ -230,7 +230,7 @@ function RoleAssignmentsSection() {
 
 export default function AdminPage() {
   const user = useAuthStore((s) => s.user)
-  const isDC = user?.groups?.includes("OSKAR-DC") ?? false
+  const isDC = user?.groups?.includes("ecn-doc-controller") ?? false
 
   if (!isDC) {
     return (

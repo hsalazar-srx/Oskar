@@ -156,7 +156,7 @@ export default function ECNListPage() {
               <span className="font-medium text-[#475569]">{user.username}</span>
             </span>
           )}
-          {user?.groups?.includes("OSKAR-DC") && (
+          {user?.groups?.includes("ecn-doc-controller") && (
             <button
               onClick={() => navigate("/admin")}
               className="text-xs text-[#94a3b8] hover:text-[#475569] transition-colors duration-150"

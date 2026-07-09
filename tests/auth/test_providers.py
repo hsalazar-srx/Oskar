@@ -53,10 +53,10 @@ class TestDevIdentityProvider:
     def test_get_groups_returns_all_oskar_groups(self):
         p = self._make()
         groups = p.get_groups("hsalazar")
-        assert "OSKAR-Engineers" in groups
-        assert "OSKAR-Approvers" in groups
-        assert "OSKAR-Admins" in groups
-        assert "OSKAR-DC" in groups
+        assert "ecn-initiator" in groups
+        assert "ecn-approver" in groups
+        assert "ecn-admin" in groups
+        assert "ecn-doc-controller" in groups
 
     def test_get_email_returns_local_address(self):
         p = self._make()

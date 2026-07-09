@@ -52,7 +52,7 @@ _EM_USER = CurrentUser(
     username="em_user",
     display_name="Engineering Manager",
     email="em@scanfil.com",
-    groups=["OSKAR-Approvers"],
+    groups=["ecn-approver"],
     jti="test-jti-em-001",
 )
 
@@ -60,7 +60,7 @@ _QM_USER = CurrentUser(
     username="qm_user",
     display_name="Quality Manager",
     email="qm@scanfil.com",
-    groups=["OSKAR-Approvers"],
+    groups=["ecn-approver"],
     jti="test-jti-qm-001",
 )
 
@@ -68,7 +68,7 @@ _OR_USER = CurrentUser(
     username="or_user",
     display_name="Originator",
     email="or@scanfil.com",
-    groups=["OSKAR-Engineers"],
+    groups=["ecn-initiator"],
     jti="test-jti-or-001",
 )
 
@@ -76,7 +76,7 @@ _OTHER = CurrentUser(
     username="other_user",
     display_name="Other User",
     email="other@scanfil.com",
-    groups=["OSKAR-Engineers"],
+    groups=["ecn-initiator"],
     jti="test-jti-other-001",
 )
 

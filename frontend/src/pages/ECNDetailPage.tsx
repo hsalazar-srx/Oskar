@@ -179,7 +179,7 @@ export default function ECNDetailPage() {
         <WorkflowPanel
           ecn={ecn}
           currentUsername={user?.username ?? ""}
-          isUserDC={userGroups.includes("OSKAR-DC")}
+          isUserDC={userGroups.includes("ecn-doc-controller")}
           roleAssignIsPending={roleAssign.isPending}
           transitionIsPending={transition.isPending || approveStep.isPending}
           onRoleAssign={(roleId, username) => roleAssign.mutate({ roleId, username, actorRole: "DC" })}
@@ -264,7 +264,7 @@ export default function ECNDetailPage() {
           <ImplementationSchedulePanel
             ecnId={id!}
             checklist={(ecn.extra_data?.impl_checklist ?? []) as ChecklistItem[]}
-            isUserDC={userGroups.includes("OSKAR-DC")}
+            isUserDC={userGroups.includes("ecn-doc-controller")}
             isOriginator={user?.username === ecn.originator_username}
           />
         )}

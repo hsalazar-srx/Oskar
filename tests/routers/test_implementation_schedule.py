@@ -46,7 +46,7 @@ _DC = CurrentUser(
     username="dc_user",
     display_name="Doc Controller",
     email="dc@scanfil.com",
-    groups=["OSKAR-DC"],
+    groups=["ecn-doc-controller"],
     jti="test-jti-dc-001",
 )
 
@@ -54,7 +54,7 @@ _ORIGINATOR = CurrentUser(
     username="or_user",
     display_name="Originator",
     email="or@scanfil.com",
-    groups=["OSKAR-Engineers"],
+    groups=["ecn-initiator"],
     jti="test-jti-or-001",
 )
 
@@ -62,7 +62,7 @@ _OTHER = CurrentUser(
     username="other_user",
     display_name="Other",
     email="other@scanfil.com",
-    groups=["OSKAR-Engineers"],
+    groups=["ecn-initiator"],
     jti="test-jti-other-001",
 )
 

@@ -36,7 +36,7 @@ _USER = CurrentUser(
     username="jsmith",
     display_name="John Smith",
     email="jsmith@scanfil.com",
-    groups=["OSKAR-Engineers"],
+    groups=["ecn-initiator"],
     jti="test-jti-sse-001",
 )
 

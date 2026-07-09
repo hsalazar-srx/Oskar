@@ -84,7 +84,7 @@ export default function ECNCommentsPanel({ ecnId }: Props) {
     }
   }
 
-  const isUserDC = user?.groups?.includes("OSKAR-DC") ?? false
+  const isUserDC = user?.groups?.includes("ecn-doc-controller") ?? false
 
   return (
     <div className="rounded-xl border border-[#e8ecf0] bg-white shadow-[var(--shadow-sm)] overflow-hidden">

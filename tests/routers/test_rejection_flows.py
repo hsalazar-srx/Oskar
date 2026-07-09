@@ -42,7 +42,7 @@ _ORIGINATOR = CurrentUser(
     username="or_user",
     display_name="Originator User",
     email="or@scanfil.com",
-    groups=["OSKAR-Engineers"],
+    groups=["ecn-initiator"],
     jti="test-jti-or-001",
 )
 
@@ -50,7 +50,7 @@ _OTHER = CurrentUser(
     username="other_user",
     display_name="Other User",
     email="other@scanfil.com",
-    groups=["OSKAR-Engineers"],
+    groups=["ecn-initiator"],
     jti="test-jti-other-001",
 )
 

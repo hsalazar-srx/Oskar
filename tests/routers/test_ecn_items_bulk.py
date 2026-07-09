@@ -32,7 +32,7 @@ _ENGINEER = CurrentUser(
     username="eng_user",
     display_name="Engineer",
     email="eng@scanfil.com",
-    groups=["OSKAR-Engineers"],
+    groups=["ecn-initiator"],
     jti="test-jti-bulk-001",
 )
 

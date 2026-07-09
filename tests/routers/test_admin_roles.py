@@ -27,7 +27,7 @@ _DC = CurrentUser(
     username="dc_user",
     display_name="Doc Controller",
     email="dc@scanfil.com",
-    groups=["OSKAR-DC"],
+    groups=["ecn-doc-controller"],
     jti="test-jti-dc-001",
 )
 
@@ -35,7 +35,7 @@ _NON_DC = CurrentUser(
     username="eng_user",
     display_name="Engineer",
     email="eng@scanfil.com",
-    groups=["OSKAR-Engineers"],
+    groups=["ecn-initiator"],
     jti="test-jti-eng-001",
 )
 

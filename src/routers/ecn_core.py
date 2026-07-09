@@ -490,7 +490,7 @@ class ChecklistPatchBody(BaseModel):
 
 
 def _require_dc_or_originator(user: CurrentUser, ecn: Any) -> None:
-    is_dc = "OSKAR-DC" in user.groups
+    is_dc = "ecn-doc-controller" in user.groups
     is_originator = user.username == ecn.originator_username
     if not (is_dc or is_originator):
         raise HTTPException(

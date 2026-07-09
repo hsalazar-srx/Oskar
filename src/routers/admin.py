@@ -15,7 +15,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth.dependencies import CurrentUser, get_current_user
-from src.auth.providers import LDAPIdentityProvider, get_identity_provider
+from src.auth.providers import DevIdentityProvider, LDAPIdentityProvider, get_identity_provider
 from src.db import get_session
 from src.services.admin import (
     AdminService,
@@ -26,7 +26,7 @@ from src.tasks.ecn_notifications import send_ecn_digest
 
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
 
-_DC_GROUP = "OSKAR-DC"
+_DC_GROUP = "ecn-doc-controller"
 
 _VALID_ROLE_IDS = frozenset(
     {"DC", "OR", "SE", "CE", "EM", "QM", "PM", "SC", "FN", "AD", "CA", "RD", "TE", "MQ"}
@@ -55,9 +55,9 @@ async def list_ldap_groups(
     """
     _require_dc(user)
     provider = get_identity_provider()
-    if not isinstance(provider, LDAPIdentityProvider):
-        return []
-    return provider.list_application_groups()
+    if isinstance(provider, (LDAPIdentityProvider, DevIdentityProvider)):
+        return provider.list_application_groups()
+    return []
 
 
 # ── ECN digest (existing) ─────────────────────────────────────────────────────

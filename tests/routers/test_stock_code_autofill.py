@@ -48,7 +48,7 @@ _ENGINEER = CurrentUser(
     username="eng_user",
     display_name="Test Engineer",
     email="eng@scanfil.com",
-    groups=["OSKAR-Engineers"],
+    groups=["ecn-initiator"],
     jti="test-jti-s33-001",
 )
 

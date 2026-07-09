@@ -44,14 +44,14 @@ def test_access_token_round_trip():
         username="jsmith",
         display_name="John Smith",
         email="jsmith@scanfil.apac",
-        groups=["OSKAR-Engineers"],
+        groups=["ecn-initiator"],
     )
     payload = decode_access_token(token)
 
     assert payload["sub"] == "jsmith"
     assert payload["name"] == "John Smith"
     assert payload["email"] == "jsmith@scanfil.apac"
-    assert payload["groups"] == ["OSKAR-Engineers"]
+    assert payload["groups"] == ["ecn-initiator"]
     assert payload["jti"] == jti
     assert payload["iss"] == ISSUER
     assert payload["aud"] == AUDIENCE
@@ -160,7 +160,7 @@ def test_alg_none_access_token_rejected():
         "sub": "attacker",
         "name": "Attacker",
         "email": None,
-        "groups": ["OSKAR-Admins"],
+        "groups": ["ecn-admin"],
         "iat": datetime.now(UTC),
         "exp": datetime.now(UTC) + timedelta(hours=1),
         "jti": "00000000-0000-0000-0000-000000000000",

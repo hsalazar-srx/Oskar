@@ -48,7 +48,7 @@ _DC_USER = CurrentUser(
     username="dc_user",
     display_name="Document Controller",
     email="dc@scanfil.com",
-    groups=["OSKAR-Engineers"],
+    groups=["ecn-initiator"],
     jti="test-jti-dc-001",
 )
 
@@ -56,7 +56,7 @@ _OTHER = CurrentUser(
     username="other_user",
     display_name="Other User",
     email="other@scanfil.com",
-    groups=["OSKAR-Engineers"],
+    groups=["ecn-initiator"],
     jti="test-jti-other-001",
 )
 

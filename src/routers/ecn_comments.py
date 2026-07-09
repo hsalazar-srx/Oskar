@@ -219,7 +219,7 @@ async def delete_comment(
     comment = await _get_comment(session, comment_id, ecn_id)
 
     is_dc = any(
-        g in getattr(user, "groups", []) for g in ("OSKAR-DC",)
+        g in getattr(user, "groups", []) for g in ("ecn-doc-controller",)
     )
     if comment["author_username"] != user.username and not is_dc:
         raise HTTPException(

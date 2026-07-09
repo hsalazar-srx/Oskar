@@ -41,7 +41,7 @@ _CELERY = CurrentUser(
     username="celery-worker",
     display_name="Celery Worker",
     email="celery@scanfil.com",
-    groups=["OSKAR-Engineers"],
+    groups=["ecn-initiator"],
     jti="test-jti-celery-001",
 )
 

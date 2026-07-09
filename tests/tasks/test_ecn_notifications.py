@@ -44,7 +44,7 @@ _DC_USER = CurrentUser(
     username="dc_user",
     display_name="Document Controller",
     email="dc@scanfil.com",
-    groups=["OSKAR-DC"],
+    groups=["ecn-doc-controller"],
     jti="test-jti-dc-001",
 )
 
@@ -335,7 +335,7 @@ class TestOnDemandDigestEndpoint:
             username="eng_user",
             display_name="Engineer",
             email="eng@scanfil.com",
-            groups=["OSKAR-Engineers"],
+            groups=["ecn-initiator"],
             jti="test-jti-eng-999",
         )
         with patch("src.routers.admin.send_ecn_digest") as mock_task:
