@@ -212,6 +212,55 @@ class LDAPIdentityProvider:
         except Exception:
             return None
 
+    def list_application_groups(self) -> list[dict]:
+        """Return all groups under OU=Application Roles with their members.
+
+        Each entry: { cn, distinguished_name, members: [{username, display_name, email}] }
+        Returns empty list on any LDAP error.
+        """
+        try:
+            import ldap3  # type: ignore[import]
+
+            server = self._make_server(self.server_uri)
+            conn = ldap3.Connection(
+                server,
+                user=self.bind_dn,
+                password=self.bind_pw,
+                auto_bind=True,
+            )
+            conn.search(
+                search_base=self._GROUP_SEARCH_BASE,
+                search_filter="(objectClass=group)",
+                attributes=["cn", "distinguishedName", "member"],
+            )
+            groups = []
+            for entry in conn.entries:
+                cn = str(entry.cn.value)
+                dn = str(entry.distinguishedName.value)
+                member_dns: list[str] = list(entry.member.values) if entry.member else []
+
+                members = []
+                for member_dn in member_dns:
+                    conn.search(
+                        search_base=member_dn,
+                        search_filter="(objectClass=user)",
+                        attributes=["sAMAccountName", "displayName", "mail"],
+                        search_scope=ldap3.BASE,
+                    )
+                    if conn.entries:
+                        u = conn.entries[0]
+                        members.append({
+                            "username": str(u.sAMAccountName.value) if u.sAMAccountName else "",
+                            "display_name": str(u.displayName.value) if u.displayName else None,
+                            "email": str(u.mail.value) if u.mail else None,
+                        })
+
+                groups.append({"cn": cn, "distinguished_name": dn, "members": members})
+
+            return sorted(groups, key=lambda g: g["cn"])
+        except Exception:
+            return []
+
 
 class EntraIDProvider:
     """Stub — Scanfil Group Entra ID provider (post-OSKAR v1).

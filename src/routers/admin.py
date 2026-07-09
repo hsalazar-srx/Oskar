@@ -15,6 +15,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth.dependencies import CurrentUser, get_current_user
+from src.auth.providers import LDAPIdentityProvider, get_identity_provider
 from src.db import get_session
 from src.services.admin import (
     AdminService,
@@ -38,6 +39,25 @@ def _require_dc(user: CurrentUser) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only Document Controllers may access this endpoint.",
         )
+
+
+# ── LDAP groups (read-only) ───────────────────────────────────────────────────
+
+@admin_router.get("/ldap-groups", status_code=status.HTTP_200_OK)
+async def list_ldap_groups(
+    user: CurrentUser = Depends(get_current_user),
+) -> list[dict[str, Any]]:
+    """Return all Application Roles groups from LDAP with their members.
+
+    Queries AD live. Returns an empty list (not an error) if LDAP is
+    unavailable or the provider does not support group enumeration
+    (e.g. DevIdentityProvider in local dev).
+    """
+    _require_dc(user)
+    provider = get_identity_provider()
+    if not isinstance(provider, LDAPIdentityProvider):
+        return []
+    return provider.list_application_groups()
 
 
 # ── ECN digest (existing) ─────────────────────────────────────────────────────
