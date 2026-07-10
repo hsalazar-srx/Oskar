@@ -320,7 +320,7 @@ class TestQueueRoutingOperationsOutbox:
         )
 
         with (
-            patch.object(ECNService, "transition", new=AsyncMock(return_value=ecn_detail)),
+            patch.object(ECNService, "transition", new=AsyncMock(return_value=(ecn_detail, []))),
             patch.object(ECNService, "_queue_routing_operations_outbox", new=AsyncMock()) as mock_queue,
         ):
             resp = client.patch(

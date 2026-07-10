@@ -157,7 +157,8 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
         )
 
         await _auto_assign_roles(
-            self._session, ecn_id, facility, actor_username, assigned_by=actor_username
+            self._session, ecn_id, facility, actor_username, assigned_by=actor_username,
+            customer_number=req.customer_number,
         )
 
         ecn_model = ECNModel(

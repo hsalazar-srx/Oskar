@@ -10,9 +10,9 @@ import { statusLabel, statusBadgeVariant } from "@/lib/ecn-status"
 import {
   ACTIONS_BY_STATUS, HEADER_ACTION_TRIGGERS, TRIGGER_LABEL, type ActionDef,
 } from "@/lib/ecn-workflow"
-import ECNCard from "@/components/ecn/ECNCard"
+import ECNCard, { type ECNEditableFields } from "@/components/ecn/ECNCard"
 import WorkflowPanel from "@/components/ecn/WorkflowPanel"
-import ECNItemPanel from "@/components/ECNItemPanel"
+import ECNItemPanel from "@/components/ecn/ECNItemPanel"
 import ECNCommentsPanel from "@/components/ecn/ECNCommentsPanel"
 import ImplementationSchedulePanel from "@/components/ecn/ImplementationSchedulePanel"
 import type { ChecklistItem } from "@/components/ecn/ImplementationSchedulePanel"
@@ -47,12 +47,12 @@ export default function ECNDetailPage() {
 
   useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current) }, [])
 
-  const { data: ecn, isLoading, isError } = useQuery({
+  const { data: ecn, isLoading, isFetching, isError } = useQuery({
     queryKey: ["ecn", id],
     queryFn: () => fetchECN(id!),
     enabled: !!id,
     staleTime: 0,
-    gcTime: 0,
+    refetchOnMount: "always",
   })
 
   const { data: items = [] } = useQuery({
@@ -110,7 +110,16 @@ export default function ECNDetailPage() {
     },
   })
 
-  if (isLoading) return <Loading />
+  const detailsUpdate = useMutation({
+    mutationFn: (fields: ECNEditableFields) =>
+      updateEcn(id!, fields, ecn?.updated_at ?? ""),
+    onSuccess: (updated) => {
+      qc.setQueryData(["ecn", id], updated)
+      qc.invalidateQueries({ queryKey: ["ecns"], refetchType: "all" })
+    },
+  })
+
+  if (isLoading || isFetching) return <Loading />
   if (isError || !ecn) return <ErrorState onBack={() => navigate("/ecn")} />
 
   const actions = ACTIONS_BY_STATUS[ecn.status] ?? []
@@ -189,6 +198,13 @@ export default function ECNDetailPage() {
             ecn.originator_username === user?.username
           }
           onSaveDmrUrl={(url) => dmrUpdate.mutate(url)}
+          canEditDetails={
+            (ecn.status === 0 || ecn.status === 65) &&
+            (userGroups.includes("ecn-doc-controller") ||
+              ecn.originator_username === user?.username)
+          }
+          onSaveDetails={(fields) => detailsUpdate.mutate(fields)}
+          savingDetails={detailsUpdate.isPending}
         />
 
         <WorkflowPanel

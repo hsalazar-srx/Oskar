@@ -160,3 +160,168 @@ export async function bulkCreateItems(ecnId: string, file: File) {
   )
   return data
 }
+
+// ── Routing operations ────────────────────────────────────────────────────────
+
+export interface RoutingOp {
+  id: string
+  ecn_item_id: string
+  operation_number: number
+  operation_description: string
+  work_centre: string
+  run_time: number
+  setup_time: number | null
+  change_type: "ADD" | "UPDATE" | "DELETE"
+  movex_snapshot: Record<string, unknown> | null
+  created_at: string
+  updated_at: string
+}
+
+export interface RoutingOpBody {
+  operation_number: number
+  operation_description: string
+  work_centre: string
+  run_time: number
+  setup_time?: number | null
+  change_type: string
+}
+
+export async function fetchRoutingOps(ecnId: string, itemId: string): Promise<RoutingOp[]> {
+  const { data } = await axiosInstance.get(`/api/v1/ecn/${ecnId}/items/${itemId}/routing`)
+  return data
+}
+
+export async function createRoutingOp(ecnId: string, itemId: string, body: RoutingOpBody): Promise<RoutingOp> {
+  const { data } = await axiosInstance.post(`/api/v1/ecn/${ecnId}/items/${itemId}/routing`, body)
+  return data
+}
+
+export async function updateRoutingOp(
+  ecnId: string,
+  itemId: string,
+  opId: string,
+  body: Partial<Omit<RoutingOpBody, "operation_number">>,
+): Promise<RoutingOp> {
+  const { data } = await axiosInstance.patch(`/api/v1/ecn/${ecnId}/items/${itemId}/routing/${opId}`, body)
+  return data
+}
+
+export async function deleteRoutingOp(ecnId: string, itemId: string, opId: string): Promise<void> {
+  await axiosInstance.delete(`/api/v1/ecn/${ecnId}/items/${itemId}/routing/${opId}`)
+}
+
+// ── MPN management ────────────────────────────────────────────────────────────
+
+export interface MPN {
+  id: string
+  ecn_item_id: string
+  mpn: string
+  manufacturer: string | null
+  is_default: boolean
+  alias_written: boolean
+  msl_level: number | null
+  lifecycle: "active" | "eol" | "nrnd" | null
+  eol_date: string | null
+  lead_time_weeks: number | null
+  packaging_type: "tape_reel" | "tray" | "tube" | "cut_tape" | null
+  do_not_buy: boolean
+  alt_mpn: string | null
+  notes: string | null
+  supplier_data_at: string | null
+  created_at: string
+}
+
+export interface MPNBody {
+  mpn: string
+  manufacturer?: string | null
+  is_default?: boolean
+  msl_level?: number | null
+  lifecycle?: string | null
+  eol_date?: string | null
+  lead_time_weeks?: number | null
+  packaging_type?: string | null
+  do_not_buy?: boolean
+  alt_mpn?: string | null
+  notes?: string | null
+}
+
+export async function fetchMPNs(ecnId: string, itemId: string): Promise<MPN[]> {
+  const { data } = await axiosInstance.get(`/api/v1/ecn/${ecnId}/items/${itemId}`)
+  return (data.mpns ?? []) as MPN[]
+}
+
+export async function createMPN(ecnId: string, itemId: string, body: MPNBody): Promise<MPN> {
+  const { data } = await axiosInstance.post(`/api/v1/ecn/${ecnId}/items/${itemId}/mpns`, body)
+  return data
+}
+
+export async function updateMPN(
+  ecnId: string,
+  itemId: string,
+  mpnId: string,
+  body: Partial<MPNBody>,
+): Promise<MPN> {
+  const { data } = await axiosInstance.patch(`/api/v1/ecn/${ecnId}/items/${itemId}/mpns/${mpnId}`, body)
+  return data
+}
+
+export async function deleteMPN(ecnId: string, itemId: string, mpnId: string): Promise<void> {
+  await axiosInstance.delete(`/api/v1/ecn/${ecnId}/items/${itemId}/mpns/${mpnId}`)
+}
+
+// ── Customer role defaults (SE/PM per customer, admin) ─────────────────────────
+
+export interface CustomerRoleDefault {
+  id: string
+  cuno: string
+  customer_name: string | null
+  role_id: "SE" | "PM"
+  username: string
+  display_name: string | null
+  email: string | null
+  is_default: boolean
+  source: "manual" | "stargile_import"
+  is_active: boolean
+  added_by: string | null
+  added_at: string
+  notes: string | null
+}
+
+export async function fetchCustomerRoleDefaults(params?: {
+  cuno?: string
+  role_id?: string
+}): Promise<CustomerRoleDefault[]> {
+  const { data } = await axiosInstance.get("/api/v1/admin/customer-role-defaults", { params })
+  return data
+}
+
+export async function addCustomerRoleDefault(body: {
+  cuno: string
+  role_id: string
+  username: string
+  customer_name?: string
+  display_name?: string
+  email?: string
+  is_default?: boolean
+  notes?: string
+}): Promise<CustomerRoleDefault> {
+  const { data } = await axiosInstance.post("/api/v1/admin/customer-role-defaults", body)
+  return data
+}
+
+export async function setCustomerRoleDefault(
+  id: string,
+  cuno: string,
+  roleId: string,
+): Promise<CustomerRoleDefault> {
+  const { data } = await axiosInstance.patch(
+    `/api/v1/admin/customer-role-defaults/${id}/default`,
+    null,
+    { params: { cuno, role_id: roleId } },
+  )
+  return data
+}
+
+export async function removeCustomerRoleDefault(id: string): Promise<void> {
+  await axiosInstance.delete(`/api/v1/admin/customer-role-defaults/${id}`)
+}

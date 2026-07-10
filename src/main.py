@@ -13,6 +13,7 @@ from src.adapters.suppliers.digikey import DigiKeyAdapter
 from src.adapters.suppliers.nexar import NexarAdapter
 from src.logging_config import configure_logging
 from src.middleware.correlation import CorrelationIdMiddleware
+from src.middleware.no_cache import NoCacheMiddleware
 from src.middleware.origin import OriginCheckMiddleware
 from src.routers import v1_router
 from src.routers.health import health_router
@@ -64,6 +65,7 @@ def _parse_origins(raw: str) -> list[str]:
     ]
 
 
+app.add_middleware(NoCacheMiddleware)
 app.add_middleware(CorrelationIdMiddleware)
 _cors_origins = _parse_origins(
     os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")

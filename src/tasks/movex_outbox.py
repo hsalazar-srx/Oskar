@@ -351,13 +351,12 @@ async def _dispatch_mi_call(
         PDS002MI.UpdateOperation  → update_routing_operation
         PDS002MI.AddOperation     → add_routing_operation
         MMS025MI.AddAlias         → add_item_alias
-        MPDDOC.CreateDrawing      → create_drawing
-
     Returns the MI response dict.  Caller must check MSID.
     """
     from src.adapters.erp.movex import MovexRestAdapter
 
     adapter = MovexRestAdapter()
+    await adapter.open()
 
     dispatch: dict[str, Any] = {
         "PDS001MI.AddProduct": adapter.create_product,
@@ -366,15 +365,18 @@ async def _dispatch_mi_call(
         "PDS002MI.UpdateOperation": adapter.update_routing_operation,
         "PDS002MI.AddOperation": adapter.add_routing_operation,
         "MMS025MI.AddAlias": adapter.add_item_alias,
-        "MPDDOC.CreateDrawing": adapter.create_drawing,
     }
 
     handler = dispatch.get(mi_transaction)
     if handler is None:
+        await adapter.close()
         raise ValueError(f"Unknown MI transaction: {mi_transaction!r}")
 
-    # idempotency_key is always injected regardless of other params
-    return await handler(**mi_params, idempotency_key=idempotency_key)
+    try:
+        # idempotency_key is always injected regardless of other params
+        return await handler(**mi_params, idempotency_key=idempotency_key)
+    finally:
+        await adapter.close()
 
 
 def _run_mi_call(

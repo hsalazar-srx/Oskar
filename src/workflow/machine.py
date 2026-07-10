@@ -314,15 +314,11 @@ class ECNWorkflowMachine:
         # For MANAGEMENT_REVIEW parallel block: called to check if all required
         # roles have approved (caller queries ecn_approval_steps).
         all_required_approved_fn: Callable[[], Coroutine[Any, Any, bool]] | None = None,
-        # For DC_APPROVED gate: called to get item IDs missing drawing numbers.
-        # Returns list of item IDs that are is_new_item=TRUE with drawing_number IS NULL.
-        missing_drawings_fn: Callable[[], Coroutine[Any, Any, list[str]]] | None = None,
     ) -> None:
         self.ecn = ecn
         self.ctx = ctx
         self._on_transition = on_transition
         self._all_required_approved_fn = all_required_approved_fn
-        self._missing_drawings_fn = missing_drawings_fn
 
         # Transition record built by _before_transition, consumed by _after_transition
         self._pending_from_status: int | None = None
@@ -519,12 +515,12 @@ class ECNWorkflowMachine:
         return True
 
     def _guard_dc_approve(self) -> bool:
-        """DC_APPROVED → APPROVED: DC role + drawing numbers + customer approval gate.
+        """DC_APPROVED → APPROVED: DC role + customer approval gate.
 
         ADR-009: consolidates former _guard_is_dc + _guard_close into one gate.
         DC certifies the full change package before the Movex write is authorised.
-        Drawing numbers must be set on all is_new_item=TRUE items before dc_approve.
         Customer approval gate: ISO 13485 §7.3.9.
+        Drawing numbers are optional — DC approves when the package is ready.
         """
         if self.ctx.actor_role != "DC":
             raise GuardFailed(
@@ -538,16 +534,6 @@ class ECNWorkflowMachine:
             raise GuardFailed(
                 "Customer approval is required for this ECN (ISO 13485 §7.3.9). "
                 "Set customer_approved_at before DC approval."
-            )
-        # Drawing number check: caller pre-validates via missing_drawings_fn.
-        # The _pending_missing_drawings attr is set by ECNService.transition
-        # before firing the trigger (same pattern as _all_required_approved_fn).
-        missing = getattr(self, "_pending_missing_drawings", None)
-        if missing:
-            ids = ", ".join(missing)
-            raise GuardFailed(
-                f"All new items must have a drawing number before DC approval. "
-                f"Missing: {ids}."
             )
         return True
 

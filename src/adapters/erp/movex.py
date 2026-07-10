@@ -487,23 +487,3 @@ class MovexRestAdapter(ERPAdapter):
         )
         return resp.json()
 
-    async def create_drawing(
-        self,
-        item_number: str,
-        drawing_number: str,
-        *,
-        idempotency_key: str,
-    ) -> dict[str, Any]:
-        # NOTE: MPDDOC implementation path unconfirmed (PRE-12 investigation item).
-        # This calls a custom endpoint that @developer-dotnet must implement.
-        # See ai/memory/02-movex-erp-authority.md §6 MPDDOC note.
-        resp = await self._post(
-            "/ecn/drawing",
-            json={
-                "cono": self.cono,
-                "itno": item_number,
-                "dwno": drawing_number,
-            },
-            headers={"Idempotency-Key": idempotency_key},
-        )
-        return resp.json()

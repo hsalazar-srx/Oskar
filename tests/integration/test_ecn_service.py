@@ -84,6 +84,37 @@ class TestECNServiceCreate:
         assert dc.username == "dc_user"
         assert dc.is_auto_assigned is True
 
+    async def test_facility_wide_se_used_when_no_customer_default(self, db_session: AsyncSession):
+        svc = ECNService(db_session)
+        ecn = await svc.create(_create_req(customer_number=None), _ACTOR)
+
+        se = next((ra for ra in ecn.role_assignments if ra.role_id == "SE"), None)
+        assert se is not None
+        assert se.username == "eng_user"  # facility-wide system_role_users candidate
+
+    async def test_customer_scoped_se_default_overrides_facility_wide(self, db_session: AsyncSession):
+        import uuid
+        import sqlalchemy as sa
+
+        cuno = "TEST01"
+        await db_session.execute(
+            sa.text(
+                "INSERT INTO customer_role_defaults "
+                "(id, cuno, customer_name, role_id, username, is_default, source, added_by) "
+                "VALUES (:id, :cuno, 'TEST CUSTOMER', 'SE', 'customer_se_user', TRUE, 'manual', 'test-seed')"
+            ),
+            {"id": str(uuid.uuid4()), "cuno": cuno},
+        )
+        await db_session.commit()
+
+        svc = ECNService(db_session)
+        ecn = await svc.create(_create_req(customer_number=cuno), _ACTOR)
+
+        se = next((ra for ra in ecn.role_assignments if ra.role_id == "SE"), None)
+        assert se is not None
+        assert se.username == "customer_se_user"
+        assert se.is_auto_assigned is True
+
     async def test_audit_history_entry_created(self, db_session: AsyncSession):
         import sqlalchemy as sa
         svc = ECNService(db_session)

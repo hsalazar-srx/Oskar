@@ -1,10 +1,21 @@
+import { useMemo, useState } from "react"
 import { Link } from "react-router-dom"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { Badge } from "@/components/ui/badge"
 import { Spinner } from "@/components/ui/spinner"
+import { Button } from "@/components/ui/button"
 import { useAuthStore } from "@/store/auth"
 import axiosInstance from "@/api/axios"
 import { ROLE_LABEL } from "@/lib/ecn-workflow"
+import {
+  fetchCustomers,
+  fetchCustomerRoleDefaults,
+  addCustomerRoleDefault,
+  setCustomerRoleDefault,
+  removeCustomerRoleDefault,
+  type CustomerEntry,
+  type CustomerRoleDefault,
+} from "@/api/ecn"
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -43,10 +54,30 @@ async function fetchRoleUsers(): Promise<RoleUser[]> {
   return data
 }
 
+async function addRoleUser(body: {
+  role_id: string
+  username: string
+  facility: string
+  display_name?: string
+  email?: string
+}): Promise<RoleUser> {
+  const { data } = await axiosInstance.post("/api/v1/admin/roles", body)
+  return data
+}
+
+async function removeRoleUser(id: string): Promise<void> {
+  await axiosInstance.delete(`/api/v1/admin/roles/${id}`)
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 const VALID_ROLE_IDS = [
   "DC", "OR", "SE", "CE", "EM", "QM", "PM", "SC", "FN", "AD", "CA", "RD", "TE", "MQ",
+]
+
+const FACILITY_OPTIONS = [
+  { value: "D", label: "D — Melbourne" },
+  { value: "L", label: "L — Johor Bahru" },
 ]
 
 function groupPrefix(cn: string): string {
@@ -157,18 +188,98 @@ function LdapGroupsSection() {
   )
 }
 
+// ── Add role user inline form ─────────────────────────────────────────────────
+
+interface AddRoleFormProps {
+  roleId: string
+  onClose: () => void
+}
+
+function AddRoleForm({ roleId, onClose }: AddRoleFormProps) {
+  const qc = useQueryClient()
+  const [username, setUsername] = useState("")
+  const [facility, setFacility] = useState("D")
+  const [error, setError] = useState<string | null>(null)
+
+  const add = useMutation({
+    mutationFn: addRoleUser,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin-roles"] })
+      onClose()
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      setError(msg ?? "Failed to add user.")
+    },
+  })
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!username.trim()) return
+    setError(null)
+    add.mutate({ role_id: roleId, username: username.trim(), facility })
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="px-4 py-3 bg-[#eff6ff] border-t border-blue-100">
+      <div className="flex items-center gap-2 flex-wrap">
+        <input
+          autoFocus
+          type="text"
+          placeholder="AD username (e.g. jsmith)"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          className="h-8 flex-1 min-w-[160px] rounded border border-[#d1d9e0] bg-white px-2.5 text-sm text-[#0f172a] placeholder:text-[#94a3b8] focus:outline-none focus:border-[#0066cc] focus:ring-1 focus:ring-[#0066cc]/20"
+        />
+        <select
+          value={facility}
+          onChange={(e) => setFacility(e.target.value)}
+          className="h-8 rounded border border-[#d1d9e0] bg-white px-2 text-sm text-[#475569] focus:outline-none focus:border-[#0066cc] focus:ring-1 focus:ring-[#0066cc]/20"
+        >
+          {FACILITY_OPTIONS.map((f) => (
+            <option key={f.value} value={f.value}>{f.label}</option>
+          ))}
+        </select>
+        <Button type="submit" size="sm" disabled={add.isPending || !username.trim()}>
+          {add.isPending ? "…" : "Add"}
+        </Button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-xs text-[#94a3b8] hover:text-[#475569] transition-colors px-1"
+        >
+          Cancel
+        </button>
+      </div>
+      {error && <p className="text-xs text-red-600 mt-1.5">{error}</p>}
+    </form>
+  )
+}
+
 // ── ECN Role Assignments section ──────────────────────────────────────────────
 
 function RoleAssignmentsSection() {
+  const qc = useQueryClient()
+  const [addingRole, setAddingRole] = useState<string | null>(null)
+  const [confirmRemove, setConfirmRemove] = useState<RoleUser | null>(null)
+
   const { data: users = [], isLoading } = useQuery({
     queryKey: ["admin-roles"],
     queryFn: fetchRoleUsers,
     staleTime: 0,
   })
 
+  const remove = useMutation({
+    mutationFn: removeRoleUser,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin-roles"] })
+      setConfirmRemove(null)
+    },
+  })
+
+  // Show all valid roles, not just those with users (so empty roles are still visible with an Add button)
   const grouped = VALID_ROLE_IDS.reduce<Record<string, RoleUser[]>>((acc, r) => {
-    const rows = users.filter((u) => u.role_id === r && u.is_active)
-    if (rows.length) acc[r] = rows
+    acc[r] = users.filter((u) => u.role_id === r && u.is_active)
     return acc
   }, {})
 
@@ -180,48 +291,378 @@ function RoleAssignmentsSection() {
     )
   }
 
-  if (Object.keys(grouped).length === 0) {
-    return (
-      <p className="text-sm text-[#94a3b8] py-8 text-center">No active role assignments configured.</p>
-    )
+  return (
+    <>
+      <div className="space-y-2">
+        {Object.entries(grouped).map(([roleId, rows]) => (
+          <div key={roleId} className="rounded-lg border border-[#e8ecf0] overflow-hidden">
+            <div className="flex items-center gap-2 px-4 py-2.5 bg-[#f8fafc] border-b border-[#f1f5f9]">
+              <span className="font-mono text-xs font-bold text-[#0066cc]">{roleId}</span>
+              <span className="text-sm text-[#475569]">{ROLE_LABEL[roleId] ?? roleId}</span>
+              <Badge variant="secondary" className="ml-auto text-[11px]">
+                {rows.length}
+              </Badge>
+              <button
+                type="button"
+                onClick={() => setAddingRole(addingRole === roleId ? null : roleId)}
+                className={`ml-1 text-[11px] font-semibold px-2 py-0.5 rounded transition-colors duration-150 ${
+                  addingRole === roleId
+                    ? "bg-blue-100 text-[#0066cc]"
+                    : "text-[#94a3b8] hover:text-[#0066cc] hover:bg-blue-50"
+                }`}
+              >
+                + Add
+              </button>
+            </div>
+
+            {rows.length === 0 && addingRole !== roleId && (
+              <p className="px-4 py-2.5 text-xs text-[#cbd5e1] italic">No users assigned</p>
+            )}
+
+            {rows.length > 0 && (
+              <div className="divide-y divide-[#f8fafc]">
+                {rows.map((u) => (
+                  <div key={u.id} className="flex items-center gap-3 px-4 py-2.5 group">
+                    <div className="w-7 h-7 rounded-full bg-[#f0fdf4] flex items-center justify-center shrink-0">
+                      <span className="text-[11px] font-bold text-emerald-600">
+                        {(u.display_name ?? u.username).charAt(0).toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-[#0f172a] truncate">
+                        {u.display_name ?? u.username}
+                      </p>
+                      <p className="text-[11px] text-[#94a3b8] font-mono">{u.username}</p>
+                    </div>
+                    <div className="ml-auto flex items-center gap-3 shrink-0">
+                      <span className="text-[11px] text-[#94a3b8]">
+                        Facility: <strong className="text-[#475569]">{u.facility}</strong>
+                      </span>
+                      {u.email && (
+                        <span className="text-xs text-[#94a3b8] hidden sm:block">{u.email}</span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setConfirmRemove(u)}
+                        title="Remove this user from role"
+                        className="opacity-0 group-hover:opacity-100 text-[#94a3b8] hover:text-red-500 transition-all duration-150 p-0.5"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {addingRole === roleId && (
+              <AddRoleForm roleId={roleId} onClose={() => setAddingRole(null)} />
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Remove confirmation modal */}
+      {confirmRemove && (
+        <div
+          className="fixed inset-0 z-[1080] flex items-center justify-center bg-black/40"
+          onMouseDown={(e) => { if (e.target === e.currentTarget) setConfirmRemove(null) }}
+        >
+          <div className="w-full max-w-sm rounded-lg bg-white shadow-xl mx-4 p-5 space-y-4">
+            <div>
+              <h3 className="text-base font-semibold text-[#0f172a]">Remove role assignment?</h3>
+              <p className="text-sm text-[#475569] mt-1">
+                Remove <strong>{confirmRemove.display_name ?? confirmRemove.username}</strong> from{" "}
+                <strong>{ROLE_LABEL[confirmRemove.role_id] ?? confirmRemove.role_id}</strong>{" "}
+                (Facility {confirmRemove.facility})?
+              </p>
+              <p className="text-xs text-[#94a3b8] mt-1">
+                This only removes the default assignment — existing ECN role assignments are not affected.
+              </p>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setConfirmRemove(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={remove.isPending}
+                onClick={() => remove.mutate(confirmRemove.id)}
+              >
+                {remove.isPending ? "…" : "Remove"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+// ── Customer role defaults (SE/PM per customer) ───────────────────────────────
+
+function AddCustomerRoleForm({
+  cuno,
+  roleId,
+  onClose,
+}: {
+  cuno: string
+  roleId: "SE" | "PM"
+  onClose: () => void
+}) {
+  const qc = useQueryClient()
+  const [username, setUsername] = useState("")
+  const [displayName, setDisplayName] = useState("")
+  const [error, setError] = useState<string | null>(null)
+
+  const add = useMutation({
+    mutationFn: addCustomerRoleDefault,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin-customer-role-defaults"] })
+      onClose()
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      setError(msg ?? "Failed to add candidate.")
+    },
+  })
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!username.trim()) return
+    setError(null)
+    add.mutate({
+      cuno,
+      role_id: roleId,
+      username: username.trim(),
+      display_name: displayName.trim() || undefined,
+    })
   }
 
   return (
-    <div className="space-y-2">
-      {Object.entries(grouped).map(([roleId, rows]) => (
-        <div key={roleId} className="rounded-lg border border-[#e8ecf0] overflow-hidden">
-          <div className="flex items-center gap-2 px-4 py-2.5 bg-[#f8fafc] border-b border-[#f1f5f9]">
-            <span className="font-mono text-xs font-bold text-[#0066cc]">{roleId}</span>
-            <span className="text-sm text-[#475569]">{ROLE_LABEL[roleId] ?? roleId}</span>
-            <Badge variant="secondary" className="ml-auto text-[11px]">
-              {rows.length}
-            </Badge>
-          </div>
-          <div className="divide-y divide-[#f8fafc]">
-            {rows.map((u) => (
-              <div key={u.id} className="flex items-center gap-3 px-4 py-2.5">
-                <div className="w-7 h-7 rounded-full bg-[#f0fdf4] flex items-center justify-center shrink-0">
-                  <span className="text-[11px] font-bold text-emerald-600">
-                    {(u.display_name ?? u.username).charAt(0).toUpperCase()}
-                  </span>
-                </div>
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-[#0f172a] truncate">
-                    {u.display_name ?? u.username}
-                  </p>
-                  <p className="text-[11px] text-[#94a3b8] font-mono">{u.username}</p>
-                </div>
-                <div className="ml-auto flex items-center gap-3 shrink-0">
-                  <span className="text-[11px] text-[#94a3b8]">Facility: <strong className="text-[#475569]">{u.facility}</strong></span>
-                  {u.email && (
-                    <span className="text-xs text-[#94a3b8] hidden sm:block">{u.email}</span>
+    <form onSubmit={handleSubmit} className="px-4 py-3 bg-[#eff6ff] border-t border-blue-100">
+      <div className="flex items-center gap-2 flex-wrap">
+        <input
+          autoFocus
+          type="text"
+          placeholder="AD username (e.g. jsmith)"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          className="h-8 flex-1 min-w-[140px] rounded border border-[#d1d9e0] bg-white px-2.5 text-sm text-[#0f172a] placeholder:text-[#94a3b8] focus:outline-none focus:border-[#0066cc] focus:ring-1 focus:ring-[#0066cc]/20"
+        />
+        <input
+          type="text"
+          placeholder="Display name (optional)"
+          value={displayName}
+          onChange={(e) => setDisplayName(e.target.value)}
+          className="h-8 flex-1 min-w-[140px] rounded border border-[#d1d9e0] bg-white px-2.5 text-sm text-[#0f172a] placeholder:text-[#94a3b8] focus:outline-none focus:border-[#0066cc] focus:ring-1 focus:ring-[#0066cc]/20"
+        />
+        <Button type="submit" size="sm" disabled={add.isPending || !username.trim()}>
+          {add.isPending ? "…" : "Add"}
+        </Button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-xs text-[#94a3b8] hover:text-[#475569] transition-colors px-1"
+        >
+          Cancel
+        </button>
+      </div>
+      {error && <p className="text-xs text-red-600 mt-1.5">{error}</p>}
+    </form>
+  )
+}
+
+function CustomerRoleDefaultsSection() {
+  const qc = useQueryClient()
+  const [search, setSearch] = useState("")
+  const [selectedCuno, setSelectedCuno] = useState<string | null>(null)
+  const [addingRole, setAddingRole] = useState<"SE" | "PM" | null>(null)
+
+  const { data: customers = [] } = useQuery({
+    queryKey: ["customers"],
+    queryFn: fetchCustomers,
+    staleTime: 5 * 60_000,
+  })
+
+  const { data: defaults = [], isLoading } = useQuery({
+    queryKey: ["admin-customer-role-defaults"],
+    queryFn: () => fetchCustomerRoleDefaults(),
+    staleTime: 0,
+  })
+
+  const setDefault = useMutation({
+    mutationFn: ({ id, cuno, roleId }: { id: string; cuno: string; roleId: string }) =>
+      setCustomerRoleDefault(id, cuno, roleId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin-customer-role-defaults"] }),
+  })
+
+  const remove = useMutation({
+    mutationFn: removeCustomerRoleDefault,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin-customer-role-defaults"] }),
+  })
+
+  // Customers that have at least one candidate row, grouped by cuno
+  const byCuno = useMemo(() => {
+    const map: Record<string, CustomerRoleDefault[]> = {}
+    for (const d of defaults) {
+      if (!d.is_active) continue
+      ;(map[d.cuno] ??= []).push(d)
+    }
+    return map
+  }, [defaults])
+
+  const customerList: (CustomerEntry & { hasDefaults: boolean })[] = useMemo(() => {
+    const known = customers.map((c) => ({ ...c, hasDefaults: Boolean(byCuno[c.cuno]) }))
+    const q = search.trim().toLowerCase()
+    if (!q) return known
+    return known.filter(
+      (c) => c.cuno.toLowerCase().includes(q) || (c.name ?? "").toLowerCase().includes(q),
+    )
+  }, [customers, byCuno, search])
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center gap-2 py-8 text-sm text-[#94a3b8]">
+        <Spinner size="sm" /> Loading customer role defaults…
+      </div>
+    )
+  }
+
+  const selectedCandidates = selectedCuno ? byCuno[selectedCuno] ?? [] : []
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-[220px_1fr] gap-4">
+      {/* Customer picker */}
+      <div className="space-y-2">
+        <input
+          type="text"
+          placeholder="Search customer / CUNO…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="h-8 w-full rounded border border-[#d1d9e0] bg-white px-2.5 text-sm text-[#0f172a] placeholder:text-[#94a3b8] focus:outline-none focus:border-[#0066cc] focus:ring-1 focus:ring-[#0066cc]/20"
+        />
+        <div className="max-h-96 overflow-y-auto rounded-lg border border-[#e8ecf0] divide-y divide-[#f8fafc]">
+          {customerList.map((c) => (
+            <button
+              key={c.cuno}
+              type="button"
+              onClick={() => setSelectedCuno(c.cuno)}
+              className={`w-full text-left px-3 py-2 text-xs transition-colors duration-100 ${
+                selectedCuno === c.cuno ? "bg-[#eff6ff] text-[#0066cc]" : "hover:bg-[#f8fafc] text-[#475569]"
+              }`}
+            >
+              <div className="flex items-center gap-1.5">
+                <span className="font-mono text-[10px] text-[#94a3b8]">{c.cuno}</span>
+                {c.hasDefaults && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />}
+              </div>
+              <p className="truncate">{c.name ?? "—"}</p>
+            </button>
+          ))}
+          {customerList.length === 0 && (
+            <p className="px-3 py-4 text-xs text-[#94a3b8] text-center">No customers match.</p>
+          )}
+        </div>
+      </div>
+
+      {/* Candidates for selected customer */}
+      <div>
+        {!selectedCuno ? (
+          <p className="text-sm text-[#94a3b8] py-8 text-center">
+            Select a customer to view or manage SE / PM candidates.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {(["SE", "PM"] as const).map((roleId) => {
+              const rows = selectedCandidates.filter((d) => d.role_id === roleId)
+              return (
+                <div key={roleId} className="rounded-lg border border-[#e8ecf0] overflow-hidden">
+                  <div className="flex items-center gap-2 px-4 py-2.5 bg-[#f8fafc] border-b border-[#f1f5f9]">
+                    <span className="font-mono text-xs font-bold text-[#0066cc]">{roleId}</span>
+                    <span className="text-sm text-[#475569]">{ROLE_LABEL[roleId] ?? roleId}</span>
+                    <Badge variant="secondary" className="ml-auto text-[11px]">{rows.length}</Badge>
+                    <button
+                      type="button"
+                      onClick={() => setAddingRole(addingRole === roleId ? null : roleId)}
+                      className={`ml-1 text-[11px] font-semibold px-2 py-0.5 rounded transition-colors duration-150 ${
+                        addingRole === roleId
+                          ? "bg-blue-100 text-[#0066cc]"
+                          : "text-[#94a3b8] hover:text-[#0066cc] hover:bg-blue-50"
+                      }`}
+                    >
+                      + Add
+                    </button>
+                  </div>
+
+                  {rows.length === 0 && addingRole !== roleId && (
+                    <p className="px-4 py-2.5 text-xs text-[#cbd5e1] italic">No candidates on file</p>
+                  )}
+
+                  {rows.length > 0 && (
+                    <div className="divide-y divide-[#f8fafc]">
+                      {rows.map((r) => (
+                        <div key={r.id} className="flex items-center gap-3 px-4 py-2.5 group">
+                          <div className="w-7 h-7 rounded-full bg-[#f0fdf4] flex items-center justify-center shrink-0">
+                            <span className="text-[11px] font-bold text-emerald-600">
+                              {(r.display_name ?? r.username).charAt(0).toUpperCase()}
+                            </span>
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-[#0f172a] truncate">
+                              {r.display_name ?? r.username}
+                            </p>
+                            <p className="text-[11px] text-[#94a3b8] font-mono">{r.username}</p>
+                          </div>
+                          <div className="ml-auto flex items-center gap-2 shrink-0">
+                            {r.source === "stargile_import" && (
+                              <span className="text-[10px] text-[#94a3b8] italic">imported</span>
+                            )}
+                            {r.is_default ? (
+                              <Badge className="text-[10px] bg-emerald-100 text-emerald-700 hover:bg-emerald-100">
+                                Default
+                              </Badge>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setDefault.mutate({ id: r.id, cuno: selectedCuno, roleId })}
+                                disabled={setDefault.isPending}
+                                className="text-[11px] text-[#94a3b8] hover:text-[#0066cc] px-1.5 py-0.5 rounded hover:bg-blue-50 transition-colors duration-100"
+                              >
+                                Make default
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => remove.mutate(r.id)}
+                              title="Remove candidate"
+                              className="opacity-0 group-hover:opacity-100 text-[#94a3b8] hover:text-red-500 transition-all duration-150 p-0.5"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {addingRole === roleId && (
+                    <AddCustomerRoleForm
+                      cuno={selectedCuno}
+                      roleId={roleId}
+                      onClose={() => setAddingRole(null)}
+                    />
                   )}
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
-        </div>
-      ))}
+        )}
+      </div>
     </div>
   )
 }
@@ -252,10 +693,38 @@ export default function AdminPage() {
         </Link>
         <span className="text-[#e2e8f0]">|</span>
         <span className="font-semibold text-sm text-[#1e293b]">Administration</span>
-        <span className="ml-auto text-xs text-[#94a3b8]">Read-only view</span>
       </header>
 
       <main className="flex-1 mx-auto w-full max-w-4xl px-6 py-6 space-y-6">
+        {/* ECN role assignments */}
+        <section className="rounded-xl border border-[#e8ecf0] bg-white shadow-[var(--shadow-sm)] overflow-hidden">
+          <div className="px-5 py-4 border-b border-[#f1f5f9] bg-[#f8fafc]">
+            <h2 className="text-sm font-semibold text-[#0f172a]">Oskar — ECN Role Assignments</h2>
+            <p className="text-xs text-[#94a3b8] mt-0.5">
+              Default users auto-assigned to each role when a new ECN is created.
+              Hover a row to reveal the remove button.
+            </p>
+          </div>
+          <div className="p-5">
+            <RoleAssignmentsSection />
+          </div>
+        </section>
+
+        {/* Customer role defaults (SE/PM) */}
+        <section className="rounded-xl border border-[#e8ecf0] bg-white shadow-[var(--shadow-sm)] overflow-hidden">
+          <div className="px-5 py-4 border-b border-[#f1f5f9] bg-[#f8fafc]">
+            <h2 className="text-sm font-semibold text-[#0f172a]">Customer — SE / PM Defaults</h2>
+            <p className="text-xs text-[#94a3b8] mt-0.5">
+              Per-customer Senior Engineer and Production Manager candidates, seeded from Stargile
+              allocation data. Mark one candidate per role as "Default" to auto-assign it on ECN
+              creation for that customer.
+            </p>
+          </div>
+          <div className="p-5">
+            <CustomerRoleDefaultsSection />
+          </div>
+        </section>
+
         {/* LDAP groups */}
         <section className="rounded-xl border border-[#e8ecf0] bg-white shadow-[var(--shadow-sm)] overflow-hidden">
           <div className="px-5 py-4 border-b border-[#f1f5f9] bg-[#f8fafc]">
@@ -266,19 +735,6 @@ export default function AdminPage() {
           </div>
           <div className="p-5">
             <LdapGroupsSection />
-          </div>
-        </section>
-
-        {/* ECN role assignments */}
-        <section className="rounded-xl border border-[#e8ecf0] bg-white shadow-[var(--shadow-sm)] overflow-hidden">
-          <div className="px-5 py-4 border-b border-[#f1f5f9] bg-[#f8fafc]">
-            <h2 className="text-sm font-semibold text-[#0f172a]">Oskar — ECN Role Assignments</h2>
-            <p className="text-xs text-[#94a3b8] mt-0.5">
-              Active assignments from <span className="font-mono">system_role_users</span> — controls who is auto-assigned to each ECN role
-            </p>
-          </div>
-          <div className="p-5">
-            <RoleAssignmentsSection />
           </div>
         </section>
       </main>

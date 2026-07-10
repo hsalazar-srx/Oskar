@@ -208,6 +208,7 @@ async def _auto_assign_roles(
     facility: str,
     originator_username: str,
     assigned_by: str,
+    customer_number: str | None = None,
 ) -> None:
     await session.execute(
         sa.text(
@@ -240,6 +241,20 @@ async def _auto_assign_roles(
             f"No active Document Controller (DC) configured for facility '{facility}'. "
             "Add a DC to system_role_users before creating ECNs."
         )
+
+    # Customer-scoped SE/PM defaults take priority over facility-wide candidates —
+    # a single marked default per (customer, role) overrides the ambiguous facility list.
+    if customer_number:
+        crd_rows = await session.execute(
+            sa.text(
+                "SELECT role_id, username FROM customer_role_defaults "
+                "WHERE cuno = :cuno AND role_id IN ('SE', 'PM') "
+                "AND is_default = TRUE AND is_active = TRUE AND removed_at IS NULL"
+            ),
+            {"cuno": customer_number},
+        )
+        for role_id, username in crd_rows:
+            role_users[role_id] = [username]
 
     for role_id, users in role_users.items():
         if role_id == "OR":

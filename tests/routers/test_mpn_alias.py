@@ -102,7 +102,7 @@ class TestMovexWriteCompleteQueuesAliasOutbox:
 
     def test_movex_write_complete_returns_200_implemented(self):
         with patch.object(ECNService, "transition", new_callable=AsyncMock) as mock:
-            mock.return_value = _IMPLEMENTED_DETAIL
+            mock.return_value = (_IMPLEMENTED_DETAIL, [])
             client = _make_client(_CELERY)
             resp = client.patch(
                 f"/api/v1/ecn/{_ECN_ID}/status",
@@ -115,7 +115,7 @@ class TestMovexWriteCompleteQueuesAliasOutbox:
 
     def test_transition_called_with_movex_write_complete(self):
         with patch.object(ECNService, "transition", new_callable=AsyncMock) as mock:
-            mock.return_value = _IMPLEMENTED_DETAIL
+            mock.return_value = (_IMPLEMENTED_DETAIL, [])
             client = _make_client(_CELERY)
             client.patch(
                 f"/api/v1/ecn/{_ECN_ID}/status",
@@ -128,7 +128,7 @@ class TestMovexWriteCompleteQueuesAliasOutbox:
 
     def test_movex_write_failed_stays_approved(self):
         with patch.object(ECNService, "transition", new_callable=AsyncMock) as mock:
-            mock.return_value = _APPROVED_DETAIL
+            mock.return_value = (_APPROVED_DETAIL, [])
             client = _make_client(_CELERY)
             resp = client.patch(
                 f"/api/v1/ecn/{_ECN_ID}/status",

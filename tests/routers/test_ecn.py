@@ -247,7 +247,7 @@ class TestTransitionECNStatus:
     def test_submit_returns_200_engineering_review_status(self, client: TestClient) -> None:
         """submit goes directly to ENGINEERING_REVIEW (ADR-009 — no SUBMITTED queue)."""
         after = _detail(ecn_status=ECNStatus.ENGINEERING_REVIEW)
-        with patch.object(ECNService, "transition", new_callable=AsyncMock, return_value=after):
+        with patch.object(ECNService, "transition", new_callable=AsyncMock, return_value=(after, [])):
             resp = client.patch(
                 "/api/v1/ecn/ecn-0001/status",
                 json={"trigger": "submit", "actor_role": "OR"},
@@ -281,7 +281,7 @@ class TestTransitionECNStatus:
 
     def test_reject_with_reason_returns_rejected_status(self, client: TestClient) -> None:
         after = _detail(ecn_status=ECNStatus.REJECTED)
-        with patch.object(ECNService, "transition", new_callable=AsyncMock, return_value=after):
+        with patch.object(ECNService, "transition", new_callable=AsyncMock, return_value=(after, [])):
             resp = client.patch(
                 "/api/v1/ecn/ecn-0001/status",
                 json={"trigger": "reject", "actor_role": "DC", "rejection_reason": "Missing drawings."},
@@ -291,7 +291,7 @@ class TestTransitionECNStatus:
 
     def test_place_on_hold_returns_on_hold_status(self, client: TestClient) -> None:
         after = _detail(ecn_status=ECNStatus.ON_HOLD)
-        with patch.object(ECNService, "transition", new_callable=AsyncMock, return_value=after):
+        with patch.object(ECNService, "transition", new_callable=AsyncMock, return_value=(after, [])):
             resp = client.patch(
                 "/api/v1/ecn/ecn-0001/status",
                 json={
@@ -402,7 +402,7 @@ class TestOptimisticLocking:
     # OQ-40 (continued): valid If-Unmodified-Since on PATCH /status succeeds
     def test_oq40_valid_header_on_status_patch_succeeds(self, client: TestClient) -> None:
         after = _detail(ecn_status=ECNStatus.ENGINEERING_REVIEW)
-        with patch.object(ECNService, "transition", new_callable=AsyncMock, return_value=after):
+        with patch.object(ECNService, "transition", new_callable=AsyncMock, return_value=(after, [])):
             resp = client.patch(
                 "/api/v1/ecn/ecn-0001/status",
                 json={"trigger": "submit", "actor_role": "OR"},
@@ -486,11 +486,11 @@ class TestOptimisticLocking:
 
         call_count = 0
 
-        async def _side_effect(*args: Any, **kwargs: Any) -> ECNDetail:
+        async def _side_effect(*args: Any, **kwargs: Any) -> tuple[ECNDetail, list[str]]:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return after
+                return after, []
             raise ECNConflict(current_ts)
 
         with patch.object(ECNService, "transition", side_effect=_side_effect):

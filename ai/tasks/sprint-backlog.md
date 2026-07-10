@@ -1,7 +1,7 @@
 # OSKAR — Sprint Backlog
 # Source of truth for all work status.
 # oskar-state.md (gitignored) is for next-session notes only — not for tracking status.
-# Last synced: 2026-07-02 (Sprint 6 complete; Sprint 7 planned)
+# Last synced: 2026-07-09 (Sprint 7 complete; Sprint 8 planned)
 
 ---
 
@@ -403,65 +403,171 @@ Also fixed: `ECNCreatePage` POST `/api/v1/ecn` missing trailing slash → 401 (F
 
 ---
 
-## Sprint 7 — ECN Workflow Completions + Administration ⏳ PLANNED
+## Sprint 7 — ECN Workflow Completions + Administration ✅ COMPLETE (2026-07-09)
 
-> **Priority order:** D (Cancel ECN) → I (Reassignment) → B (Administration page) → F (Implementation Schedule).
-> C (Role-by-customer) deprioritised — await DB access to allocation data.
-> A (DMR/SharePoint) simplified — no Azure App Registration; store URL/UNC path only.
+> **Result:** 711 tests passing (2 skipped). All sprint items shipped. Browser cache stale-page
+> bug resolved via `NoCacheMiddleware`. Drawing number Movex constraint removed (drawings are
+> DMR files, not Movex records). Outbox dispatch wired end-to-end (BackgroundTasks + Celery).
+> Admin page upgraded from read-only to full CRUD.
 
-### D — Cancel ECN with Note
-
-| # | Task | File | Status |
-|---|------|------|--------|
-| S7-D1 | New workflow trigger `cancel` → status 80 (CANCELLED, already in schema); allowed from DRAFT / ENG_REVIEW / MGMT_REVIEW / ON_HOLD; terminal (no resubmit) | `src/workflow/machine.py` | ⏳ |
-| S7-D2 | Cancel modal — "Reason for cancellation" (required text field); stored in `ecn_transition_history.notes` | `frontend/src/components/ecn/ActionModal.tsx` | ⏳ |
-| S7-D3 | Guard: cancellation not allowed from IMPLEMENTED / CLOSED / already CANCELLED | `src/workflow/machine.py` | ⏳ |
-| S7-D4 | CANCELLED badge in ECN list + detail page; CANCELLED ECNs included in list by default (not hidden) | `frontend/src/pages/ECNListPage.tsx` | ⏳ |
-| S7-D5 | Tests: cancel transitions, guard violations, cancel modal submission | `tests/` | ⏳ |
-
-### B — Administration Page
+### D — Cancel ECN with Note ✅
 
 | # | Task | File | Status |
 |---|------|------|--------|
-| S7-B1 | `/admin/roles` — plant role defaults per facility (per-facility table, CRUD); DC-only access; backed by existing `system_role_users` table | `src/routers/admin.py` + `frontend/src/pages/AdminPage.tsx` | ⏳ |
-| S7-B2 | Multiple users per role — render full list per (facility, role_id) in admin UI; currently table supports it but UI shows only one | `frontend/src/pages/AdminPage.tsx` | ⏳ |
-| S7-B3 | `/admin/pn-categories` — manage Procurement Group + Product Group codes; new `pn_categories(code, description, type, is_active)` table + migration | `src/routers/admin.py` + migration | ⏳ |
-| S7-B4 | Tests: admin role check (non-DC blocked 403); CRUD operations | `tests/` | ⏳ |
+| S7-D1 | New workflow trigger `cancel` → status 80 (CANCELLED); allowed from DRAFT / ENG_REVIEW / MGMT_REVIEW / ON_HOLD; terminal | `src/workflow/machine.py` | ✅ |
+| S7-D2 | Cancel modal — "Reason for cancellation" (required); stored in `ecn_transition_history.notes`; triggered from action bar | `frontend/src/components/ecn/ActionModal.tsx` + `ECNDetailPage.tsx` | ✅ |
+| S7-D3 | Guard `_guard_cancel`: originator, DC, or Admin only; notes mandatory; blocked from IMPLEMENTED/CLOSED | `src/workflow/machine.py` | ✅ |
+| S7-D4 | CANCELLED badge + status in list and detail | `frontend/src/lib/ecn-status.ts` | ✅ |
+| S7-D5 | Tests: cancel transitions + guard violations in `test_machine.py` | `tests/workflow/test_machine.py` | ✅ |
 
-### A — DMR/SharePoint Link (Simplified — No Azure App Registration)
-
-| # | Task | File | Status |
-|---|------|------|--------|
-| S7-A1 | Add `dmr_url VARCHAR(1000)` to `ecn_instances` via migration; nullable | `alembic/versions/` | ⏳ |
-| S7-A2 | `PATCH /api/v1/ecn/{id}` — accept `dmr_url` field; DC or originator only | `src/routers/ecn.py` | ⏳ |
-| S7-A3 | ECNDetailPage — show DMR URL as clickable link in metadata card; inline edit field (DC/originator); paste SharePoint URL or UNC path | `frontend/src/pages/ECNDetailPage.tsx` | ⏳ |
-
-### F — Implementation Schedule (Post-Approved Checklist)
-
-> **Analysis complete (2026-07-02).** Stargile source analysed: Section 1 (MES checkbox),
-> Section 2 (WIP/open order impact + "View Open Orders"), Section 3 (never used — omit).
-> Planned approach: post-APPROVED checklist stored in `ecn_instances.extra_data JSONB` — no migration needed.
-> Source files: `context/ecn-history/Oskar_Feeback_250626.txt:63-75`,
-> `ai/memory/05-stargile-ecn-reference.md`, `context/ecn-history/Initial_Meeting_Nick_and_Branko_290426/BOM Upload and Verification -VSM.md`,
-> `STARGILE-VS-OSKAR.md:37`
+### B — Administration Page ✅
 
 | # | Task | File | Status |
 |---|------|------|--------|
-| S7-F1 | Post-approval checklist stored in `extra_data JSONB` — keys: `impl_checklist[]` each with `{item, required, completed, completed_by, completed_at, notes}`; default items seeded at IMPLEMENTED transition | `src/services/ecn/workflow.py` | ⏳ |
-| S7-F2 | Default checklist items (from VSM + Stargile analysis): (1) MES update required?, (2) AOI programs to update?, (3) New wave pallets required?, (4) Valor MSS update required?, (5) PDS001/G routing text | — | ⏳ |
-| S7-F3 | `PATCH /api/v1/ecn/{id}/checklist` — update individual checklist item (completed toggle + notes); DC or originator only; marks `completed_by` + `completed_at` | `src/routers/ecn.py` | ⏳ |
-| S7-F4 | Open Orders panel — `GET /api/v1/ecn/{id}/open-orders`; calls `MMS100MI.LstMO` via movex-rest-api filtered by ECN item numbers; returns MO number, item, qty, due date, facility; read-only | `src/routers/ecn.py` + `src/adapters/erp/movex.py` | ⏳ |
-| S7-F5 | Implementation Schedule tab/section in ECNDetailPage — visible after status ≥ 60 (IMPLEMENTED); shows checklist with checkboxes + notes; Open Orders panel with "Refresh" button; DMR link field | `frontend/src/pages/ECNDetailPage.tsx` | ⏳ |
-| S7-F6 | PDS001/G routing text helper — pre-fills a textarea with ECN number + item list template; user edits and copies; no Movex write | `frontend/src/pages/ECNDetailPage.tsx` | ⏳ |
+| S7-B1 | `GET/POST/DELETE /api/v1/admin/roles` — plant role defaults CRUD; DC-only; backed by `system_role_users` | `src/routers/admin.py` + `src/services/admin.py` | ✅ |
+| S7-B2 | Admin UI — all 14 role cards shown; `+ Add` inline form per role (username + facility); hover-reveal × remove button + confirmation modal | `frontend/src/pages/AdminPage.tsx` | ✅ 2026-07-09 |
+| S7-B3 | PN Categories tab — explicitly removed from scope (Engineering Team matrix is the source of truth; no admin UI needed) | — | ✅ removed |
+| S7-B4 | Tests: 14 tests in `test_admin_roles.py` — list (with facility/role_id filter), add (201/403/409/422), remove (204/403/404) | `tests/routers/test_admin_roles.py` | ✅ |
+
+### A — DMR/SharePoint Link ✅
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| S7-A1 | Migration 0022 — `dmr_url VARCHAR(1000)` on `ecn_instances`; nullable | `alembic/versions/0022_ecn_add_dmr_url.py` | ✅ |
+| S7-A2 | `PATCH /api/v1/ecn/{id}` accepts `dmr_url`; DC or originator via existing field-update guard | `src/routers/ecn_core.py` | ✅ |
+| S7-A3 | ECNCard — DMR URL shown as clickable link in metadata card; inline edit for DC/originator; accepts SharePoint HTTPS or UNC path | `frontend/src/components/ecn/ECNCard.tsx` | ✅ |
+
+### F — Implementation Schedule ✅
+
+> Checklist stored in `ecn_instances.extra_data.impl_checklist JSONB` — no migration needed.
+> Section labels: Engineering (section 1), Program Manager — WIP Impact (section 2). Section 3 omitted (never used in Stargile).
+> Power user validation questions filed in memory (`project_oskar_power_user_questions.md`).
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| S7-F1 | Checklist schema in `extra_data JSONB`; `_seed_impl_checklist()` called at `movex_write_complete` transition; 8 default items across 2 sections | `src/services/ecn/workflow.py` | ✅ |
+| S7-F2 | Default items: (1) MES update, (2) AOI programs, (3) New wave pallets, (4) Valor MSS update, (5) PDS001/G routing text, (6) Documents to shopfloor, (7) Re-validation (medical), (8) Production First Article; each has `applicable/completed/completed_by/completed_at/notes` | `src/services/ecn/workflow.py` | ✅ |
+| S7-F3 | `PATCH /api/v1/ecn/{id}/checklist` — toggle `applicable` (null/true/false) + `completed` + `notes`; DC or originator only | `src/routers/ecn_core.py` + `src/services/ecn/service.py` | ✅ |
+| S7-F4 | Open Orders — `GET /api/v1/ecn/{id}/open-orders`; `MMS100MI.LstMO` via movex-rest-api per ECN item; returns MO number, item, qty, due date, facility | `src/routers/ecn_core.py` + `src/adapters/erp/movex.py` | ✅ |
+| S7-F5 | `ImplementationSchedulePanel` — animated progress ring, section cards, `ApplicableToggle` (null→true→false cycle), `NotesField` inline edit, completion banner; visible at status ≥ 60 | `frontend/src/components/ecn/ImplementationSchedulePanel.tsx` | ✅ |
+| S7-F6 | Open Orders drawer in panel — right-slide drawer with MO list; shows MO number, item, qty, due date, facility per order; empty state if none | `frontend/src/components/ecn/ImplementationSchedulePanel.tsx` | ✅ |
+
+### Additional Sprint 7 Work
+
+| # | Item | Status |
+|---|------|--------|
+| S7-X1 | Migration 0019 — `change_parts` + `bom_changes` change scope flags; migration 0020 — `pn_categories` table (seed only); migration 0021 — `add_mpn` scope flag (triggers SC review) | ✅ |
+| S7-X2 | `NoCacheMiddleware` — `Cache-Control: no-store` on all `/api/` responses; fixes browser disk-cache stale ECN detail page (Ctrl+Shift+R was required before) | `src/middleware/no_cache.py` | ✅ |
+| S7-X3 | Drawing number constraint removed — `_guard_dc_approve` no longer blocks on missing drawing numbers (drawings stored in DMR/SharePoint, not Movex); UI field retained as optional | `src/workflow/machine.py` + `src/services/ecn/workflow.py` | ✅ |
+| S7-X4 | `MPDDOC.CreateDrawing` removed from entire pipeline — endpoint does not exist in movex-rest-api; drawings are DMR files | `src/tasks/movex_outbox.py` + `src/adapters/erp/` | ✅ |
+| S7-X5 | Outbox dispatch wired end-to-end — `transition()` returns `(ECNDetail, list[str])` of inserted IDs (via `RETURNING id`); `BackgroundTasks` dispatches `process_outbox_entry.apply_async` post-commit | `src/routers/ecn_core.py` + `src/services/ecn/workflow.py` | ✅ |
+| S7-X6 | `MovexRestAdapter.open()` called in Celery worker before dispatch; `close()` in `finally` block | `src/tasks/movex_outbox.py` | ✅ |
+| S7-X7 | AD group CN alignment — all `ecn-*` group CNs updated to match real `srxglobal.com` directory structure | `src/auth/providers.py` + `docs/srxglobal-active-directory-groups-structure.md` | ✅ |
+| S7-X8 | UX fixes (meeting feedback 2026-07-02): ECN list cache clear on transition, item-count gate removed from submit, status label "Implemented" → "Movex Updated", checklist strikethrough removed, `add_mpn` scope checkbox added | `frontend/src/` + `src/` | ✅ |
+| S7-X9 | Bug fix — `_auto_assign_roles` skips INSERT when multiple users exist for a role (was hitting NOT NULL constraint with `username=None`; now leaves manual assignment to DC) | `src/services/ecn/workflow.py` | ✅ |
+
+### Fixes
+
+| Bug | Root cause | Fix |
+|-----|-----------|-----|
+| Stale ECN detail page — Ctrl+Shift+R required | Browser HTTP disk cache on `GET /api/v1/ecn/{id}` — no `Cache-Control` header | `NoCacheMiddleware` sets `Cache-Control: no-store` on all `/api/` responses |
+| `MovexRestAdapter not initialised` in Celery | `open()` never called before dispatching MI call | Added `await adapter.open()` + `finally: await adapter.close()` |
+| Outbox rows queued but never dispatched | `apply_async` not called after INSERT | `BackgroundTasks` dispatches post-commit; IDs returned via `RETURNING id` |
+| `seed_demo.py` failure on staging (DC has 3 users) | `_auto_assign_roles` inserted `username=None` row, hitting NOT NULL | Skip INSERT when multiple candidates exist — DC assigns manually |
+| 30 router test failures after `transition()` tuple change | Mocks returned `ECNDetail` directly; router unpacks `(detail, list[str])` | All 4 test files updated; `set_drawing_number` mocks correctly not wrapped |
 
 ### Deferred from Sprint 7
 
 | Item | Reason |
 |------|--------|
-| I — Originator reassignment | Workflow transitions and role reassignment (all roles except OR) are fully functional. OR reassignment is a low-frequency edge case; moved to Iteration 2. |
+| I — Originator reassignment | OR reassignment is a low-frequency edge case; moved to Iteration 2 (I2-14) |
 | C — Role assignment by customer (allocation page scraping) | Await direct DB access to allocation data; scraping approach too fragile |
 | CRS620 manufacturer ID auto-resolve | Sprint 8 — alongside mounting type (J) |
 | E — Notification template management | Sprint 8 |
+| PDS001/G routing text helper (S7-F6) | Dropped — team confirmed free-form notes in checklist row is sufficient |
+
+---
+
+## Sprint 8 — Routing Operations UI + UAT Hardening ⏳ IN PROGRESS
+
+> **Priority order:** Routing ops UI → MPN fields UI → UAT deployment update → IQ/OQ/PQ preparation.
+> Power user session week of 2026-07-07 to validate checklist items and open questions
+> (see `memory/project_oskar_power_user_questions.md`).
+
+### Pre-conditions
+
+| Pre-condition | Status |
+|---|---|
+| Sprint 7 complete | ✅ 2026-07-09 |
+| Power user session (week of 2026-07-07) — checklist items, MES scope, PDS001/G owner | ⏳ |
+| UAT database migration 0019–0022 applied on staging VM | ⏳ |
+| LDAPS confirmed with Manal (`AUTH_PROVIDER=ldap` switchover) | ⏳ |
+
+### A — Routing Operations UI ✅ DONE 2026-07-10
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| S8-A1 | Routing operations section — list of ops with op number, description, work centre, run time, change type badge (ADD/UPDATE/DELETE) | `frontend/src/components/ecn/RoutingOpsPanel.tsx` | ✅ |
+| S8-A2 | Add/edit routing op form — inline; wires to `POST/PATCH /api/v1/ecn/{id}/items/{item_id}/routing` | `frontend/src/components/ecn/RoutingOpsPanel.tsx` | ✅ |
+| S8-A3 | Delete routing op — confirm-then-`DELETE` | `frontend/src/components/ecn/RoutingOpsPanel.tsx` | ✅ |
+| S8-A4 | Movex snapshot diff view | — | ⏸ Deferred, not requested during build |
+
+### B — MPN Extended Fields UI ✅ DONE 2026-07-10
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| S8-B1 | MPN panel — `lifecycle`, `eol_date`, `lead_time_weeks`, `msl_level`, `packaging_type`, `do_not_buy`, `alt_mpn`; editable in DRAFT/DC_APPROVED | `frontend/src/components/ecn/ECNItemPanel.tsx` | ✅ |
+| S8-B2 | `do_not_buy` flag — red badge in item list/detail | `frontend/src/components/ecn/ECNItemPanel.tsx` | ✅ |
+
+### C — UAT Deployment Update
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| S8-C1 | Rebuild `oskar-app` + `oskar-frontend` images on staging VM with Sprint 7 + 8 changes | VM | ⏳ |
+| S8-C2 | Apply migrations 0019–0023 on staging: `docker exec oskar-app-staging alembic upgrade head` | VM | ⏳ |
+| S8-C3 | Re-seed demo data — run `seed_demo.py` (now handles DC multi-user correctly) | VM | ⏳ |
+| S8-C4 | Validate: DMR URL field, Implementation Schedule, Cancel ECN, Admin CRUD, routing ops, MPN fields, customer role defaults from browser on staging | UAT | ⏳ |
+| S8-C5 | Switch `AUTH_PROVIDER=ldap` (Manal dependency — LDAPS service account) | `.env.staging` on VM | ⏳ Manal |
+| S8-C6 | Enable `systemd` auto-start unit for staging | VM | ⏳ |
+
+### D — IQ/OQ Preparation
+
+| # | Task | Status |
+|---|------|--------|
+| S8-D1 | IQ document — infrastructure qualification: VM, Docker, Harbor, PostgreSQL, network controls | ⏳ Manal (infra sections) |
+| S8-D2 | OQ document — operational qualification: all workflow transitions, guard conditions, audit chain, email notifications, LDAP auth | ⏳ Mihai |
+| S8-D3 | Test trace: map existing `pytest` test IDs to IQ/OQ requirements | ⏳ hsalazar |
+
+### E — Customer Role Defaults (SE/PM) ✅ DONE 2026-07-10
+
+Added mid-sprint, not originally scoped — DC asked how to adjust which users are assigned to
+each ECN based on customer. Built as a per-customer SE/PM candidate table, seeded from Stargile
+`srx_allocation` (MySQL, 10.40.10.32) via fuzzy name match against live MOVEX customers.
+
+| # | Task | File | Status |
+|---|------|------|--------|
+| S8-E1 | Migration — `customer_role_defaults` table (cuno, role_id ∈ {SE,PM}, username, is_default, source, soft-delete) | `alembic/versions/0023_customer_role_defaults.py` | ✅ |
+| S8-E2 | One-time import script — Stargile `tbl_Allocation`/`tbl_people` fuzzy-matched to MOVEX CUNOs; 315 candidate rows imported across 48 customers, 8 unmatched left for manual review (left as-is per DC decision 2026-07-10) | one-off script, not committed | ✅ |
+| S8-E3 | Admin service + endpoints — list/add/set-default/remove candidates (DC-only) | `src/services/admin.py`, `src/routers/admin.py` | ✅ |
+| S8-E4 | ECN auto-assign override — customer-scoped SE/PM default wins over facility-wide `system_role_users` when creating an ECN | `src/services/ecn/helpers.py` (`_auto_assign_roles`) | ✅ |
+| S8-E5 | Admin UI — "Customer — SE / PM Defaults" section: customer picker, per-role candidates, make-default/remove | `frontend/src/pages/AdminPage.tsx` | ✅ |
+
+---
+
+## Sprint 9 — Digest, Lineage, Mounting Type, Recovery Panel, Reassignment ⏳ PLANNED
+
+> Scope locked 2026-07-10. Ordered quick-wins-first: S9-1 and S9-2 are backend/frontend-only
+> against existing data; S9-4 and S9-5 need new backend (endpoint/trigger) design.
+
+| # | Task | Scope | File(s) | Est. |
+|---|------|-------|---------|------|
+| S9-1 | Facility-scoped ECN digest — add `facility` filter to `_fetch_open_ecns()` and join DC's `system_role_users.facility` in `_fetch_digest_recipients()`; send one digest per facility instead of one global digest to all DCs | Backend only | `src/tasks/ecn_notifications.py` | 2-3 hrs |
+| S9-2 | ECN revision lineage UI — new read-only panel/tab showing `ecn_transition_history` (already has `revision_number`, `sha256_prev`, `sha256`) as a chain; needs a small new GET endpoint | Backend (thin) + Frontend | new router endpoint + `frontend/src/components/ecn/` | 1 day |
+| S9-3 | Part TH/SMD mounting type — add `mounting_type` column to `ecn_items`, extend DigiKey adapter to return it, add dropdown to item form | Migration + Backend + Frontend | new migration, DigiKey adapter, item form | 1 day |
+| S9-4 | DC recovery panel for failed Movex writes — **no listing endpoint exists yet**; add `GET /api/v1/admin/movex-outbox?state=failed` + retry action, then a DC-facing panel | Backend (new) + Frontend | `src/routers/admin.py`, `frontend/src/pages/AdminPage.tsx` | 1.5-2 days |
+| S9-5 | Originator reassignment — **no backend exists**; new `reassign_originator` workflow trigger, DC-only endpoint, transition history entry, DC-only modal | Backend (new) + Frontend | `src/workflow/machine.py`, `src/routers/ecn_core.py`, frontend modal | 1.5 days |
+
+**Total estimate:** ~6-7 dev days, single sprint.
 
 ---
 
@@ -500,18 +606,19 @@ Also fixed: `ECNCreatePage` POST `/api/v1/ecn` missing trailing slash → 401 (F
 ## Iteration 2 — Backlog (Post-PoC)
 
 > Items confirmed as out of scope for Iteration 1 and queued for Iteration 2 planning.
-> Last updated 2026-07-02: DMR simplified (no Azure App Reg — Sprint 7-A); allocation scraping
-> deprioritised (await DB access); Implementation Schedule moved to Sprint 7-F.
+> Last updated 2026-07-09: Sprint 7 shipped DMR, Implementation Schedule, Admin CRUD, Cancel ECN.
+> I2-7 (routing ops UI) and I2-3 (MPN extended fields) pulled into Sprint 8.
+> I2-14 (originator reassignment) remains Iteration 2.
 
 | # | Item | Source | Notes |
 |---|------|--------|-------|
 | I2-1 | Facility-scoped ECN digest — send per-facility digest emails so JB DCs only see JB ECNs and Melbourne DCs only see Melbourne ECNs. Current `_fetch_open_ecns()` has no facility filter — when both facilities go live, DC recipients will see cross-facility ECNs. Fix: filter digest query by `facility` and dispatch one email per facility group, or add a facility column + filter UI on the digest. | Gap analysis vs `ECN-Open-NextAction-Johor.xls` 2026-06-22 | `src/tasks/ecn_notifications.py:132-156` |
 | I2-2 | Customer BOM vs Quoted BOM comparison | Karen/Nick 2026-04-29 meeting (1:10:42) | Iteration 2/3 per Karen |
-| I2-3 | MPN extended fields UI — `lifecycle`, `eol_date`, `lead_time_weeks`, `msl_level`, `packaging_type`, `do_not_buy`, `alt_mpn` display in ECN item panel | S2-15 deferred | Schema ✅ in DB |
+| I2-3 | MPN extended fields UI — `lifecycle`, `eol_date`, `lead_time_weeks`, `msl_level`, `packaging_type`, `do_not_buy`, `alt_mpn` display in ECN item panel | S2-15 deferred | → Sprint 8 (S8-B) |
 | I2-4 | DC recovery panel — Movex write status display (SSE infra + pg_notify ✅) | S2-16 deferred | Display panel UI build |
 | I2-5 | ECN version/revision lineage — UI display of SHA-256 audit chain | S2-17 deferred | Audit chain ✅ in DB |
 | I2-6 | BOM concurrency detection — delta detection at DC_APPROVED gate | S2-18 deferred | Schema ✅ |
-| I2-7 | Routing operations UI | S2-23 deferred | Schema + CRUD API ✅ |
+| I2-7 | Routing operations UI | S2-23 deferred | → Sprint 8 (S8-A) |
 | I2-8 | CRS620 manufacturer ID auto-resolve — when MPN entered, auto-lookup Manufacturer Code (status 30) via `CRS620MI` and pre-fill; eliminates manual lookup. Depends on movex-rest-api extension. | Sprint 7 analysis | Alongside S8-J (mounting type) |
 | I2-9 | E — Notification template management — admin page `/admin/notifications`; Jinja2 templates in `notification_templates` DB table; migrate hardcoded templates from `src/tasks/ecn_notifications.py` | Sprint 8 | `notification_templates` table new |
 | I2-10 | J — Part TH/SMD mounting type — `mounting_type (TH\|SMD\|OTHER)` on `ecn_items`; auto-populate from DigiKey via `/parts/autofill` extension | Sprint 8 | Schema change + DigiKey adapter extension |

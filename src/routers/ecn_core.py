@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 import structlog
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -276,6 +276,7 @@ async def update_ecn(
 async def transition_ecn_status(
     ecn_id: str,
     body: ECNTransitionBody,
+    background_tasks: BackgroundTasks,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
     if_unmodified_since: Annotated[str | None, Header()] = None,
@@ -307,7 +308,7 @@ async def transition_ecn_status(
     )
     ts = parse_if_unmodified_since(if_unmodified_since)
     try:
-        detail = await svc.transition(
+        detail, outbox_ids = await svc.transition(
             ecn_id, req, actor_username=user.username, if_unmodified_since=ts
         )
     except (ECNPreconditionRequired, ECNConflict) as exc:
@@ -319,6 +320,17 @@ async def transition_ecn_status(
         )
     except ECNTransitionError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+
+    # Dispatch pending outbox rows post-commit (BackgroundTasks run after get_session commits).
+    if outbox_ids:
+        from src.tasks.movex_outbox import process_outbox_entry
+
+        def _dispatch(ids: list[str]) -> None:
+            for oid in ids:
+                process_outbox_entry.apply_async(args=[oid])
+
+        background_tasks.add_task(_dispatch, outbox_ids)
+
     return detail_out(detail)  # type: ignore[return-value]
 
 

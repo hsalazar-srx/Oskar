@@ -95,27 +95,12 @@ class ECNWorkflowMixin:
             )
             return int(r.scalar_one()) == 0
 
-        async def _missing_drawings() -> list[str]:
-            r = await self._session.execute(
-                sa.text(
-                    "SELECT id FROM ecn_items "
-                    "WHERE ecn_id = :ecn_id AND is_new_item = TRUE "
-                    "AND drawing_number IS NULL"
-                ),
-                {"ecn_id": ecn_id},
-            )
-            return [str(row[0]) for row in r]
-
         from_status = ecn_model.status
         machine = ECNWorkflowMachine(
             ecn_model, ctx,
             all_required_approved_fn=_all_approved,
-            missing_drawings_fn=_missing_drawings,
         )
         machine.set_sha256_prev(sha256_prev)
-
-        if req.trigger == "dc_approve":
-            machine._pending_missing_drawings = await _missing_drawings()
 
         try:
             await machine.trigger(req.trigger)
@@ -142,12 +127,13 @@ class ECNWorkflowMixin:
         if to_status == ECNStatus.MANAGEMENT_REVIEW:
             await self._seed_approval_steps(ecn_id, dict(row))
 
+        pending_outbox_ids: list[str] = []
+
         if req.trigger == "dc_approve":
-            await self._queue_drawing_outbox(ecn_id)
-            await self._queue_routing_operations_outbox(ecn_id)
+            pending_outbox_ids += await self._queue_routing_operations_outbox(ecn_id)
 
         if req.trigger == "movex_write_complete":
-            await self._queue_alias_outbox(ecn_id)
+            pending_outbox_ids += await self._queue_alias_outbox(ecn_id)
             await self._seed_impl_checklist(ecn_id, dict(row))
 
         if req.trigger == "reject" and req.rejection_reason:
@@ -157,7 +143,7 @@ class ECNWorkflowMixin:
             "ecn.transition", ecn_id=ecn_id, trigger=req.trigger,
             from_status=from_status, to_status=to_status, actor=actor_username,
         )
-        return await self.get(ecn_id)
+        return await self.get(ecn_id), pending_outbox_ids
 
     # ── Drawing number ────────────────────────────────────────────────────────
 
@@ -500,32 +486,7 @@ class ECNWorkflowMixin:
 
     # ── Outbox queuing ────────────────────────────────────────────────────────
 
-    async def _queue_drawing_outbox(self, ecn_id: str) -> None:
-        rows = await self._session.execute(
-            sa.text(
-                "SELECT id, item_number, drawing_number FROM ecn_items "
-                "WHERE ecn_id = :ecn_id AND is_new_item = TRUE"
-            ),
-            {"ecn_id": ecn_id},
-        )
-        for item_id, item_number, drawing_number in rows:
-            idempotency_key = f"MPDDOC.CreateDrawing:{ecn_id}:{item_id}"
-            await self._session.execute(
-                sa.text(
-                    "INSERT INTO movex_outbox "
-                    "(id, ecn_id, ecn_item_id, mi_transaction, mi_params, idempotency_key) "
-                    "VALUES (:id, :ecn_id, :item_id, :mi_tx, CAST(:mi_params AS jsonb), :ikey) "
-                    "ON CONFLICT (idempotency_key) DO NOTHING"
-                ),
-                {
-                    "id": str(uuid.uuid4()), "ecn_id": ecn_id, "item_id": str(item_id),
-                    "mi_tx": "MPDDOC.CreateDrawing",
-                    "mi_params": json.dumps({"item_number": item_number, "drawing_number": drawing_number}),
-                    "ikey": idempotency_key,
-                },
-            )
-
-    async def _queue_alias_outbox(self, ecn_id: str) -> None:
+    async def _queue_alias_outbox(self, ecn_id: str) -> list[str]:
         rows = await self._session.execute(
             sa.text(
                 "SELECT m.id, m.ecn_item_id, m.mpn, m.manufacturer, m.is_default "
@@ -535,29 +496,34 @@ class ECNWorkflowMixin:
             ),
             {"ecn_id": ecn_id},
         )
+        inserted: list[str] = []
         for mpn_id, item_id, mpn, manufacturer, is_default in rows:
             idempotency_key = f"MMS025MI.AddAlias:{ecn_id}:{mpn_id}"
-            await self._session.execute(
+            new_id = str(uuid.uuid4())
+            result = await self._session.execute(
                 sa.text(
                     "INSERT INTO movex_outbox "
                     "(id, ecn_id, ecn_item_id, mi_transaction, mi_params, idempotency_key) "
                     "VALUES (:id, :ecn_id, :item_id, :mi_tx, CAST(:mi_params AS jsonb), :ikey) "
-                    "ON CONFLICT (idempotency_key) DO NOTHING"
+                    "ON CONFLICT (idempotency_key) DO NOTHING RETURNING id"
                 ),
                 {
-                    "id": str(uuid.uuid4()), "ecn_id": ecn_id, "item_id": str(item_id),
+                    "id": new_id, "ecn_id": ecn_id, "item_id": str(item_id),
                     "mi_tx": "MMS025MI.AddAlias",
                     "mi_params": json.dumps({"mpn": mpn, "manufacturer": manufacturer, "is_default": bool(is_default)}),
                     "ikey": idempotency_key,
                 },
             )
+            if result.rowcount:
+                inserted.append(new_id)
+        return inserted
 
-    async def _queue_routing_operations_outbox(self, ecn_id: str) -> None:
+    async def _queue_routing_operations_outbox(self, ecn_id: str) -> list[str]:
         """Queue PDS002MI.AddOperation or UpdateOperation for every routing op on this ECN.
 
         One outbox row per ecn_routing_operations row. Idempotency key prevents
         duplicates on retry: PDS002MI.{ADD|UPDATE}Operation:{ecn_id}:{op_id}.
-        Called at dc_approve alongside _queue_drawing_outbox.
+        Returns list of newly inserted outbox IDs for post-commit Celery dispatch.
         """
         rows = await self._session.execute(
             sa.text(
@@ -570,6 +536,7 @@ class ECNWorkflowMixin:
             {"ecn_id": ecn_id},
         )
         _mi_verb = {"ADD": "Add", "UPDATE": "Update"}
+        inserted: list[str] = []
         for op_id, item_id, opno, opds, plgr, piti, seti, change_type in rows:
             mi_tx = f"PDS002MI.{_mi_verb[change_type]}Operation"
             idempotency_key = f"{mi_tx}:{ecn_id}:{op_id}"
@@ -581,20 +548,24 @@ class ECNWorkflowMixin:
             }
             if seti is not None:
                 mi_params["setup_time"] = float(seti)
-            await self._session.execute(
+            new_id = str(uuid.uuid4())
+            result = await self._session.execute(
                 sa.text(
                     "INSERT INTO movex_outbox "
                     "(id, ecn_id, ecn_item_id, mi_transaction, mi_params, idempotency_key) "
                     "VALUES (:id, :ecn_id, :item_id, :mi_tx, CAST(:mi_params AS jsonb), :ikey) "
-                    "ON CONFLICT (idempotency_key) DO NOTHING"
+                    "ON CONFLICT (idempotency_key) DO NOTHING RETURNING id"
                 ),
                 {
-                    "id": str(uuid.uuid4()), "ecn_id": ecn_id, "item_id": str(item_id),
+                    "id": new_id, "ecn_id": ecn_id, "item_id": str(item_id),
                     "mi_tx": mi_tx,
                     "mi_params": json.dumps(mi_params),
                     "ikey": idempotency_key,
                 },
             )
+            if result.rowcount:
+                inserted.append(new_id)
+        return inserted
 
     # ── Implementation checklist ──────────────────────────────────────────────
 

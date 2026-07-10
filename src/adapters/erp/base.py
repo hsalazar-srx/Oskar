@@ -296,21 +296,3 @@ class ERPAdapter(ABC):
         """
         ...
 
-    @abstractmethod
-    async def create_drawing(
-        self,
-        item_number: str,
-        drawing_number: str,
-        *,
-        idempotency_key: str,
-    ) -> dict[str, Any]:
-        """Create a drawing record in MPDDOC by copying the #TEMPLATE record.
-
-        IMPORTANT: The implementation path is unconfirmed (PRE-12 investigation item).
-        Stargile uses a direct DB2 INSERT (PreparedStatementHelper), not a standard MI
-        program. The @developer-dotnet team must confirm whether movex-rest-api will
-        expose this as an MI transaction or a custom /api/ecn/drawing endpoint.
-        See ai/memory/02-movex-erp-authority.md §6 MPDDOC note.
-        Returns the response dict. Caller must check for error indicators.
-        """
-        ...

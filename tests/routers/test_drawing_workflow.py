@@ -241,28 +241,14 @@ class TestSetDrawingNumber:
         assert resp.status_code == 422
 
 
-# ── DC_APPROVED guard: drawings required before dc_approve ──────────────────
+# ── DC_APPROVED gate: dc_approve ─────────────────────────────────────────────
 
-class TestDcApproveDrawingGuard:
-    """dc_approve blocked when new items have no drawing_number."""
+class TestDcApproveGate:
+    """dc_approve transitions DC_APPROVED → APPROVED."""
 
-    def test_dc_approve_blocked_missing_drawings_returns_422(self):
+    def test_dc_approve_returns_200(self):
         with patch.object(ECNService, "transition", new_callable=AsyncMock) as mock:
-            mock.side_effect = ECNTransitionError(
-                f"All new items must have a drawing number before DC approval. "
-                f"Missing: {_ITEM_ID}."
-            )
-            client = _make_client(_DC_USER)
-            resp = client.patch(
-                f"/api/v1/ecn/{_ECN_ID}/status",
-                json={"trigger": "dc_approve", "actor_role": "DC"},
-                headers={"If-Unmodified-Since": "Wed, 06 May 2026 10:00:00 GMT"},
-            )
-        assert resp.status_code == 422
-
-    def test_dc_approve_succeeds_all_drawings_set_returns_200(self):
-        with patch.object(ECNService, "transition", new_callable=AsyncMock) as mock:
-            mock.return_value = _APPROVED_DETAIL
+            mock.return_value = (_APPROVED_DETAIL, [])
             client = _make_client(_DC_USER)
             resp = client.patch(
                 f"/api/v1/ecn/{_ECN_ID}/status",

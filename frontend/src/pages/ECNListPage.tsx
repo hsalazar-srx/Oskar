@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react"
 import { Link, useNavigate } from "react-router-dom"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Spinner } from "@/components/ui/spinner"
@@ -52,7 +52,6 @@ const TERMINAL = [60, 65, 70, 80]
 
 export default function ECNListPage() {
   const navigate = useNavigate()
-  const qc = useQueryClient()
   const logout = useAuthStore((s) => s.logout)
   const user = useAuthStore((s) => s.user)
 
@@ -342,7 +341,7 @@ export default function ECNListPage() {
                       className={`cursor-pointer transition-colors duration-150 border-b border-[#f1f5f9] last:border-0 ${
                         isMyAction ? "bg-[#eff6ff] hover:bg-[#dbeafe]/60" : "hover:bg-[#f8fafc]"
                       }`}
-                      onClick={() => { qc.removeQueries({ queryKey: ["ecn", ecn.id] }); navigate(`/ecn/${ecn.id}`) }}
+                      onClick={() => navigate(`/ecn/${ecn.id}`)}
                     >
                       <TableCell className="py-3.5">
                         <Link

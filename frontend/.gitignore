@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Playwright screenshot verification (screenshot-frontend skill)
+screenshot-out/
+screenshot-run.mjs
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
