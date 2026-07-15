@@ -10,7 +10,12 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.services.ecn.models import ECNCreateRequest, ECNUpdateRequest, ECNValidationError
+from src.services.ecn.models import (
+    ECNCreateRequest,
+    ECNStatusTransitionRequest,
+    ECNUpdateRequest,
+    ECNValidationError,
+)
 from src.services.ecn.service import ECNService
 from src.workflow.machine import ECNStatus
 
@@ -96,14 +101,17 @@ class TestECNServiceCreate:
         import uuid
         import sqlalchemy as sa
 
-        cuno = "TEST01"
+        # Unique cuno per run — this test commits (bypassing the fixture's rollback-on-teardown),
+        # so a fixed cuno would collide with uq_crd_cuno_role_username on the suite's second run.
+        cuno = f"T{uuid.uuid4().hex[:8].upper()}"
+        row_id = str(uuid.uuid4())
         await db_session.execute(
             sa.text(
                 "INSERT INTO customer_role_defaults "
                 "(id, cuno, customer_name, role_id, username, is_default, source, added_by) "
                 "VALUES (:id, :cuno, 'TEST CUSTOMER', 'SE', 'customer_se_user', TRUE, 'manual', 'test-seed')"
             ),
-            {"id": str(uuid.uuid4()), "cuno": cuno},
+            {"id": row_id, "cuno": cuno},
         )
         await db_session.commit()
 
@@ -114,6 +122,11 @@ class TestECNServiceCreate:
         assert se is not None
         assert se.username == "customer_se_user"
         assert se.is_auto_assigned is True
+
+        await db_session.execute(
+            sa.text("DELETE FROM customer_role_defaults WHERE id = :id"), {"id": row_id}
+        )
+        await db_session.commit()
 
     async def test_audit_history_entry_created(self, db_session: AsyncSession):
         import sqlalchemy as sa
@@ -178,6 +191,70 @@ class TestECNServiceGet:
         svc = ECNService(db_session)
         with pytest.raises(ECNNotFound):
             await svc.get("00000000-0000-0000-0000-000000000000")
+
+
+# ---------------------------------------------------------------------------
+# get_history (S9-2)
+# ---------------------------------------------------------------------------
+
+class TestECNServiceGetHistory:
+
+    async def test_single_create_event_chain(self, db_session: AsyncSession):
+        svc = ECNService(db_session)
+        ecn = await svc.create(_create_req(title="History test"), _ACTOR)
+
+        history = await svc.get_history(ecn.id)
+
+        assert len(history) == 1
+        assert history[0]["action"] == "create"
+        assert history[0]["from_status"] is None
+        assert history[0]["to_status"] == ECNStatus.DRAFT
+        assert history[0]["to_status_name"] == "DRAFT"
+        assert history[0]["chain_valid"] is True
+        assert history[0]["sha256_prev"] is None
+        assert len(history[0]["sha256_self"]) == 64
+
+    async def test_multiple_transitions_ordered_oldest_first(self, db_session: AsyncSession):
+        svc = ECNService(db_session)
+        ecn = await svc.create(_create_req(title="Chain test"), _ACTOR)
+        await svc.create_item(ecn.id, line_number=10, item_number="HIST-TEST-001")
+        req = ECNStatusTransitionRequest(trigger="submit", actor_role="OR")
+        await svc.transition(ecn.id, req, actor_username=_ACTOR)
+
+        history = await svc.get_history(ecn.id)
+
+        assert len(history) == 2
+        assert history[0]["action"] == "create"
+        assert history[1]["action"] == "submit"
+        assert history[1]["from_status"] == ECNStatus.DRAFT
+        assert history[1]["to_status"] == ECNStatus.ENGINEERING_REVIEW
+
+    async def test_chain_links_via_sha256(self, db_session: AsyncSession):
+        svc = ECNService(db_session)
+        ecn = await svc.create(_create_req(title="Hash link test"), _ACTOR)
+        await svc.create_item(ecn.id, line_number=10, item_number="HIST-TEST-002")
+        req = ECNStatusTransitionRequest(trigger="submit", actor_role="OR")
+        await svc.transition(ecn.id, req, actor_username=_ACTOR)
+
+        history = await svc.get_history(ecn.id)
+
+        assert history[1]["sha256_prev"] == history[0]["sha256_self"]
+        assert all(h["chain_valid"] for h in history)
+
+    async def test_missing_ecn_raises_ecn_not_found(self, db_session: AsyncSession):
+        from src.services.ecn.models import ECNNotFound
+        svc = ECNService(db_session)
+        with pytest.raises(ECNNotFound):
+            await svc.get_history("00000000-0000-0000-0000-000000000000")
+
+    async def test_actor_and_role_recorded(self, db_session: AsyncSession):
+        svc = ECNService(db_session)
+        ecn = await svc.create(_create_req(title="Actor test"), _ACTOR)
+
+        history = await svc.get_history(ecn.id)
+
+        assert history[0]["actor_username"] == _ACTOR
+        assert history[0]["actor_role"] == "OR"
 
 
 # ---------------------------------------------------------------------------
