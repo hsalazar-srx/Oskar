@@ -143,6 +143,21 @@ class ECNWorkflowMixin:
             "ecn.transition", ecn_id=ecn_id, trigger=req.trigger,
             from_status=from_status, to_status=to_status, actor=actor_username,
         )
+
+        # dc_approve queues routing-op writes only. If an ECN has no routing
+        # changes, no MPN changes, and no new items, there is nothing to write
+        # to Movex — but advance_ecn_to_implemented (Celery) only ever fires
+        # from inside process_outbox_entry's success path, so a zero-entry
+        # ECN would otherwise sit at APPROVED forever with nothing left to
+        # trigger movex_write_complete. Fire it here immediately instead.
+        if req.trigger == "dc_approve" and not pending_outbox_ids:
+            system_req = ECNStatusTransitionRequest(
+                trigger="movex_write_complete",
+                actor_role=None,
+                notes="Auto-advanced — no Movex writes were queued (no routing changes).",
+            )
+            return await self.transition(ecn_id, system_req, actor_username="system:no-movex-writes")
+
         return await self.get(ecn_id), pending_outbox_ids
 
     # ── Drawing number ────────────────────────────────────────────────────────
@@ -524,30 +539,34 @@ class ECNWorkflowMixin:
         One outbox row per ecn_routing_operations row. Idempotency key prevents
         duplicates on retry: PDS002MI.{ADD|UPDATE}Operation:{ecn_id}:{op_id}.
         Returns list of newly inserted outbox IDs for post-commit Celery dispatch.
+
+        Note: PDS002MI.AddOperation/UpdateOperation have no description field
+        (PLGR/PITI only per the real M3 transaction schema) — operation_description
+        and setup_time are not sent to Movex, only stored locally in ecn_routing_operations.
         """
         rows = await self._session.execute(
             sa.text(
-                "SELECT r.id, r.ecn_item_id, r.operation_number, r.operation_description, "
-                "r.work_centre, r.run_time, r.setup_time, r.change_type "
+                "SELECT r.id, r.ecn_item_id, i.item_number, e.facility, "
+                "r.operation_number, r.work_centre, r.run_time, r.change_type "
                 "FROM ecn_routing_operations r "
                 "JOIN ecn_items i ON i.id = r.ecn_item_id "
+                "JOIN ecn_instances e ON e.id = i.ecn_id "
                 "WHERE i.ecn_id = :ecn_id"
             ),
             {"ecn_id": ecn_id},
         )
         _mi_verb = {"ADD": "Add", "UPDATE": "Update"}
         inserted: list[str] = []
-        for op_id, item_id, opno, opds, plgr, piti, seti, change_type in rows:
+        for op_id, item_id, item_number, facility, opno, plgr, piti, change_type in rows:
             mi_tx = f"PDS002MI.{_mi_verb[change_type]}Operation"
             idempotency_key = f"{mi_tx}:{ecn_id}:{op_id}"
             mi_params: dict = {
+                "item_number": item_number,
+                "facility": facility,
                 "operation_number": opno,
-                "operation_description": opds,
                 "work_centre": plgr,
                 "run_time": float(piti),
             }
-            if seti is not None:
-                mi_params["setup_time"] = float(seti)
             new_id = str(uuid.uuid4())
             result = await self._session.execute(
                 sa.text(

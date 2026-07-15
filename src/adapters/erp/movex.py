@@ -347,7 +347,7 @@ class MovexRestAdapter(ERPAdapter):
             payload["buye"] = buyer
 
         resp = await self._post(
-            "/mi/PDS001MI/AddProduct",
+            "/PDS001MI/AddProduct",
             json=payload,
             headers={"Idempotency-Key": idempotency_key},
         )
@@ -366,7 +366,7 @@ class MovexRestAdapter(ERPAdapter):
         idempotency_key: str,
     ) -> dict[str, Any]:
         resp = await self._post(
-            "/mi/PDS002MI/AddComponent",
+            "/PDS002MI/AddComponent",
             json={
                 "cono": self.cono,
                 "faci": "D",          # facility — will be parameterised Sprint 2
@@ -394,7 +394,7 @@ class MovexRestAdapter(ERPAdapter):
         idempotency_key: str,
     ) -> dict[str, Any]:
         resp = await self._post(
-            "/mi/PDS002MI/DeleteComponent",
+            "/PDS002MI/DeleteComponent",
             json={
                 "cono": self.cono,
                 "prno": parent_item,
@@ -410,27 +410,34 @@ class MovexRestAdapter(ERPAdapter):
     async def update_routing_operation(
         self,
         item_number: str,
+        facility: str,
         operation_number: int,
         *,
-        operation_description: str | None = None,
+        structure_type: str = "001",
         work_centre: str | None = None,
         run_time: float | None = None,
         idempotency_key: str,
     ) -> dict[str, Any]:
+        """PDS002MI.UpdateOperation. Note: this transaction has no description
+        field (PLGR/PITI only) — operation_description is not sent to Movex.
+
+        PITI must be an all-numeric-character string with no decimal point —
+        M3 stores run time as minutes * 100 (confirmed via live write:
+        PITI="545" -> stored/returned as 54500 by LstOperation)."""
         payload: dict[str, Any] = {
-            "cono": self.cono,
-            "prno": item_number,
-            "opno": operation_number,
+            "CONO": self.cono,
+            "FACI": facility,
+            "PRNO": item_number,
+            "STRT": structure_type,
+            "OPNO": operation_number,
         }
-        if operation_description:
-            payload["opds"] = operation_description
         if work_centre:
-            payload["plgr"] = work_centre
+            payload["PLGR"] = work_centre
         if run_time is not None:
-            payload["piti"] = run_time
+            payload["PITI"] = str(round(run_time * 100))
 
         resp = await self._post(
-            "/mi/PDS002MI/UpdateOperation",
+            "/PDS002MI/UpdateOperation",
             json=payload,
             headers={"Idempotency-Key": idempotency_key},
         )
@@ -439,22 +446,30 @@ class MovexRestAdapter(ERPAdapter):
     async def add_routing_operation(
         self,
         item_number: str,
+        facility: str,
         operation_number: int,
-        operation_description: str,
         work_centre: str,
         run_time: float,
         *,
+        structure_type: str = "001",
         idempotency_key: str,
     ) -> dict[str, Any]:
+        """PDS002MI.AddOperation. Note: this transaction has no description
+        field (PLGR/PITI only) — operation_description is not sent to Movex.
+
+        PITI must be an all-numeric-character string with no decimal point —
+        M3 stores run time as minutes * 100 (confirmed via live write:
+        PITI="545" -> stored/returned as 54500 by LstOperation)."""
         resp = await self._post(
-            "/mi/PDS002MI/AddOperation",
+            "/PDS002MI/AddOperation",
             json={
-                "cono": self.cono,
-                "prno": item_number,
-                "opno": operation_number,
-                "opds": operation_description,
-                "plgr": work_centre,
-                "piti": run_time,
+                "CONO": self.cono,
+                "FACI": facility,
+                "PRNO": item_number,
+                "STRT": structure_type,
+                "OPNO": operation_number,
+                "PLGR": work_centre,
+                "PITI": str(round(run_time * 100)),
             },
             headers={"Idempotency-Key": idempotency_key},
         )
@@ -481,7 +496,7 @@ class MovexRestAdapter(ERPAdapter):
             payload["mfno"] = manufacturer
 
         resp = await self._post(
-            "/mi/MMS025MI/AddAlias",
+            "/MMS025MI/AddAlias",
             json=payload,
             headers={"Idempotency-Key": idempotency_key},
         )
