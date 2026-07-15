@@ -220,18 +220,23 @@ class TestCheckOverdueEscalations:
 # ── send_ecn_digest task (G-4) ────────────────────────────────────────────────
 
 class TestSendECNDigest:
-    """src.tasks.ecn_notifications.send_ecn_digest — daily HTML email (G-4)."""
+    """src.tasks.ecn_notifications.send_ecn_digest — daily HTML email (G-4).
+
+    Facility-scoped (S9-1): one digest per facility with open ECNs, sent only to
+    that facility's DCs — prevents cross-facility leakage (D vs L).
+    """
 
     @pytest.mark.asyncio
     async def test_digest_sends_email_when_open_ecns_exist(self):
-        """Digest email dispatched when there are open ECNs."""
+        """Digest email dispatched when there are open ECNs in a facility."""
         from src.tasks.ecn_notifications import send_ecn_digest_async as send_ecn_digest
 
         open_ecns = [
             {
                 "ecn_number": "ECN-2026-L-0001",
                 "title": "Test ECN",
-                "status_name": "ENGINEERING_REVIEW",
+                "status": 30,
+                "facility": "L",
                 "originator_username": "or_user",
                 "created_at": _NOW,
                 "age_days": 3,
@@ -239,9 +244,11 @@ class TestSendECNDigest:
             }
         ]
 
-        with patch("src.tasks.ecn_notifications._fetch_open_ecns", new_callable=AsyncMock) as mock_fetch, \
+        with patch("src.tasks.ecn_notifications._fetch_open_facilities", new_callable=AsyncMock) as mock_facilities, \
+             patch("src.tasks.ecn_notifications._fetch_open_ecns", new_callable=AsyncMock) as mock_fetch, \
              patch("src.tasks.ecn_notifications._fetch_digest_recipients", new_callable=AsyncMock) as mock_recip, \
              patch("src.tasks.ecn_notifications.ECNEmailService") as MockSvc:
+            mock_facilities.return_value = ["L"]
             mock_fetch.return_value = open_ecns
             mock_recip.return_value = ["dc@scanfil.com"]
             mock_svc_instance = AsyncMock()
@@ -252,17 +259,21 @@ class TestSendECNDigest:
         mock_svc_instance.send.assert_awaited_once()
         call_kwargs = mock_svc_instance.send.call_args.kwargs
         assert "ECN" in call_kwargs.get("subject", "")
+        mock_fetch.assert_awaited_once_with("L")
+        mock_recip.assert_awaited_once_with("L")
 
     @pytest.mark.asyncio
     async def test_digest_subject_contains_facility_and_date(self):
-        """Digest subject includes facility and today's date for easy inbox filtering."""
+        """Digest subject includes the facility code and today's date."""
         from src.tasks.ecn_notifications import send_ecn_digest_async as send_ecn_digest
 
-        with patch("src.tasks.ecn_notifications._fetch_open_ecns", new_callable=AsyncMock) as mock_fetch, \
+        with patch("src.tasks.ecn_notifications._fetch_open_facilities", new_callable=AsyncMock) as mock_facilities, \
+             patch("src.tasks.ecn_notifications._fetch_open_ecns", new_callable=AsyncMock) as mock_fetch, \
              patch("src.tasks.ecn_notifications._fetch_digest_recipients", new_callable=AsyncMock) as mock_recip, \
              patch("src.tasks.ecn_notifications.ECNEmailService") as MockSvc:
-            mock_fetch.return_value = [{"ecn_number": "ECN-2026-L-0001", "title": "X",
-                                        "status_name": "DRAFT", "originator_username": "u",
+            mock_facilities.return_value = ["D"]
+            mock_fetch.return_value = [{"ecn_number": "ECN-2026-D-0001", "title": "X",
+                                        "status": 0, "facility": "D", "originator_username": "u",
                                         "created_at": _NOW, "age_days": 1, "next_action_users": []}]
             mock_recip.return_value = ["dc@scanfil.com"]
             mock_svc_instance = AsyncMock()
@@ -272,17 +283,16 @@ class TestSendECNDigest:
 
         subject = mock_svc_instance.send.call_args.kwargs.get("subject", "")
         assert "OSKAR" in subject
+        assert "Facility D" in subject
 
     @pytest.mark.asyncio
-    async def test_digest_skipped_when_no_open_ecns(self):
-        """No email sent when there are zero open ECNs — avoids empty digests."""
+    async def test_digest_skipped_when_no_open_ecns_anywhere(self):
+        """No email sent when zero facilities have open ECNs — avoids empty digests."""
         from src.tasks.ecn_notifications import send_ecn_digest_async as send_ecn_digest
 
-        with patch("src.tasks.ecn_notifications._fetch_open_ecns", new_callable=AsyncMock) as mock_fetch, \
-             patch("src.tasks.ecn_notifications._fetch_digest_recipients", new_callable=AsyncMock) as mock_recip, \
+        with patch("src.tasks.ecn_notifications._fetch_open_facilities", new_callable=AsyncMock) as mock_facilities, \
              patch("src.tasks.ecn_notifications.ECNEmailService") as MockSvc:
-            mock_fetch.return_value = []
-            mock_recip.return_value = ["dc@scanfil.com"]
+            mock_facilities.return_value = []
             mock_svc_instance = AsyncMock()
             MockSvc.return_value = mock_svc_instance
 
@@ -295,11 +305,13 @@ class TestSendECNDigest:
         """HTML body contains the ECN number from the open ECN list."""
         from src.tasks.ecn_notifications import send_ecn_digest_async as send_ecn_digest
 
-        with patch("src.tasks.ecn_notifications._fetch_open_ecns", new_callable=AsyncMock) as mock_fetch, \
+        with patch("src.tasks.ecn_notifications._fetch_open_facilities", new_callable=AsyncMock) as mock_facilities, \
+             patch("src.tasks.ecn_notifications._fetch_open_ecns", new_callable=AsyncMock) as mock_fetch, \
              patch("src.tasks.ecn_notifications._fetch_digest_recipients", new_callable=AsyncMock) as mock_recip, \
              patch("src.tasks.ecn_notifications.ECNEmailService") as MockSvc:
+            mock_facilities.return_value = ["L"]
             mock_fetch.return_value = [{"ecn_number": "ECN-2026-L-0099", "title": "My ECN",
-                                        "status_name": "MANAGEMENT_REVIEW", "originator_username": "u",
+                                        "status": 40, "facility": "L", "originator_username": "u",
                                         "created_at": _NOW, "age_days": 10, "next_action_users": ["em_user"]}]
             mock_recip.return_value = ["dc@scanfil.com"]
             mock_svc_instance = AsyncMock()
@@ -309,6 +321,60 @@ class TestSendECNDigest:
 
         html = mock_svc_instance.send.call_args.kwargs.get("body_html", "")
         assert "ECN-2026-L-0099" in html
+
+    @pytest.mark.asyncio
+    async def test_digest_sends_one_email_per_facility(self):
+        """Two facilities with open ECNs → two separate digest emails, each facility-scoped."""
+        from src.tasks.ecn_notifications import send_ecn_digest_async as send_ecn_digest
+
+        def fetch_side_effect(facility: str):
+            return [{
+                "ecn_number": f"ECN-2026-{facility}-0001", "title": "X",
+                "status": 0, "facility": facility, "originator_username": "u",
+                "created_at": _NOW, "age_days": 1, "next_action_users": [],
+            }]
+
+        def recip_side_effect(facility: str):
+            return [f"dc-{facility.lower()}@scanfil.com"]
+
+        with patch("src.tasks.ecn_notifications._fetch_open_facilities", new_callable=AsyncMock) as mock_facilities, \
+             patch("src.tasks.ecn_notifications._fetch_open_ecns", new_callable=AsyncMock) as mock_fetch, \
+             patch("src.tasks.ecn_notifications._fetch_digest_recipients", new_callable=AsyncMock) as mock_recip, \
+             patch("src.tasks.ecn_notifications.ECNEmailService") as MockSvc:
+            mock_facilities.return_value = ["D", "L"]
+            mock_fetch.side_effect = fetch_side_effect
+            mock_recip.side_effect = recip_side_effect
+            mock_svc_instance = AsyncMock()
+            MockSvc.return_value = mock_svc_instance
+
+            await send_ecn_digest()
+
+        assert mock_svc_instance.send.await_count == 2
+        subjects = [c.kwargs.get("subject", "") for c in mock_svc_instance.send.call_args_list]
+        assert any("Facility D" in s for s in subjects)
+        assert any("Facility L" in s for s in subjects)
+        recipients_sent = [c.kwargs.get("to") for c in mock_svc_instance.send.call_args_list]
+        assert ["dc-d@scanfil.com"] in recipients_sent
+        assert ["dc-l@scanfil.com"] in recipients_sent
+
+    @pytest.mark.asyncio
+    async def test_facility_with_no_open_ecns_is_skipped(self):
+        """A facility returned by _fetch_open_facilities but with zero rows (race) sends no email for it."""
+        from src.tasks.ecn_notifications import send_ecn_digest_async as send_ecn_digest
+
+        with patch("src.tasks.ecn_notifications._fetch_open_facilities", new_callable=AsyncMock) as mock_facilities, \
+             patch("src.tasks.ecn_notifications._fetch_open_ecns", new_callable=AsyncMock) as mock_fetch, \
+             patch("src.tasks.ecn_notifications._fetch_digest_recipients", new_callable=AsyncMock) as mock_recip, \
+             patch("src.tasks.ecn_notifications.ECNEmailService") as MockSvc:
+            mock_facilities.return_value = ["D"]
+            mock_fetch.return_value = []
+            mock_svc_instance = AsyncMock()
+            MockSvc.return_value = mock_svc_instance
+
+            await send_ecn_digest()
+
+        mock_svc_instance.send.assert_not_awaited()
+        mock_recip.assert_not_awaited()
 
 
 # ── POST /api/v1/admin/ecn-digest (G-5) ──────────────────────────────────────

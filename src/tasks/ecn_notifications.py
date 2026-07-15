@@ -129,8 +129,27 @@ async def _fetch_overdue_steps() -> list[dict[str, Any]]:
     return await asyncio.get_event_loop().run_in_executor(None, _query)
 
 
-async def _fetch_open_ecns() -> list[dict[str, Any]]:
-    """Return all open ECNs for the digest (excludes terminal statuses and archived)."""
+async def _fetch_open_facilities() -> list[str]:
+    """Return distinct facilities that have at least one open ECN."""
+    def _query():
+        conn = psycopg2.connect(_get_db_url())
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT DISTINCT facility FROM ecn_instances
+            WHERE status NOT IN (60, 65, 70, 80, 90)
+              AND is_archived = FALSE
+            ORDER BY facility
+        """)
+        facilities = [row[0] for row in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return facilities
+
+    return await asyncio.get_event_loop().run_in_executor(None, _query)
+
+
+async def _fetch_open_ecns(facility: str) -> list[dict[str, Any]]:
+    """Return open ECNs for one facility (excludes terminal statuses and archived)."""
     def _query():
         conn = psycopg2.connect(_get_db_url())
         cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
@@ -146,8 +165,9 @@ async def _fetch_open_ecns() -> list[dict[str, Any]]:
             FROM ecn_instances e
             WHERE e.status NOT IN (60, 65, 70, 80, 90)
               AND e.is_archived = FALSE
+              AND e.facility = %s
             ORDER BY e.created_at ASC
-        """)
+        """, (facility,))
         rows = [dict(r) for r in cur.fetchall()]
         cur.close()
         conn.close()
@@ -156,15 +176,15 @@ async def _fetch_open_ecns() -> list[dict[str, Any]]:
     return await asyncio.get_event_loop().run_in_executor(None, _query)
 
 
-async def _fetch_digest_recipients() -> list[str | None]:
-    """Return email addresses of all active DC role users (digest goes to DCs)."""
+async def _fetch_digest_recipients(facility: str) -> list[str | None]:
+    """Return email addresses of active DC role users for one facility."""
     def _query():
         conn = psycopg2.connect(_get_db_url())
         cur = conn.cursor()
         cur.execute("""
             SELECT DISTINCT username FROM system_role_users
-            WHERE role_id = 'DC' AND removed_at IS NULL
-        """)
+            WHERE role_id = 'DC' AND facility = %s AND removed_at IS NULL
+        """, (facility,))
         usernames = [row[0] for row in cur.fetchall()]
         cur.close()
         conn.close()
@@ -288,15 +308,16 @@ def _escalation_html(step: dict[str, Any], tier: int) -> str:
 # Daily digest (G-4)
 # ---------------------------------------------------------------------------
 
-async def _send_ecn_digest_async() -> None:
-    ecns = await _fetch_open_ecns()
+async def _send_digest_for_facility(facility: str) -> None:
+    """Build and send one digest email scoped to a single facility's open ECNs and DCs."""
+    ecns = await _fetch_open_ecns(facility)
     if not ecns:
-        log.info("ecn_digest_skipped", reason="no_open_ecns")
+        log.info("ecn_digest_skipped", reason="no_open_ecns", facility=facility)
         return
 
-    recipients = await _fetch_digest_recipients()
+    recipients = await _fetch_digest_recipients(facility)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    subject = f"[OSKAR] Daily ECN Digest — {today}"
+    subject = f"[OSKAR] Daily ECN Digest — Facility {facility} — {today}"
 
     rows_html = "".join(
         f"<tr>"
@@ -312,7 +333,7 @@ async def _send_ecn_digest_async() -> None:
 
     body_html = (
         f"<html><body>"
-        f"<h2>OSKAR — Open ECN Summary ({today})</h2>"
+        f"<h2>OSKAR — Open ECN Summary — Facility {facility} ({today})</h2>"
         f"<table border='1' cellpadding='6' cellspacing='0'>"
         f"<thead><tr>"
         f"<th>ECN Number</th><th>Title</th><th>Status</th>"
@@ -320,13 +341,27 @@ async def _send_ecn_digest_async() -> None:
         f"</tr></thead>"
         f"<tbody>{rows_html}</tbody>"
         f"</table>"
-        f"<p>{len(ecns)} open ECN(s) as of {today}.</p>"
+        f"<p>{len(ecns)} open ECN(s) in facility {facility} as of {today}.</p>"
         f"</body></html>"
     )
 
     svc = ECNEmailService()
     await svc.send(to=recipients, subject=subject, body_html=body_html)
-    log.info("ecn_digest_sent", ecn_count=len(ecns))
+    log.info("ecn_digest_sent", ecn_count=len(ecns), facility=facility)
+
+
+async def _send_ecn_digest_async() -> None:
+    """Send one digest per facility that has open ECNs, to that facility's DCs only.
+
+    Prevents a Melbourne (D) DC from receiving Johor Bahru (L) ECNs and vice versa.
+    """
+    facilities = await _fetch_open_facilities()
+    if not facilities:
+        log.info("ecn_digest_skipped", reason="no_open_ecns")
+        return
+
+    for facility in facilities:
+        await _send_digest_for_facility(facility)
 
 
 # ---------------------------------------------------------------------------
