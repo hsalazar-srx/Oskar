@@ -52,6 +52,28 @@ async def test_cache_hit_returns_cached_without_adapter_call():
 
 
 @pytest.mark.asyncio
+async def test_cache_hit_with_raw_json_populated():
+    """Regression test: raw_json is a jsonb column — asyncpg/SQLAlchemy return
+    it already deserialized as a dict, not a JSON string. A prior bug called
+    json.loads() on it unconditionally, raising TypeError on any real cache
+    hit with data in raw_json (only ever masked because the other cache-hit
+    test above used raw_json=None, which skips the json.loads() call
+    entirely)."""
+    raw_json_dict = {"mounting_type": "TH", "unit_price": 1.15, "digikey_part_number": "DK-123-ND"}
+    cached_row = ("10kΩ resistor", "Yageo", "Passive", "Active", "digikey", raw_json_dict)
+    session = _make_session(cached_row)
+    adapter = _adapter("digikey", {"description": "Should not be called"})
+
+    chain = SupplierChain(session, [adapter])
+    result = await chain.get_part("RC0402FR-0710KL")
+
+    assert result["description"] == "10kΩ resistor"
+    assert result["mounting_type"] == "TH"
+    assert result["digikey_part_number"] == "DK-123-ND"
+    adapter.get_part.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_cache_miss_first_adapter_returns_result():
     session = _make_session(cached_row=None)
     adapter = _adapter("digikey", {"description": "10kΩ 1% resistor", "manufacturer": "Yageo"})

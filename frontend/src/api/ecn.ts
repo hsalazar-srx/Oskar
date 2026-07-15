@@ -17,6 +17,12 @@ export interface SuggestPnResponse {
   sequence: number
 }
 
+export interface AutofillResult {
+  item_name: string | null
+  mounting_type: string | null
+  unit_of_measure: string | null
+}
+
 export interface CustomerEntry {
   cuno: string
   name: string | null
@@ -110,6 +116,34 @@ export async function suggestPn(
 export async function fetchCustomers(): Promise<CustomerEntry[]> {
   const { data } = await axiosInstance.get("/api/v1/customers")
   return data as CustomerEntry[]
+}
+
+/**
+ * POST /api/v1/parts/autofill (dry_run=true)
+ * Looks up the item's default MPN via the DigiKey/Nexar supplier chain and
+ * returns suggested field values for user review — dry_run means the backend
+ * does NOT write to ecn_items; the caller applies fields via updateItem only
+ * if the user accepts the preview. Returns all-null fields when no supplier
+ * has a match (or DigiKey's production quota guard has tripped) — the two
+ * cases aren't distinguishable from the response and should both render as a
+ * plain "no match found" state.
+ */
+export async function autofillItem(
+  ecnId: string,
+  itemId: string,
+  itemNumber: string,
+): Promise<AutofillResult> {
+  const { data } = await axiosInstance.post("/api/v1/parts/autofill", {
+    ecn_id: ecnId,
+    item_id: itemId,
+    item_number: itemNumber || null,
+    dry_run: true,
+  })
+  return {
+    item_name: data.item_name ?? null,
+    mounting_type: data.mounting_type ?? null,
+    unit_of_measure: data.unit_of_measure ?? null,
+  }
 }
 
 // Private — only used by create/update below
@@ -324,4 +358,36 @@ export async function setCustomerRoleDefault(
 
 export async function removeCustomerRoleDefault(id: string): Promise<void> {
   await axiosInstance.delete(`/api/v1/admin/customer-role-defaults/${id}`)
+}
+
+// ── Movex outbox recovery (admin, S9-4) ─────────────────────────────────────────
+
+export interface MovexOutboxEntry {
+  id: string
+  ecn_id: string
+  ecn_number: string
+  facility: string
+  ecn_item_id: string | null
+  mi_transaction: string
+  state: "pending" | "processing" | "completed" | "failed" | "abandoned"
+  attempt_count: number
+  max_attempts: number
+  next_retry_at: string | null
+  last_error: string | null
+  completed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export async function fetchMovexOutbox(params?: {
+  state?: string
+  facility?: string
+}): Promise<MovexOutboxEntry[]> {
+  const { data } = await axiosInstance.get("/api/v1/admin/movex-outbox", { params })
+  return data
+}
+
+export async function retryMovexOutboxEntry(id: string): Promise<MovexOutboxEntry> {
+  const { data } = await axiosInstance.post(`/api/v1/admin/movex-outbox/${id}/retry`)
+  return data
 }

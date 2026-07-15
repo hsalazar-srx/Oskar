@@ -151,6 +151,7 @@ class ECNItemDetail:
     effectivity_from: str | None
     created_at: datetime
     updated_at: datetime
+    mounting_type: str | None = None
     mpns: list[ECNMPNDetail] = field(default_factory=list)
 
 

@@ -10,12 +10,20 @@ import { Label } from "@/components/ui/label"
 import { Spinner } from "@/components/ui/spinner"
 import {
   fetchItem, fetchGroups, createItem, updateItem, suggestPn,
-  fetchMPNs, createMPN, updateMPN, deleteMPN,
-  type MPN, type MPNBody,
+  fetchMPNs, createMPN, updateMPN, deleteMPN, autofillItem,
+  type MPN, type MPNBody, type AutofillResult,
 } from "@/api/ecn"
 import RoutingOpsPanel from "@/components/ecn/RoutingOpsPanel"
 
 // ── Schema ────────────────────────────────────────────────────────────────────
+
+const MOUNTING_TYPES = ["TH", "SMD", "MECHANICAL", "OTHER"] as const
+const MOUNTING_TYPE_LABEL: Record<string, string> = {
+  TH: "Through-hole (TH)",
+  SMD: "Surface mount (SMD)",
+  MECHANICAL: "Mechanical",
+  OTHER: "Other",
+}
 
 const schema = z.object({
   item_number:        z.string().max(15).optional(),
@@ -24,6 +32,7 @@ const schema = z.object({
   drawing_number:     z.string().max(30).optional(),
   procurement_group:  z.string().optional(),
   product_group:      z.string().optional(),
+  mounting_type:      z.enum(["", "TH", "SMD", "MECHANICAL", "OTHER"]).optional(),
   customer_alias:     z.string().max(30).optional(),
   effectivity_type:   z.enum(["IMMEDIATE", "DATE", "ECN"]),
   effectivity_from:   z.string().optional(),
@@ -70,6 +79,17 @@ export default function ECNItemPanel({ ecnId, itemId, nextLineNumber, customerNu
     queryFn: fetchGroups,
   })
 
+  const { data: mpns = [] } = useQuery({
+    queryKey: ["mpns", ecnId, itemId],
+    queryFn: () => fetchMPNs(ecnId, itemId!),
+    enabled: !isNew && !!itemId,
+  })
+  const defaultMpn = mpns.find((m) => m.is_default)?.mpn ?? null
+
+  const [autofillPreview, setAutofillPreview] = useState<AutofillResult | null>(null)
+  const [autofillError, setAutofillError] = useState<string | null>(null)
+  const [autofillLoading, setAutofillLoading] = useState(false)
+
   const prgpOptions = [...new Set(groups.map((g) => g.procurement_group))].sort()
 
   const {
@@ -93,6 +113,7 @@ export default function ECNItemPanel({ ecnId, itemId, nextLineNumber, customerNu
         drawing_number:    item.drawing_number ?? "",
         procurement_group: item.procurement_group ?? "",
         product_group:     item.product_group ?? "",
+        mounting_type:     item.mounting_type ?? "",
         customer_alias:    item.customer_alias ?? "",
         effectivity_type:  item.effectivity_type ?? "IMMEDIATE",
         effectivity_from:  item.effectivity_from ?? "",
@@ -138,6 +159,39 @@ export default function ECNItemPanel({ ecnId, itemId, nextLineNumber, customerNu
     } finally {
       setPnLoading(false)
     }
+  }
+
+  const watchedItemNumber = watch("item_number")
+
+  const handleAutofill = async () => {
+    if (!itemId || !defaultMpn) return
+    setAutofillLoading(true)
+    setAutofillError(null)
+    setAutofillPreview(null)
+    try {
+      const result = await autofillItem(ecnId, itemId, watchedItemNumber ?? "")
+      if (!result.item_name && !result.mounting_type && !result.unit_of_measure) {
+        setAutofillError(`No supplier match found for ${defaultMpn}.`)
+      } else {
+        setAutofillPreview(result)
+      }
+    } catch {
+      setAutofillError("Autofill lookup failed — please try again shortly.")
+    } finally {
+      setAutofillLoading(false)
+    }
+  }
+
+  const applyAutofill = () => {
+    if (!autofillPreview) return
+    if (autofillPreview.item_name) {
+      setValue("item_name", autofillPreview.item_name, { shouldDirty: true })
+      setDescLen(autofillPreview.item_name.length)
+    }
+    if (autofillPreview.mounting_type) {
+      setValue("mounting_type", autofillPreview.mounting_type as FormValues["mounting_type"], { shouldDirty: true })
+    }
+    setAutofillPreview(null)
   }
 
   const descOver   = descLen > 30
@@ -276,6 +330,65 @@ export default function ECNItemPanel({ ecnId, itemId, nextLineNumber, customerNu
                     : <FieldHint>Maximum 30 characters</FieldHint>
                   }
                 </Field>
+
+                {!isNew && (
+                  <div className="pt-1">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 text-xs"
+                      disabled={!defaultMpn || autofillLoading}
+                      onClick={handleAutofill}
+                      title={defaultMpn ? `Look up ${defaultMpn} via DigiKey/Nexar` : "Set a default MPN on the MPNs tab first"}
+                    >
+                      {autofillLoading
+                        ? <><Spinner size="sm" /><span className="ml-1.5">Looking up…</span></>
+                        : "Autofill from MPN"
+                      }
+                    </Button>
+                    {!defaultMpn && (
+                      <FieldHint>Set a default MPN on the MPNs tab to enable autofill</FieldHint>
+                    )}
+                    {autofillError && <FieldError>{autofillError}</FieldError>}
+
+                    {autofillPreview && (
+                      <div className="mt-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 space-y-2">
+                        <p className="text-xs font-semibold text-blue-800">
+                          Supplier data found for {defaultMpn} — review before applying:
+                        </p>
+                        <dl className="text-xs text-blue-900 space-y-1">
+                          {autofillPreview.item_name && (
+                            <div className="flex gap-2">
+                              <dt className="font-medium shrink-0">Description:</dt>
+                              <dd className="truncate">{autofillPreview.item_name}</dd>
+                            </div>
+                          )}
+                          {autofillPreview.mounting_type && (
+                            <div className="flex gap-2">
+                              <dt className="font-medium shrink-0">Mounting type:</dt>
+                              <dd>{MOUNTING_TYPE_LABEL[autofillPreview.mounting_type] ?? autofillPreview.mounting_type}</dd>
+                            </div>
+                          )}
+                          {autofillPreview.unit_of_measure && (
+                            <div className="flex gap-2">
+                              <dt className="font-medium shrink-0">Unit of measure:</dt>
+                              <dd>{autofillPreview.unit_of_measure}</dd>
+                            </div>
+                          )}
+                        </dl>
+                        <div className="flex justify-end gap-2 pt-1">
+                          <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={() => setAutofillPreview(null)}>
+                            Discard
+                          </Button>
+                          <Button type="button" size="sm" className="h-7 text-xs" onClick={applyAutofill}>
+                            Apply to form
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </FieldSection>
 
               {/* Classification */}
@@ -312,6 +425,19 @@ export default function ECNItemPanel({ ecnId, itemId, nextLineNumber, customerNu
                       <span className="font-mono text-neutral-600">{commodityCodes.join(", ")}</span>
                     </FieldHint>
                   )}
+                </Field>
+
+                <Field label="Mounting type" hint="Auto-filled from DigiKey when available; set manually otherwise">
+                  <select
+                    id="mounting_type"
+                    className="h-10 w-full rounded-md border border-neutral-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-1 transition-shadow duration-150"
+                    {...register("mounting_type")}
+                  >
+                    <option value="">— Not set —</option>
+                    {MOUNTING_TYPES.map((mt) => (
+                      <option key={mt} value={mt}>{MOUNTING_TYPE_LABEL[mt]}</option>
+                    ))}
+                  </select>
                 </Field>
               </FieldSection>
 

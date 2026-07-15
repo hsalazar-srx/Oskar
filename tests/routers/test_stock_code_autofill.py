@@ -90,6 +90,7 @@ def _item_mock(
     unit_of_measure: str | None = "EA",
     item_number: str = _ITEM_NUMBER,
     mpns: list | None = None,
+    mounting_type: str | None = None,
 ) -> MagicMock:
     m = MagicMock()
     m.id = _ITEM_ID
@@ -110,6 +111,7 @@ def _item_mock(
     m.effectivity_from = None
     m.created_at = "2026-05-13T00:00:00"
     m.updated_at = "2026-05-13T00:01:00"
+    m.mounting_type = mounting_type
     m.mpns = mpns if mpns is not None else [_mpn_mock()]
     return m
 
@@ -222,6 +224,58 @@ class TestStockCodeAutofill:
             mock_svc_cls.return_value = mock_svc
             _make_client(_ENGINEER).post("/api/v1/parts/autofill", json=_BODY)
             mock_chain.get_part.assert_awaited_once_with(_DEFAULT_MPN)
+
+    def test_mounting_type_from_supplier_applied_when_item_has_none(self):
+        with (
+            patch("src.routers.parts.SupplierChain") as mock_chain_cls,
+            patch.object(MovexRestAdapter, "get_item", new_callable=AsyncMock) as mock_get_item,
+            patch("src.routers.parts.ECNService") as mock_svc_cls,
+        ):
+            sup = {**_DIGIKEY_RESULT, "mounting_type": "SMD"}
+            mock_chain_cls.return_value.get_part = AsyncMock(return_value=sup)
+            mock_get_item.return_value = _MOVEX_ITEM
+            mock_svc = MagicMock()
+            mock_svc.get_item = AsyncMock(return_value=_item_mock(mounting_type=None))
+            mock_svc.update_item = AsyncMock(return_value=_item_mock(mounting_type="SMD"))
+            mock_svc_cls.return_value = mock_svc
+            resp = _make_client(_ENGINEER).post("/api/v1/parts/autofill", json=_BODY)
+            kw = mock_svc.update_item.call_args.kwargs
+            assert kw["mounting_type"] == "SMD"
+            assert resp.json()["mounting_type"] == "SMD"
+
+    def test_mounting_type_not_overwritten_when_already_set(self):
+        with (
+            patch("src.routers.parts.SupplierChain") as mock_chain_cls,
+            patch.object(MovexRestAdapter, "get_item", new_callable=AsyncMock) as mock_get_item,
+            patch("src.routers.parts.ECNService") as mock_svc_cls,
+        ):
+            sup = {**_DIGIKEY_RESULT, "mounting_type": "SMD"}
+            mock_chain_cls.return_value.get_part = AsyncMock(return_value=sup)
+            mock_get_item.return_value = _MOVEX_ITEM
+            mock_svc = MagicMock()
+            # Engineer already manually set mounting_type=TH — supplier's SMD guess must not clobber it
+            mock_svc.get_item = AsyncMock(return_value=_item_mock(mounting_type="TH"))
+            mock_svc.update_item = AsyncMock(return_value=_item_mock(mounting_type="TH"))
+            mock_svc_cls.return_value = mock_svc
+            _make_client(_ENGINEER).post("/api/v1/parts/autofill", json=_BODY)
+            kw = mock_svc.update_item.call_args.kwargs
+            assert "mounting_type" not in kw
+
+    def test_mounting_type_absent_from_supplier_result_not_in_update(self):
+        with (
+            patch("src.routers.parts.SupplierChain") as mock_chain_cls,
+            patch.object(MovexRestAdapter, "get_item", new_callable=AsyncMock) as mock_get_item,
+            patch("src.routers.parts.ECNService") as mock_svc_cls,
+        ):
+            mock_chain_cls.return_value.get_part = AsyncMock(return_value=_DIGIKEY_RESULT)  # no mounting_type key
+            mock_get_item.return_value = _MOVEX_ITEM
+            mock_svc = MagicMock()
+            mock_svc.get_item = AsyncMock(return_value=_item_mock(mounting_type=None))
+            mock_svc.update_item = AsyncMock(return_value=_item_mock(mounting_type=None))
+            mock_svc_cls.return_value = mock_svc
+            _make_client(_ENGINEER).post("/api/v1/parts/autofill", json=_BODY)
+            kw = mock_svc.update_item.call_args.kwargs
+            assert "mounting_type" not in kw
 
     def test_get_item_called_with_item_number_not_item_id(self):
         # Movex lookup uses the Movex stock code (item_number), not the OSKAR UUID (item_id)
@@ -481,3 +535,211 @@ class TestStockCodeAutofillERPErrors:
         assert self._call_erp_error(
             httpx.HTTPStatusError("404", request=req, response=r)
         ) == 404
+
+
+# ── dry_run preview mode (S9-6) ───────────────────────────────────────────────
+#
+# dry_run=True must return looked-up values without calling svc.update_item —
+# this is what lets the frontend show a preview before the user applies it.
+
+class TestStockCodeAutofillDryRun:
+
+    def test_dry_run_does_not_call_update_item(self):
+        with (
+            patch("src.routers.parts.SupplierChain") as mock_chain_cls,
+            patch.object(MovexRestAdapter, "get_item", new_callable=AsyncMock) as mock_get_item,
+            patch("src.routers.parts.ECNService") as mock_svc_cls,
+        ):
+            mock_chain_cls.return_value.get_part = AsyncMock(return_value=_DIGIKEY_RESULT)
+            mock_get_item.return_value = _MOVEX_ITEM
+            mock_svc = MagicMock()
+            mock_svc.get_item = AsyncMock(return_value=_item_mock())
+            mock_svc.update_item = AsyncMock(return_value=_item_mock())
+            mock_svc_cls.return_value = mock_svc
+
+            client = _make_client(_ENGINEER)
+            resp = client.post(
+                "/api/v1/parts/autofill",
+                json={"ecn_id": _ECN_ID, "item_id": _ITEM_ID, "dry_run": True},
+            )
+
+            assert resp.status_code == 200
+            mock_svc.update_item.assert_not_called()
+
+    def test_dry_run_returns_preview_fields(self):
+        with (
+            patch("src.routers.parts.SupplierChain") as mock_chain_cls,
+            patch.object(MovexRestAdapter, "get_item", new_callable=AsyncMock) as mock_get_item,
+            patch("src.routers.parts.ECNService") as mock_svc_cls,
+        ):
+            mock_chain_cls.return_value.get_part = AsyncMock(return_value=_DIGIKEY_RESULT)
+            mock_get_item.return_value = _MOVEX_ITEM
+            mock_svc = MagicMock()
+            mock_svc.get_item = AsyncMock(return_value=_item_mock())
+            mock_svc_cls.return_value = mock_svc
+
+            client = _make_client(_ENGINEER)
+            resp = client.post(
+                "/api/v1/parts/autofill",
+                json={
+                    "ecn_id": _ECN_ID, "item_id": _ITEM_ID,
+                    "item_number": _ITEM_NUMBER, "dry_run": True,
+                },
+            )
+
+            body = resp.json()
+            assert resp.status_code == 200
+            assert body["item_name"]
+            assert body["unit_of_measure"] == "EA"
+
+    def test_dry_run_without_item_number_skips_movex_lookup(self):
+        """New items have no Movex item_number yet — dry_run must still work,
+        just without the UOM lookup (which requires a real Movex stock code)."""
+        with (
+            patch("src.routers.parts.SupplierChain") as mock_chain_cls,
+            patch.object(MovexRestAdapter, "get_item", new_callable=AsyncMock) as mock_get_item,
+            patch("src.routers.parts.ECNService") as mock_svc_cls,
+        ):
+            mock_chain_cls.return_value.get_part = AsyncMock(return_value=_DIGIKEY_RESULT)
+            mock_svc = MagicMock()
+            mock_svc.get_item = AsyncMock(return_value=_item_mock(is_new_item=True))
+            mock_svc_cls.return_value = mock_svc
+
+            client = _make_client(_ENGINEER)
+            resp = client.post(
+                "/api/v1/parts/autofill",
+                json={"ecn_id": _ECN_ID, "item_id": _ITEM_ID, "dry_run": True},
+            )
+
+            assert resp.status_code == 200
+            assert resp.json()["item_name"]
+            mock_get_item.assert_not_called()
+
+    def test_dry_run_no_supplier_match_returns_all_nulls(self):
+        with (
+            patch("src.routers.parts.SupplierChain") as mock_chain_cls,
+            patch.object(MovexRestAdapter, "get_item", new_callable=AsyncMock) as mock_get_item,
+            patch("src.routers.parts.ECNService") as mock_svc_cls,
+        ):
+            mock_chain_cls.return_value.get_part = AsyncMock(return_value={})
+            mock_get_item.return_value = {"UNMS": ""}
+            mock_svc = MagicMock()
+            mock_svc.get_item = AsyncMock(return_value=_item_mock())
+            mock_svc_cls.return_value = mock_svc
+
+            client = _make_client(_ENGINEER)
+            resp = client.post(
+                "/api/v1/parts/autofill",
+                json={
+                    "ecn_id": _ECN_ID, "item_id": _ITEM_ID,
+                    "item_number": _ITEM_NUMBER, "dry_run": True,
+                },
+            )
+
+            body = resp.json()
+            assert resp.status_code == 200
+            assert body["item_name"] is None
+            assert body["mounting_type"] is None
+            assert body["unit_of_measure"] is None
+
+    def test_non_dry_run_without_item_number_returns_422(self):
+        with patch("src.routers.parts.ECNService") as mock_svc_cls:
+            mock_svc = MagicMock()
+            mock_svc.get_item = AsyncMock(return_value=_item_mock())
+            mock_svc_cls.return_value = mock_svc
+
+            client = _make_client(_ENGINEER)
+            resp = client.post(
+                "/api/v1/parts/autofill",
+                json={"ecn_id": _ECN_ID, "item_id": _ITEM_ID},
+            )
+
+            assert resp.status_code == 422
+
+    def test_non_dry_run_still_writes_as_before(self):
+        """Regression guard: default (non-dry_run) behavior must be unchanged."""
+        with (
+            patch("src.routers.parts.SupplierChain") as mock_chain_cls,
+            patch.object(MovexRestAdapter, "get_item", new_callable=AsyncMock) as mock_get_item,
+            patch("src.routers.parts.ECNService") as mock_svc_cls,
+        ):
+            mock_chain_cls.return_value.get_part = AsyncMock(return_value=_DIGIKEY_RESULT)
+            mock_get_item.return_value = _MOVEX_ITEM
+            mock_svc = MagicMock()
+            mock_svc.get_item = AsyncMock(return_value=_item_mock())
+            mock_svc.update_item = AsyncMock(return_value=_item_mock())
+            mock_svc_cls.return_value = mock_svc
+
+            client = _make_client(_ENGINEER)
+            resp = client.post("/api/v1/parts/autofill", json=_BODY)
+
+            assert resp.status_code == 200
+            mock_svc.update_item.assert_called_once()
+
+
+# ── dry_run graceful degradation on Movex errors (S9-6) ──────────────────────
+#
+# Preview is best-effort: a Movex outage must not block showing supplier data
+# that already succeeded. The non-dry_run write path keeps its original hard
+# failures (covered by TestStockCodeAutofillERPErrors above) — item_number
+# confirmation there is not best-effort.
+
+class TestStockCodeAutofillDryRunMovexDegradation:
+
+    def _call_dry_run_with_erp_error(self, exc: Exception):
+        with (
+            patch("src.routers.parts.SupplierChain") as mock_chain_cls,
+            patch.object(MovexRestAdapter, "get_item", new_callable=AsyncMock) as mock_get_item,
+            patch("src.routers.parts.ECNService") as mock_svc_cls,
+        ):
+            mock_chain_cls.return_value.get_part = AsyncMock(return_value=_DIGIKEY_RESULT)
+            mock_get_item.side_effect = exc
+            mock_svc = MagicMock()
+            mock_svc.get_item = AsyncMock(return_value=_item_mock())
+            mock_svc_cls.return_value = mock_svc
+
+            client = _make_client(_ENGINEER)
+            return client.post(
+                "/api/v1/parts/autofill",
+                json={
+                    "ecn_id": _ECN_ID, "item_id": _ITEM_ID,
+                    "item_number": _ITEM_NUMBER, "dry_run": True,
+                },
+            )
+
+    def test_dry_run_connect_error_still_returns_200_with_supplier_data(self):
+        resp = self._call_dry_run_with_erp_error(httpx.ConnectError("refused"))
+        body = resp.json()
+        assert resp.status_code == 200
+        assert body["item_name"]
+        assert body["unit_of_measure"] is None
+
+    def test_dry_run_timeout_still_returns_200_with_supplier_data(self):
+        resp = self._call_dry_run_with_erp_error(httpx.TimeoutException("timeout"))
+        assert resp.status_code == 200
+        assert resp.json()["item_name"]
+
+    def test_dry_run_circuit_breaker_open_still_returns_200(self):
+        resp = self._call_dry_run_with_erp_error(
+            RuntimeError("movex-rest-api circuit breaker is open — too many consecutive failures")
+        )
+        assert resp.status_code == 200
+        assert resp.json()["item_name"]
+
+    def test_dry_run_movex_404_still_returns_200(self):
+        req = httpx.Request("GET", "http://movex/MMS200MI/GetItmBasic")
+        r = httpx.Response(404, request=req)
+        resp = self._call_dry_run_with_erp_error(
+            httpx.HTTPStatusError("404", request=req, response=r)
+        )
+        assert resp.status_code == 200
+        assert resp.json()["item_name"]
+
+    def test_dry_run_movex_502_still_returns_200(self):
+        req = httpx.Request("GET", "http://movex/MMS200MI/GetItmBasic")
+        r = httpx.Response(500, request=req)
+        resp = self._call_dry_run_with_erp_error(
+            httpx.HTTPStatusError("500", request=req, response=r)
+        )
+        assert resp.status_code == 200
+        assert resp.json()["item_name"]

@@ -8,9 +8,11 @@
 #
 # No read_only hardening here — src/ volume mount requires writable fs for hot-reload.
 #
-# Usage: docker compose -f docker/docker-compose.dev.yml up -d
+# Usage: docker compose --env-file .env -f docker/docker-compose.dev.yml up -d
 # Then:  docker compose -f docker/docker-compose.dev.yml exec oskar-app alembic upgrade head
 # Requires: .env file in project root (copy from .env.example, fill in values)
+# NOTE: --env-file .env is required even when running from the project root —
+# compose does not auto-discover a .env that isn't next to the compose file itself.
 
 services:
 
@@ -42,6 +44,9 @@ services:
       - SMTP_SENDER=oskar-noreply@srxglobal.local
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
       - ENVIRONMENT=development
+      - DIGIKEY_CLIENT_ID=${DIGIKEY_CLIENT_ID:-}
+      - DIGIKEY_CLIENT_SECRET=${DIGIKEY_CLIENT_SECRET:-}
+      - DIGIKEY_BASE_URL=${DIGIKEY_BASE_URL:-https://api.digikey.com}
     volumes:
       - ../src:/app/src:ro
       - ../alembic:/app/alembic:ro

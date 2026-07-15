@@ -205,6 +205,7 @@ def _mock_item(prgp: str | None = None, itcl: str | None = None) -> MagicMock:
     item.effectivity_from = None
     item.created_at = "2026-05-15T00:00:00"
     item.updated_at = "2026-05-15T00:00:00"
+    item.mounting_type = None
     item.mpns = []
     return item
 

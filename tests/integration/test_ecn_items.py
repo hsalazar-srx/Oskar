@@ -77,6 +77,39 @@ class TestCreateItem:
         with pytest.raises(ECNNotFound):
             await svc.get_item(ecn_id, "00000000-0000-0000-0000-000000000000")
 
+    async def test_create_with_mounting_type(self, db_session: AsyncSession):
+        svc = ECNService(db_session)
+        ecn_id = await _make_ecn(db_session)
+        item = await svc.create_item(
+            ecn_id, line_number=10, item_number="LF-MT-0001", mounting_type="SMD",
+        )
+        assert item.mounting_type == "SMD"
+
+    async def test_create_mounting_type_defaults_to_none(self, db_session: AsyncSession):
+        svc = ECNService(db_session)
+        ecn_id = await _make_ecn(db_session)
+        item = await svc.create_item(ecn_id, line_number=10, item_number="LF-MT-0002")
+        assert item.mounting_type is None
+
+    async def test_create_invalid_mounting_type_raises(self, db_session: AsyncSession):
+        svc = ECNService(db_session)
+        ecn_id = await _make_ecn(db_session)
+        with pytest.raises(ECNValidationError, match="mounting_type"):
+            await svc.create_item(
+                ecn_id, line_number=10, item_number="LF-MT-0003", mounting_type="BOGUS",
+            )
+
+    @pytest.mark.parametrize("mt,suffix", [
+        ("TH", "TH"), ("SMD", "SMD"), ("MECHANICAL", "MECH"), ("OTHER", "OTH"),
+    ])
+    async def test_create_all_valid_mounting_types(self, db_session: AsyncSession, mt: str, suffix: str):
+        svc = ECNService(db_session)
+        ecn_id = await _make_ecn(db_session)
+        item = await svc.create_item(
+            ecn_id, line_number=10, item_number=f"LF-MT-{suffix}", mounting_type=mt,
+        )
+        assert item.mounting_type == mt
+
 
 # ---------------------------------------------------------------------------
 # list_items
@@ -122,6 +155,20 @@ class TestUpdateItem:
         )
         assert updated.procurement_group == "PCA"
         assert updated.product_group == "PCBA"
+
+    async def test_update_mounting_type(self, db_session: AsyncSession):
+        svc = ECNService(db_session)
+        ecn_id = await _make_ecn(db_session)
+        item = await svc.create_item(ecn_id, line_number=10, item_number="LF-MT-UPD")
+        updated = await svc.update_item(ecn_id, item.id, mounting_type="TH")
+        assert updated.mounting_type == "TH"
+
+    async def test_update_invalid_mounting_type_raises(self, db_session: AsyncSession):
+        svc = ECNService(db_session)
+        ecn_id = await _make_ecn(db_session)
+        item = await svc.create_item(ecn_id, line_number=10, item_number="LF-MT-UPD2")
+        with pytest.raises(ECNValidationError, match="mounting_type"):
+            await svc.update_item(ecn_id, item.id, mounting_type="NOPE")
 
 
 # ---------------------------------------------------------------------------

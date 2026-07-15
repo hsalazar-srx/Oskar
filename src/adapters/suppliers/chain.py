@@ -67,13 +67,17 @@ class SupplierChain:
         r = row.first()
         if not r:
             return None
+        # raw_json is a jsonb column — asyncpg/SQLAlchemy already deserialize it
+        # to a dict, unlike a plain text column. json.loads() here would only
+        # be correct for a string, and raises TypeError on the dict we
+        # actually get back.
         return {
             "description": r[0],
             "manufacturer": r[1],
             "category": r[2],
             "lifecycle": r[3],
             "supplier_id": r[4],
-            **(json.loads(r[5]) if r[5] else {}),
+            **(r[5] or {}),
         }
 
     async def _cache_set(

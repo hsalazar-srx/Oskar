@@ -104,6 +104,7 @@ _ITEM_DETAIL = ECNItemDetail(
     effectivity_from=None,
     created_at=_NOW,
     updated_at=_NOW,
+    mounting_type=None,
     mpns=[_MPN_DETAIL],
 )
 
@@ -187,6 +188,35 @@ class TestCreateECNItem:
             json={"line_number": 1, "item_number": "X", "effectivity_type": "IMMEDIATE"},
         )
         assert resp.status_code == 401
+
+    def test_invalid_mounting_type_returns_422(self):
+        client = _make_client(_ENGINEER)
+        resp = client.post(
+            f"/api/v1/ecn/{_ECN_ID}/items",
+            json={
+                "line_number": 1,
+                "item_number": "LF-AA-001-0001",
+                "effectivity_type": "IMMEDIATE",
+                "mounting_type": "BOGUS",
+            },
+        )
+        assert resp.status_code == 422
+
+    def test_valid_mounting_type_accepted(self):
+        with patch.object(ECNService, "create_item", new_callable=AsyncMock) as mock:
+            mock.return_value = dataclasses.replace(_ITEM_DETAIL, mounting_type="SMD")
+            client = _make_client(_ENGINEER)
+            resp = client.post(
+                f"/api/v1/ecn/{_ECN_ID}/items",
+                json={
+                    "line_number": 1,
+                    "item_number": "LF-AA-001-0001",
+                    "effectivity_type": "IMMEDIATE",
+                    "mounting_type": "SMD",
+                },
+            )
+        assert resp.status_code == 201
+        assert resp.json()["mounting_type"] == "SMD"
 
     def test_calls_service_with_ecn_id(self):
         with patch.object(ECNService, "create_item", new_callable=AsyncMock) as mock:
@@ -335,6 +365,26 @@ class TestUpdateECNItem:
                 json={"item_name": "X"},
             )
         assert resp.status_code == 404
+
+    def test_update_mounting_type_returns_200(self):
+        updated = dataclasses.replace(_ITEM_DETAIL, mounting_type="MECHANICAL")
+        with patch.object(ECNService, "update_item", new_callable=AsyncMock) as mock:
+            mock.return_value = updated
+            client = _make_client(_ENGINEER)
+            resp = client.patch(
+                f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}",
+                json={"mounting_type": "MECHANICAL"},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["mounting_type"] == "MECHANICAL"
+
+    def test_update_invalid_mounting_type_returns_422(self):
+        client = _make_client(_ENGINEER)
+        resp = client.patch(
+            f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}",
+            json={"mounting_type": "NOPE"},
+        )
+        assert resp.status_code == 422
 
     def test_empty_patch_body_is_valid(self):
         with patch.object(ECNService, "update_item", new_callable=AsyncMock) as mock:

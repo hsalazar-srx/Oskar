@@ -37,6 +37,7 @@ from src.services.ecn import (
 _LIFECYCLE_VALUES = {"active", "eol", "nrnd"}
 _PACKAGING_VALUES = {"tape_reel", "tray", "tube", "cut_tape"}
 _EFFECTIVITY_VALUES = {"DATE", "ECN", "IMMEDIATE"}
+_MOUNTING_TYPE_VALUES = {"TH", "SMD", "MECHANICAL", "OTHER"}
 
 
 # ---------------------------------------------------------------------------
@@ -186,12 +187,20 @@ class CreateItemBody(BaseModel):
     customer_part_number: str | None = Field(None, max_length=50)
     effectivity_type: str = Field(..., description="DATE | ECN | IMMEDIATE")
     effectivity_from: str | None = None
+    mounting_type: str | None = Field(None, description="TH | SMD | MECHANICAL | OTHER")
 
     @field_validator("effectivity_type")
     @classmethod
     def _validate_effectivity(cls, v: str) -> str:
         if v not in _EFFECTIVITY_VALUES:
             raise ValueError(f"effectivity_type must be one of {_EFFECTIVITY_VALUES}")
+        return v
+
+    @field_validator("mounting_type")
+    @classmethod
+    def _validate_mounting_type(cls, v: str | None) -> str | None:
+        if v is not None and v not in _MOUNTING_TYPE_VALUES:
+            raise ValueError(f"mounting_type must be one of {_MOUNTING_TYPE_VALUES}")
         return v
 
 
@@ -208,12 +217,20 @@ class UpdateItemBody(BaseModel):
     effectivity_type: str | None = None
     effectivity_from: str | None = None
     is_new_item: bool | None = None
+    mounting_type: str | None = Field(None, description="TH | SMD | MECHANICAL | OTHER")
 
     @field_validator("effectivity_type")
     @classmethod
     def _validate_effectivity(cls, v: str | None) -> str | None:
         if v is not None and v not in _EFFECTIVITY_VALUES:
             raise ValueError(f"effectivity_type must be one of {_EFFECTIVITY_VALUES}")
+        return v
+
+    @field_validator("mounting_type")
+    @classmethod
+    def _validate_mounting_type(cls, v: str | None) -> str | None:
+        if v is not None and v not in _MOUNTING_TYPE_VALUES:
+            raise ValueError(f"mounting_type must be one of {_MOUNTING_TYPE_VALUES}")
         return v
 
 
@@ -467,6 +484,7 @@ class ECNItemOut(BaseModel):
     effectivity_from: str | None
     created_at: datetime
     updated_at: datetime
+    mounting_type: str | None = None
     mpns: list[MPNOut] = []
 
     model_config = {"from_attributes": True}
@@ -618,6 +636,7 @@ def item_out(i: ECNItemDetail) -> ECNItemOut:
         effectivity_from=i.effectivity_from,
         created_at=i.created_at,
         updated_at=i.updated_at,
+        mounting_type=i.mounting_type,
         mpns=[mpn_out(m) for m in i.mpns],
     )
 

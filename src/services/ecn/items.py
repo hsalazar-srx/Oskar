@@ -21,6 +21,8 @@ from src.services.ecn.models import (
 )
 from src.workflow.machine import ECNStatus
 
+VALID_MOUNTING_TYPES = {"TH", "SMD", "MECHANICAL", "OTHER"}
+
 
 class ECNItemsMixin:
     """Item and MPN CRUD operations mixed into ECNService."""
@@ -72,6 +74,7 @@ class ECNItemsMixin:
             customer_part_number=row[16],
             created_at=row[17],
             updated_at=row[18],
+            mounting_type=row[19],
             mpns=mpns,
         )
 
@@ -124,6 +127,7 @@ class ECNItemsMixin:
         customer_part_number: str | None = None,
         effectivity_type: str = "IMMEDIATE",
         effectivity_from: str | None = None,
+        mounting_type: str | None = None,
     ) -> ECNItemDetail:
         ecn_row = await self._session.execute(
             sa.text("SELECT id FROM ecn_instances WHERE id = :ecn_id"),
@@ -131,6 +135,11 @@ class ECNItemsMixin:
         )
         if not ecn_row.first():
             raise ECNNotFound(ecn_id)
+
+        if mounting_type is not None and mounting_type not in VALID_MOUNTING_TYPES:
+            raise ECNValidationError(
+                f"mounting_type must be one of {sorted(VALID_MOUNTING_TYPES)}, got '{mounting_type}'"
+            )
 
         eff_date = date.fromisoformat(effectivity_from) if effectivity_from else None
         item_id = str(uuid.uuid4())
@@ -140,11 +149,11 @@ class ECNItemsMixin:
                 "(id, ecn_id, line_number, is_new_item, item_number, item_name, "
                 "description_2, drawing_number, procurement_group, product_group, "
                 "unit_of_measure, item_group, customer_alias, customer_part_number, "
-                "effectivity_type, effectivity_from) "
+                "effectivity_type, effectivity_from, mounting_type) "
                 "VALUES (:id, :ecn_id, :line_number, :is_new_item, :item_number, :item_name, "
                 ":description_2, :drawing_number, :procurement_group, :product_group, "
                 ":unit_of_measure, :item_group, :customer_alias, :customer_part_number, "
-                ":effectivity_type, :effectivity_from)"
+                ":effectivity_type, :effectivity_from, :mounting_type)"
             ),
             {
                 "id": item_id, "ecn_id": ecn_id, "line_number": line_number,
@@ -155,6 +164,7 @@ class ECNItemsMixin:
                 "item_group": item_group, "customer_alias": customer_alias,
                 "customer_part_number": customer_part_number,
                 "effectivity_type": effectivity_type, "effectivity_from": eff_date,
+                "mounting_type": mounting_type,
             },
         )
         return await self.get_item(ecn_id, item_id)
@@ -165,7 +175,7 @@ class ECNItemsMixin:
                 "SELECT id, ecn_id, line_number, is_new_item, item_number, item_name, "
                 "description_2, drawing_number, drawing_created, procurement_group, product_group, "
                 "unit_of_measure, item_group, customer_alias, effectivity_from, effectivity_type, "
-                "customer_part_number, created_at, updated_at "
+                "customer_part_number, created_at, updated_at, mounting_type "
                 "FROM ecn_items WHERE ecn_id = :ecn_id ORDER BY line_number"
             ),
             {"ecn_id": ecn_id},
@@ -182,7 +192,7 @@ class ECNItemsMixin:
                 "SELECT id, ecn_id, line_number, is_new_item, item_number, item_name, "
                 "description_2, drawing_number, drawing_created, procurement_group, product_group, "
                 "unit_of_measure, item_group, customer_alias, effectivity_from, effectivity_type, "
-                "customer_part_number, created_at, updated_at "
+                "customer_part_number, created_at, updated_at, mounting_type "
                 "FROM ecn_items WHERE id = :item_id AND ecn_id = :ecn_id"
             ),
             {"item_id": item_id, "ecn_id": ecn_id},
@@ -199,10 +209,15 @@ class ECNItemsMixin:
             "item_name", "description_2", "drawing_number", "procurement_group",
             "product_group", "unit_of_measure", "item_group", "customer_alias",
             "customer_part_number", "effectivity_type", "effectivity_from", "is_new_item",
+            "mounting_type",
         }
         updates = {k: v for k, v in fields.items() if k in allowed}
         if "effectivity_from" in updates and isinstance(updates["effectivity_from"], str):
             updates["effectivity_from"] = date.fromisoformat(updates["effectivity_from"])
+        if updates.get("mounting_type") is not None and updates["mounting_type"] not in VALID_MOUNTING_TYPES:
+            raise ECNValidationError(
+                f"mounting_type must be one of {sorted(VALID_MOUNTING_TYPES)}, got '{updates['mounting_type']}'"
+            )
         if updates:
             set_clause = ", ".join(f"{k} = :{k}" for k in updates)
             await self._session.execute(
@@ -332,7 +347,7 @@ class ECNItemsMixin:
                     "SELECT id, ecn_id, line_number, is_new_item, item_number, item_name, "
                     "description_2, drawing_number, drawing_created, procurement_group, product_group, "
                     "unit_of_measure, item_group, customer_alias, effectivity_from, effectivity_type, "
-                    "customer_part_number, created_at, updated_at "
+                    "customer_part_number, created_at, updated_at, mounting_type "
                     "FROM ecn_items WHERE id = :item_id"
                 ),
                 {"item_id": item_id},

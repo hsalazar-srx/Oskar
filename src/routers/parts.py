@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Annotated, Literal
 
 import httpx
+import structlog
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,6 +41,7 @@ from src.services.ecn.commodity_codes import (
 )
 
 parts_router = APIRouter(prefix="/parts", tags=["parts"])
+log = structlog.get_logger(__name__)
 
 
 # ── Dependencies ─────────────────────────────────────────────────────────────
@@ -274,9 +276,17 @@ async def suggest_pn(
 class AutofillRequest(BaseModel):
     ecn_id: str = Field(..., min_length=1)
     item_id: str = Field(..., min_length=1, description="OSKAR UUID — ecn_items.id")
-    item_number: str = Field(
-        ..., min_length=1, max_length=15,
-        description="Movex stock code — MITMAS.MMITNO",
+    item_number: str | None = Field(
+        None, max_length=15,
+        description="Movex stock code — MITMAS.MMITNO. Required unless dry_run=True.",
+    )
+    dry_run: bool = Field(
+        False,
+        description=(
+            "When true, run the supplier/Movex lookups and return the result "
+            "without writing to ecn_items — lets the caller preview autofill "
+            "data before the user chooses to apply it."
+        ),
     )
 
 
@@ -299,7 +309,14 @@ class AutofillResponse(BaseModel):
     effectivity_from: str | None
     created_at: str
     updated_at: str
+    mounting_type: str | None = None
     mpns: list = []
+
+
+class AutofillPreviewResponse(BaseModel):
+    item_name: str | None
+    mounting_type: str | None
+    unit_of_measure: str | None
 
 
 def _item_to_response(item: object) -> AutofillResponse:
@@ -322,14 +339,15 @@ def _item_to_response(item: object) -> AutofillResponse:
         effectivity_from=item.effectivity_from,
         created_at=str(item.created_at),
         updated_at=str(item.updated_at),
+        mounting_type=item.mounting_type,
         mpns=item.mpns,
     )
 
 
 @parts_router.post(
     "/autofill",
-    response_model=AutofillResponse,
-    summary="Enrich ecn_items from supplier chain + Movex (S3-3)",
+    response_model=AutofillResponse | AutofillPreviewResponse,
+    summary="Enrich ecn_items from supplier chain + Movex (S3-3), or preview via dry_run (S9-6)",
 )
 async def autofill_item(
     body: AutofillRequest,
@@ -337,7 +355,7 @@ async def autofill_item(
     erp: Annotated[MovexRestAdapter, Depends(_get_erp_adapter)],
     supplier_adapters: Annotated[list, Depends(_get_supplier_adapters)],
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> AutofillResponse:
+) -> AutofillResponse | AutofillPreviewResponse:
     """Enrich an ecn_items row with description and unit of measure.
 
     Lookup order:
@@ -346,11 +364,23 @@ async def autofill_item(
          summarisation when a real AI provider is configured, plain truncation via
          NoOpAIProvider when not (AI_PROVIDER_CLASS not set).
       2. MMS200MI.GetItmBasic via item_number → unit_of_measure (UNMS).
-         Skipped for new items (is_new_item=True) — item not yet in Movex.
+         Skipped for new items (is_new_item=True) or when item_number is absent
+         (dry_run preview on an item with no Movex number yet).
 
     Both steps are best-effort: a supplier miss or absent UNMS leaves that field
-    unchanged. item_number is always confirmed regardless.
+    unchanged.
+
+    dry_run=True returns the looked-up values without writing to ecn_items —
+    lets the caller show a preview and let the user decide whether to apply it.
+    dry_run=False (default) requires item_number and writes immediately,
+    confirming item_number on the row regardless of supplier/Movex results.
     """
+    if not body.dry_run and not body.item_number:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="item_number is required unless dry_run=True",
+        )
+
     svc = ECNService(session)
 
     try:
@@ -358,9 +388,9 @@ async def autofill_item(
     except ECNNotFound:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found")
 
-    updates: dict = {"item_number": body.item_number}
+    updates: dict = {} if body.dry_run else {"item_number": body.item_number}
 
-    # ── Supplier chain → item_name (via AI smart truncation) ─────────────────
+    # ── Supplier chain → item_name (via AI smart truncation) + mounting_type ──
     default_mpn = next((m.mpn for m in current_item.mpns if m.is_default), None)
     if default_mpn:
         chain = SupplierChain(session, supplier_adapters)
@@ -370,37 +400,69 @@ async def autofill_item(
             ai = get_ai_provider()
             safe = sanitize_for_prompt(raw_description)
             updates["item_name"] = ai.suggest_description(safe, max_len=30).content
+        mounting_type = supplier_data.get("mounting_type")
+        if mounting_type and not current_item.mounting_type:
+            updates["mounting_type"] = mounting_type
 
     # ── Movex GetItmBasic → unit_of_measure ───────────────────────────────────
-    if not current_item.is_new_item:
+    # dry_run is a best-effort preview: a Movex outage should not block showing
+    # supplier data that already succeeded, so ERP errors are logged and
+    # swallowed rather than raised. The real (non-dry_run) write path keeps
+    # its original hard-failure behaviour — item_number confirmation is not
+    # best-effort there.
+    if not current_item.is_new_item and body.item_number:
         try:
             movex_item = await erp.get_item(body.item_number)
         except RuntimeError as exc:
             if "circuit breaker" not in str(exc):
                 raise
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="ERP system unavailable (circuit breaker open). Try again shortly.",
-            )
+            if body.dry_run:
+                log.warning("autofill.dry_run_movex_circuit_breaker_open", item_number=body.item_number)
+                movex_item = None
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="ERP system unavailable (circuit breaker open). Try again shortly.",
+                )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
+                if body.dry_run:
+                    log.info("autofill.dry_run_movex_item_not_found", item_number=body.item_number)
+                    movex_item = None
+                else:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Item {body.item_number!r} not found in Movex.",
+                    )
+            elif body.dry_run:
+                log.warning("autofill.dry_run_movex_error", item_number=body.item_number, status_code=exc.response.status_code)
+                movex_item = None
+            else:
                 raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Item {body.item_number!r} not found in Movex.",
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"ERP returned unexpected status {exc.response.status_code}.",
                 )
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"ERP returned unexpected status {exc.response.status_code}.",
-            )
         except (httpx.ConnectError, httpx.TimeoutException):
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="ERP connection failed after retries.",
-            )
+            if body.dry_run:
+                log.warning("autofill.dry_run_movex_unreachable", item_number=body.item_number)
+                movex_item = None
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="ERP connection failed after retries.",
+                )
 
-        unms = movex_item.get("UNMS", "").strip()
-        if unms:
-            updates["unit_of_measure"] = unms
+        if movex_item:
+            unms = movex_item.get("UNMS", "").strip()
+            if unms:
+                updates["unit_of_measure"] = unms
+
+    if body.dry_run:
+        return AutofillPreviewResponse(
+            item_name=updates.get("item_name"),
+            mounting_type=updates.get("mounting_type"),
+            unit_of_measure=updates.get("unit_of_measure"),
+        )
 
     updated = await svc.update_item(body.ecn_id, body.item_id, **updates)
     return _item_to_response(updated)
