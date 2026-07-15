@@ -14,6 +14,7 @@ import ECNCard, { type ECNEditableFields } from "@/components/ecn/ECNCard"
 import WorkflowPanel from "@/components/ecn/WorkflowPanel"
 import ECNItemPanel from "@/components/ecn/ECNItemPanel"
 import ECNCommentsPanel from "@/components/ecn/ECNCommentsPanel"
+import RevisionLineagePanel from "@/components/ecn/RevisionLineagePanel"
 import ImplementationSchedulePanel from "@/components/ecn/ImplementationSchedulePanel"
 import type { ChecklistItem } from "@/components/ecn/ImplementationSchedulePanel"
 import { ActionModal, ModalField } from "@/components/ecn/ActionModal"
@@ -290,6 +291,7 @@ export default function ECNDetailPage() {
           )}
         </Section>
         <ECNCommentsPanel ecnId={id!} />
+        <RevisionLineagePanel ecnId={id!} />
 
         {ecn.status >= 60 && (
           <ImplementationSchedulePanel

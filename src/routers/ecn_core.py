@@ -543,6 +543,20 @@ async def patch_checklist_item(
     return detail_out(detail)
 
 
+@ecn_core_router.get("/{ecn_id}/history")
+async def get_ecn_history(
+    ecn_id: str,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> list[dict[str, Any]]:
+    """Return the full transition/audit chain for one ECN, oldest first (S9-2)."""
+    svc = ECNService(session)
+    try:
+        return await svc.get_history(ecn_id)
+    except ECNNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"ECN {ecn_id!r} not found")
+
+
 @ecn_core_router.get("/{ecn_id}/open-orders")
 async def get_open_orders(
     ecn_id: str,

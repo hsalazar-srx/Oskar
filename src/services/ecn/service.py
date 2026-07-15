@@ -420,6 +420,57 @@ class ECNService(ECNItemsMixin, ECNWorkflowMixin):
         log.info("ecn.checklist.patched", ecn_id=ecn_id, item_id=item_id)
         return await self.get(ecn_id)
 
+    async def get_history(self, ecn_id: str) -> list[dict[str, Any]]:
+        """Return the full ecn_transition_history chain for one ECN, oldest first.
+
+        Verifies the SHA-256 hash chain as it walks the rows — each row's
+        sha256_prev must equal the previous row's sha256_self. Flags any break
+        via chain_valid so the UI can surface a tamper/corruption warning
+        instead of silently trusting the data (ISO 13485 audit trail).
+        """
+        exists = await self._session.execute(
+            sa.text("SELECT 1 FROM ecn_instances WHERE id = :id"), {"id": ecn_id}
+        )
+        if exists.first() is None:
+            raise ECNNotFound(ecn_id)
+
+        rows = (
+            await self._session.execute(
+                sa.text(
+                    "SELECT id, from_status, to_status, action, actor_username, "
+                    "       actor_role, notes, sha256_self, sha256_prev, created_at "
+                    "FROM ecn_transition_history "
+                    "WHERE ecn_id = :ecn_id ORDER BY created_at ASC"
+                ),
+                {"ecn_id": ecn_id},
+            )
+        ).mappings().all()
+
+        history: list[dict[str, Any]] = []
+        expected_prev: str | None = None
+        for row in rows:
+            chain_valid = row["sha256_prev"] == expected_prev
+            history.append({
+                "id": str(row["id"]),
+                "from_status": row["from_status"],
+                "from_status_name": (
+                    ECNStatus(int(row["from_status"])).name if row["from_status"] is not None else None
+                ),
+                "to_status": int(row["to_status"]),
+                "to_status_name": ECNStatus(int(row["to_status"])).name,
+                "action": row["action"],
+                "actor_username": row["actor_username"],
+                "actor_role": row["actor_role"],
+                "notes": row["notes"],
+                "sha256_self": row["sha256_self"],
+                "sha256_prev": row["sha256_prev"],
+                "chain_valid": chain_valid,
+                "created_at": row["created_at"],
+            })
+            expected_prev = row["sha256_self"]
+
+        return history
+
     async def get_open_orders(
         self, ecn_id: str, *, erp: Any
     ) -> list[dict[str, Any]]:
