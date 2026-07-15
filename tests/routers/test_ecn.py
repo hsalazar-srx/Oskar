@@ -539,3 +539,68 @@ class TestOptimisticLocking:
         assert detail["code"] == "ECN_MODIFIED"
         assert detail["message"] == "This ECN was modified by another user. Reload and reapply your changes."
         assert "current_updated_at" in detail
+
+
+# ── GET /api/v1/ecn/{ecn_id}/history (S9-2) ──────────────────────────────────
+
+
+def _history_row(**kwargs: Any) -> dict[str, Any]:
+    defaults = dict(
+        id="hist-0001",
+        from_status=None,
+        from_status_name=None,
+        to_status=0,
+        to_status_name="DRAFT",
+        action="create",
+        actor_username="jsmith",
+        actor_role="OR",
+        notes=None,
+        sha256_self="a" * 64,
+        sha256_prev=None,
+        chain_valid=True,
+        created_at=_NOW,
+    )
+    defaults.update(kwargs)
+    return defaults
+
+
+class TestGetECNHistory:
+    def test_returns_200_with_chain(self, client: TestClient) -> None:
+        chain = [
+            _history_row(),
+            _history_row(
+                id="hist-0002", from_status=0, from_status_name="DRAFT",
+                to_status=30, to_status_name="ENGINEERING_REVIEW", action="submit",
+                sha256_self="b" * 64, sha256_prev="a" * 64,
+            ),
+        ]
+        with patch.object(ECNService, "get_history", new_callable=AsyncMock, return_value=chain):
+            resp = client.get("/api/v1/ecn/ecn-0001/history")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body) == 2
+        assert body[0]["action"] == "create"
+        assert body[1]["action"] == "submit"
+        assert body[1]["from_status_name"] == "DRAFT"
+        assert body[1]["to_status_name"] == "ENGINEERING_REVIEW"
+
+    def test_not_found_returns_404(self, client: TestClient) -> None:
+        with patch.object(
+            ECNService, "get_history", new_callable=AsyncMock,
+            side_effect=ECNNotFound("missing-id"),
+        ):
+            resp = client.get("/api/v1/ecn/missing-id/history")
+        assert resp.status_code == 404
+
+    def test_empty_history_returns_empty_list(self, client: TestClient) -> None:
+        with patch.object(ECNService, "get_history", new_callable=AsyncMock, return_value=[]):
+            resp = client.get("/api/v1/ecn/ecn-0001/history")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_chain_valid_flag_present(self, client: TestClient) -> None:
+        broken_chain = [_history_row(chain_valid=False, sha256_prev="mismatched" + "0" * 54)]
+        with patch.object(ECNService, "get_history", new_callable=AsyncMock, return_value=broken_chain):
+            resp = client.get("/api/v1/ecn/ecn-0001/history")
+        assert resp.status_code == 200
+        assert resp.json()[0]["chain_valid"] is False
