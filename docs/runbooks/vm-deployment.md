@@ -1,7 +1,8 @@
 # Runbook — OSKAR VM Deployment
 # Target: apac-plm-ops.srxglobal.local (Ubuntu 24.04 LTS, VMware)
 # Owner: Lead Engineer (hsalazar)
-# Last updated: 2026-06-29 (Sprint 6 — added T-12 DB password mismatch troubleshooting)
+# Last updated: 2026-07-15 (S9-7 — added DIGIKEY_* vars + T-10 autofill troubleshooting;
+#                            renumbered T-11 onward, fixing a pre-existing duplicate T-11)
 #
 # This runbook covers first deployment (staging) and production promotion.
 # Harbor installation is a separate prerequisite: docs/runbooks/harbor-installation.md
@@ -148,6 +149,13 @@ MOVEX_API_URL=
 MOVEX_API_KEY=
 MOVEX_CONO=300
 CELERY_SECURITY_KEY=change-me-celery-key
+
+# DigiKey Product Information API — blank disables autofill, SupplierChain
+# falls through to Nexar/manual entry. Same production app as dev by default
+# (see DigiKeyAdapter's x-ratelimit-* quota guard — shared quota with dev).
+DIGIKEY_CLIENT_ID=
+DIGIKEY_CLIENT_SECRET=
+DIGIKEY_BASE_URL=https://api.digikey.com
 
 SMTP_HOST=10.10.0.155
 SMTP_PORT=25
@@ -491,7 +499,25 @@ sudo docker compose -f docker-compose.staging.yml --env-file .env.staging up -d 
 
 ---
 
-### T-10 — Login returns `Invalid credentials` despite correct password
+### T-10 — Stock code autofill returns nothing (no DigiKey data)
+
+`DIGIKEY_CLIENT_ID` is blank in `.env.staging` — `DigiKeyAdapter` is never constructed
+(see `src/main.py`'s lifespan), so `SupplierChain` silently falls through to Nexar/manual
+entry. Check for a `digikey.adapter_enabled` log line at startup — its absence confirms this.
+
+**Fix:** Add the three `DIGIKEY_*` vars to `/opt/oskar/.env.staging`, then recreate `oskar-app`
+only (`oskar-worker`/`oskar-beat` don't use DigiKey, no need to touch them):
+```bash
+sudo docker compose -f docker-compose.staging.yml --env-file .env.staging up -d oskar-app
+```
+`DIGIKEY_BASE_URL` defaults to production (`https://api.digikey.com`) if unset once
+`DIGIKEY_CLIENT_ID` is set — production has a real, limited daily quota shared with dev
+(`DigiKeyAdapter` reads DigiKey's own `x-ratelimit-*` response headers and stops calling
+once nearly exhausted, see `src/adapters/suppliers/digikey.py`).
+
+---
+
+### T-11 — Login returns `Invalid credentials` despite correct password
 
 Check `AUTH_PROVIDER` in the running container:
 ```bash
@@ -512,7 +538,7 @@ sudo cp /opt/oskar-src/Oskar-master/docker/docker-compose.staging.yml /opt/oskar
 
 ---
 
-### T-11 — Compose file service names missing after VM edits
+### T-12 — Compose file service names missing after VM edits
 
 Never use `sed` to patch compose YAML — indentation errors silently corrupt the file.
 Always replace from source:
@@ -524,7 +550,7 @@ Then re-apply any environment overrides by editing `.env.staging` instead.
 
 ---
 
-### T-12 — `alembic upgrade head` fails: `password authentication failed for user "oskar"`
+### T-13 — `alembic upgrade head` fails: `password authentication failed for user "oskar"`
 
 **Symptom:** Running `alembic upgrade head` (either on the VM host or via `docker exec`) fails
 with `asyncpg.exceptions.InvalidPasswordError: password authentication failed for user "oskar"`.
@@ -578,7 +604,7 @@ docker exec oskar-app-staging alembic upgrade head
 
 ---
 
-### T-13 — Login returns 404 through nginx but works directly on port 8001
+### T-14 — Login returns 404 through nginx but works directly on port 8001
 
 **Symptom:** `POST http://localhost:8080/api/v1/auth/login` returns 404 with a FastAPI-style
 JSON body (`{"detail":"Not Found"}`), CORS headers are present, and `x-correlation-id` is

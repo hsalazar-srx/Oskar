@@ -28,6 +28,9 @@ services:
       - MOVEX_API_URL=${MOVEX_API_URL}
       - MOVEX_API_KEY=${MOVEX_API_KEY}
       - MOVEX_CONO=${MOVEX_CONO:-300}
+      - DIGIKEY_CLIENT_ID=${DIGIKEY_CLIENT_ID:-}
+      - DIGIKEY_CLIENT_SECRET=${DIGIKEY_CLIENT_SECRET:-}
+      - DIGIKEY_BASE_URL=${DIGIKEY_BASE_URL:-https://api.digikey.com}
       - DATABASE_URL=postgresql+asyncpg://oskar:${POSTGRES_PASSWORD}@oskar-db-staging:5432/oskar_staging
       - AUTH_PROVIDER=${AUTH_PROVIDER:-dev}
       - DEV_USERS=${DEV_USERS:-hsalazar,eng_user,qm_user,dc_user}
