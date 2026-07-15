@@ -161,7 +161,7 @@ export async function createItem(ecnId: string, lineNumber: number, body: Record
   return data
 }
 
-export async function updateEcn(ecnId: string, body: Record<string, unknown>, updatedAt: string) {
+export async function updateEcn<T extends object>(ecnId: string, body: T, updatedAt: string) {
   const { data } = await axiosInstance.patch(
     `/api/v1/ecn/${ecnId}`,
     body,
