@@ -8,6 +8,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+import structlog
+
 from src.adapters.erp.movex import MovexRestAdapter
 from src.adapters.suppliers.digikey import DigiKeyAdapter
 from src.adapters.suppliers.nexar import NexarAdapter
@@ -20,6 +22,8 @@ from src.routers.health import health_router
 
 # Configure structlog before any other module emits a log record
 configure_logging()
+
+log = structlog.get_logger(__name__)
 
 
 @asynccontextmanager
@@ -34,6 +38,15 @@ async def _lifespan(application: FastAPI):
         digikey = DigiKeyAdapter()
         await digikey.open()
         supplier_adapters.append(digikey)
+        # DIGIKEY_BASE_URL determines sandbox vs production — logged loudly at
+        # startup since a production DigiKey app draws down a real, limited
+        # quota (see DigiKeyAdapter's own x-ratelimit-* tracking).
+        is_prod = "sandbox" not in digikey._base_url
+        log.warning(
+            "digikey.adapter_enabled",
+            base_url=digikey._base_url,
+            environment="PRODUCTION" if is_prod else "sandbox",
+        )
     if os.getenv("NEXAR_CLIENT_ID"):
         nexar = NexarAdapter()
         await nexar.open()
