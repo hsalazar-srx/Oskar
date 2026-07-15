@@ -20,6 +20,17 @@ class RoleUserNotFound(Exception):
     pass
 
 
+class OutboxEntryNotFound(Exception):
+    pass
+
+
+class OutboxEntryNotRetryable(Exception):
+    pass
+
+
+_RETRYABLE_STATES = frozenset({"failed", "abandoned"})
+
+
 class AdminService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -230,3 +241,78 @@ class AdminService:
         await self._session.commit()
         if result.rowcount == 0:
             raise RoleUserNotFound(f"{entry_id} not found or already removed")
+
+    # ── Movex outbox recovery (S9-4) ─────────────────────────────────────────
+
+    async def list_movex_outbox(
+        self,
+        *,
+        state: str | None = None,
+        facility: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """List movex_outbox entries joined with ECN context, newest first.
+
+        Defaults to failed/abandoned only (the DC Recovery view) when no
+        state filter is given — completed/pending/processing entries are
+        noise for this screen and can be requested explicitly if needed.
+        """
+        sql = (
+            "SELECT o.id, o.ecn_id, e.ecn_number, e.facility, o.ecn_item_id, "
+            "o.mi_transaction, o.state, o.attempt_count, o.max_attempts, "
+            "o.next_retry_at, o.last_error, o.completed_at, o.created_at, o.updated_at "
+            "FROM movex_outbox o "
+            "JOIN ecn_instances e ON e.id = o.ecn_id "
+            "WHERE 1=1"
+        )
+        params: dict[str, Any] = {"limit": limit}
+        if state:
+            sql += " AND o.state = :state"
+            params["state"] = state
+        else:
+            sql += " AND o.state IN ('failed', 'abandoned')"
+        if facility:
+            sql += " AND e.facility = :facility"
+            params["facility"] = facility
+        sql += " ORDER BY o.updated_at DESC LIMIT :limit"
+        result = await self._session.execute(sa.text(sql), params)
+        return [dict(r._mapping) for r in result.fetchall()]
+
+    async def retry_movex_outbox_entry(self, *, entry_id: str, actor_username: str) -> dict[str, Any]:
+        """Reset a failed/abandoned outbox entry to pending and re-dispatch it.
+
+        attempt_count is reset to 0 — chk_outbox_not_requeued forbids a
+        'pending' row with attempt_count >= max_attempts, and an abandoned
+        entry is otherwise silently skipped by process_outbox_entry's
+        idempotency guard (terminal-state check). A DC-triggered retry is a
+        deliberate new attempt cycle, not a continuation of the abandoned one.
+        """
+        row = await self._session.execute(
+            sa.text("SELECT id, state FROM movex_outbox WHERE id = :id"),
+            {"id": entry_id},
+        )
+        entry = row.first()
+        if entry is None:
+            raise OutboxEntryNotFound(entry_id)
+        if entry[1] not in _RETRYABLE_STATES:
+            raise OutboxEntryNotRetryable(
+                f"Outbox entry {entry_id} is in state '{entry[1]}' — only "
+                f"{sorted(_RETRYABLE_STATES)} entries can be retried."
+            )
+
+        result = await self._session.execute(
+            sa.text("""
+                UPDATE movex_outbox
+                SET state = 'pending', attempt_count = 0, next_retry_at = NULL, updated_at = now()
+                WHERE id = :id
+                RETURNING id, ecn_id, mi_transaction, state
+            """),
+            {"id": entry_id},
+        )
+        await self._session.commit()
+        updated = dict(result.fetchone()._mapping)
+
+        from src.tasks.movex_outbox import process_outbox_entry
+        process_outbox_entry.apply_async(args=[entry_id])
+
+        return updated

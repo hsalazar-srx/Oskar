@@ -13,8 +13,11 @@ import {
   addCustomerRoleDefault,
   setCustomerRoleDefault,
   removeCustomerRoleDefault,
+  fetchMovexOutbox,
+  retryMovexOutboxEntry,
   type CustomerEntry,
   type CustomerRoleDefault,
+  type MovexOutboxEntry,
 } from "@/api/ecn"
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -667,11 +670,193 @@ function CustomerRoleDefaultsSection() {
   )
 }
 
+// ── Movex outbox recovery (S9-4) ────────────────────────────────────────────────
+
+const OUTBOX_STATE_BADGE: Record<string, string> = {
+  failed: "bg-amber-100 text-amber-700 hover:bg-amber-100",
+  abandoned: "bg-red-100 text-red-700 hover:bg-red-100",
+}
+
+function relativeTimeShort(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime()
+  const mins = Math.floor(ms / 60_000)
+  if (mins < 1) return "just now"
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  return `${days}d ago`
+}
+
+function MovexOutboxSection() {
+  const qc = useQueryClient()
+  const [stateFilter, setStateFilter] = useState<string>("")
+  const [confirmRetry, setConfirmRetry] = useState<MovexOutboxEntry | null>(null)
+
+  const { data: entries = [], isLoading, isFetching } = useQuery({
+    queryKey: ["admin-movex-outbox", stateFilter],
+    queryFn: () => fetchMovexOutbox(stateFilter ? { state: stateFilter } : undefined),
+    staleTime: 0,
+    refetchInterval: 30_000,
+  })
+
+  const retry = useMutation({
+    mutationFn: (id: string) => retryMovexOutboxEntry(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin-movex-outbox"] })
+      setConfirmRetry(null)
+    },
+  })
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center gap-2 py-8 text-sm text-[#94a3b8]">
+        <Spinner size="sm" /> Loading failed Movex writes…
+      </div>
+    )
+  }
+
+  return (
+    <>
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <select
+            value={stateFilter}
+            onChange={(e) => setStateFilter(e.target.value)}
+            className="h-8 rounded border border-[#d1d9e0] bg-white px-2 text-xs text-[#475569] focus:outline-none focus:border-[#0066cc] focus:ring-1 focus:ring-[#0066cc]/20"
+          >
+            <option value="">Failed + Abandoned (default)</option>
+            <option value="failed">Failed only</option>
+            <option value="abandoned">Abandoned only</option>
+            <option value="pending">Pending</option>
+            <option value="processing">Processing</option>
+            <option value="completed">Completed</option>
+          </select>
+          {isFetching && <Spinner size="sm" />}
+          <span className="ml-auto text-[11px] text-[#94a3b8]">Auto-refreshes every 30s</span>
+        </div>
+
+        {entries.length === 0 ? (
+          <p className="text-sm text-[#94a3b8] py-8 text-center">
+            No {stateFilter || "failed or abandoned"} Movex writes — everything is up to date.
+          </p>
+        ) : (
+          <div className="rounded-lg border border-[#e8ecf0] divide-y divide-[#f8fafc] overflow-hidden">
+            {entries.map((entry) => (
+              <div key={entry.id} className="px-4 py-3 flex items-start gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-mono text-xs font-bold text-[#0066cc]">{entry.ecn_number}</span>
+                    <span className="text-xs text-[#475569]">{entry.mi_transaction}</span>
+                    <Badge className={`text-[10px] ${OUTBOX_STATE_BADGE[entry.state] ?? "bg-neutral-100 text-neutral-600"}`}>
+                      {entry.state}
+                    </Badge>
+                    <span className="text-[11px] text-[#94a3b8]">
+                      Facility {entry.facility} · attempt {entry.attempt_count}/{entry.max_attempts}
+                    </span>
+                  </div>
+                  {entry.last_error && (
+                    <p className="mt-1 text-xs text-red-600 truncate" title={entry.last_error}>
+                      {entry.last_error}
+                    </p>
+                  )}
+                  <div className="mt-1 flex items-center gap-3 text-[11px] text-[#94a3b8]">
+                    <span>Updated {relativeTimeShort(entry.updated_at)}</span>
+                    {entry.next_retry_at && entry.state === "failed" && (
+                      <span>Next auto-retry {relativeTimeShort(entry.next_retry_at)}</span>
+                    )}
+                  </div>
+                </div>
+                {(entry.state === "failed" || entry.state === "abandoned") && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs shrink-0"
+                    onClick={() => setConfirmRetry(entry)}
+                  >
+                    Retry now
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {confirmRetry && (
+        <div
+          className="fixed inset-0 z-[1080] flex items-center justify-center bg-black/40"
+          onMouseDown={(e) => { if (e.target === e.currentTarget) setConfirmRetry(null) }}
+        >
+          <div className="w-full max-w-sm rounded-lg bg-white shadow-xl mx-4 p-5 space-y-4">
+            <div>
+              <h3 className="text-base font-semibold text-[#0f172a]">Retry Movex write?</h3>
+              <p className="text-sm text-[#475569] mt-1">
+                Reset <strong className="font-mono">{confirmRetry.mi_transaction}</strong> on{" "}
+                <strong className="font-mono">{confirmRetry.ecn_number}</strong> to pending and
+                dispatch it immediately.
+              </p>
+              {confirmRetry.state === "abandoned" && (
+                <p className="text-xs text-amber-600 mt-1.5">
+                  This entry was abandoned after {confirmRetry.max_attempts} attempts — retrying
+                  starts a fresh attempt cycle.
+                </p>
+              )}
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setConfirmRetry(null)}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                disabled={retry.isPending}
+                onClick={() => retry.mutate(confirmRetry.id)}
+              >
+                {retry.isPending ? "…" : "Retry now"}
+              </Button>
+            </div>
+            {retry.isError && (
+              <p className="text-xs text-red-600">Retry failed — check the entry state and try again.</p>
+            )}
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
 // ── Main page ──────────────────────────────────────────────────────────────────
+
+type AdminTab = "roles" | "outbox" | "customer-defaults" | "ldap"
+
+const ADMIN_TABS: { id: AdminTab; label: string; description: string }[] = [
+  {
+    id: "roles",
+    label: "ECN Role Assignments",
+    description: "Default users auto-assigned to each role when a new ECN is created. Hover a row to reveal the remove button.",
+  },
+  {
+    id: "outbox",
+    label: "Movex Write Recovery",
+    description: "Failed and abandoned Movex writes. Failed entries auto-retry on a schedule; abandoned entries (10 failed attempts) need a manual retry here.",
+  },
+  {
+    id: "customer-defaults",
+    label: "Customer — SE / PM Defaults",
+    description: "Per-customer Senior Engineer and Production Manager candidates, seeded from Stargile allocation data. Mark one candidate per role as \"Default\" to auto-assign it on ECN creation for that customer.",
+  },
+  {
+    id: "ldap",
+    label: "Active Directory Groups",
+    description: "Groups under OU=Application Roles,OU=Groups,DC=srxglobal,DC=com",
+  },
+]
 
 export default function AdminPage() {
   const user = useAuthStore((s) => s.user)
   const isDC = user?.groups?.includes("ecn-doc-controller") ?? false
+  const [tab, setTab] = useState<AdminTab>("roles")
 
   if (!isDC) {
     return (
@@ -685,6 +870,8 @@ export default function AdminPage() {
     )
   }
 
+  const active = ADMIN_TABS.find((t) => t.id === tab) ?? ADMIN_TABS[0]
+
   return (
     <div className="min-h-screen bg-[#f5f7fa] flex flex-col">
       <header className="sticky top-0 z-[1020] border-b border-[#e8ecf0] bg-white px-6 h-14 flex items-center gap-3 shadow-[var(--shadow-xs)]">
@@ -695,48 +882,40 @@ export default function AdminPage() {
         <span className="font-semibold text-sm text-[#1e293b]">Administration</span>
       </header>
 
-      <main className="flex-1 mx-auto w-full max-w-4xl px-6 py-6 space-y-6">
-        {/* ECN role assignments */}
-        <section className="rounded-xl border border-[#e8ecf0] bg-white shadow-[var(--shadow-sm)] overflow-hidden">
-          <div className="px-5 py-4 border-b border-[#f1f5f9] bg-[#f8fafc]">
-            <h2 className="text-sm font-semibold text-[#0f172a]">Oskar — ECN Role Assignments</h2>
-            <p className="text-xs text-[#94a3b8] mt-0.5">
-              Default users auto-assigned to each role when a new ECN is created.
-              Hover a row to reveal the remove button.
-            </p>
-          </div>
-          <div className="p-5">
-            <RoleAssignmentsSection />
-          </div>
-        </section>
+      <main className="flex-1 mx-auto w-full max-w-6xl px-6 py-6">
+        <div className="flex gap-6 items-start">
+          {/* Left nav */}
+          <nav className="w-56 shrink-0 sticky top-20 space-y-1">
+            {ADMIN_TABS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTab(t.id)}
+                className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors duration-150 ${
+                  tab === t.id
+                    ? "bg-[#eff6ff] text-[#0066cc]"
+                    : "text-[#475569] hover:bg-white hover:text-[#0f172a]"
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </nav>
 
-        {/* Customer role defaults (SE/PM) */}
-        <section className="rounded-xl border border-[#e8ecf0] bg-white shadow-[var(--shadow-sm)] overflow-hidden">
-          <div className="px-5 py-4 border-b border-[#f1f5f9] bg-[#f8fafc]">
-            <h2 className="text-sm font-semibold text-[#0f172a]">Customer — SE / PM Defaults</h2>
-            <p className="text-xs text-[#94a3b8] mt-0.5">
-              Per-customer Senior Engineer and Production Manager candidates, seeded from Stargile
-              allocation data. Mark one candidate per role as "Default" to auto-assign it on ECN
-              creation for that customer.
-            </p>
-          </div>
-          <div className="p-5">
-            <CustomerRoleDefaultsSection />
-          </div>
-        </section>
-
-        {/* LDAP groups */}
-        <section className="rounded-xl border border-[#e8ecf0] bg-white shadow-[var(--shadow-sm)] overflow-hidden">
-          <div className="px-5 py-4 border-b border-[#f1f5f9] bg-[#f8fafc]">
-            <h2 className="text-sm font-semibold text-[#0f172a]">Active Directory — Application Role Groups</h2>
-            <p className="text-xs text-[#94a3b8] mt-0.5">
-              Groups under <span className="font-mono">OU=Application Roles,OU=Groups,DC=srxglobal,DC=com</span>
-            </p>
-          </div>
-          <div className="p-5">
-            <LdapGroupsSection />
-          </div>
-        </section>
+          {/* Active section */}
+          <section className="flex-1 min-w-0 rounded-xl border border-[#e8ecf0] bg-white shadow-[var(--shadow-sm)] overflow-hidden">
+            <div className="px-5 py-4 border-b border-[#f1f5f9] bg-[#f8fafc]">
+              <h2 className="text-sm font-semibold text-[#0f172a]">{active.label}</h2>
+              <p className="text-xs text-[#94a3b8] mt-0.5">{active.description}</p>
+            </div>
+            <div className="p-5">
+              {tab === "roles" && <RoleAssignmentsSection />}
+              {tab === "outbox" && <MovexOutboxSection />}
+              {tab === "customer-defaults" && <CustomerRoleDefaultsSection />}
+              {tab === "ldap" && <LdapGroupsSection />}
+            </div>
+          </section>
+        </div>
       </main>
     </div>
   )
