@@ -244,6 +244,23 @@ export async function deleteRoutingOp(ecnId: string, itemId: string, opId: strin
   await axiosInstance.delete(`/api/v1/ecn/${ecnId}/items/${itemId}/routing/${opId}`)
 }
 
+/**
+ * POST /api/v1/ecn/{ecnId}/routing/bulk
+ * Multi-item, ECN-wide routing upload — not scoped to a single item_id, unlike
+ * the single-op endpoints above. Sends the raw file as multipart/form-data;
+ * backend resolves each row's Item No against items already on this ECN.
+ */
+export async function bulkCreateRoutingOps(ecnId: string, file: File): Promise<RoutingOp[]> {
+  const form = new FormData()
+  form.append("file", file)
+  const { data } = await axiosInstance.post(
+    `/api/v1/ecn/${ecnId}/routing/bulk`,
+    form,
+    { headers: { "Content-Type": "multipart/form-data" } },
+  )
+  return data
+}
+
 // ── MPN management ────────────────────────────────────────────────────────────
 
 export interface MPN {
@@ -301,6 +318,23 @@ export async function updateMPN(
 
 export async function deleteMPN(ecnId: string, itemId: string, mpnId: string): Promise<void> {
   await axiosInstance.delete(`/api/v1/ecn/${ecnId}/items/${itemId}/mpns/${mpnId}`)
+}
+
+/**
+ * POST /api/v1/ecn/{ecnId}/mpns/bulk
+ * CAD BOM export template (C P/N + Manufacturer 1/2 + Part Number 1/2), not
+ * scoped to a single item_id — backend resolves each row's C P/N against
+ * items already on this ECN and expands each row into 1-2 MPN inserts.
+ */
+export async function bulkCreateMPNs(ecnId: string, file: File): Promise<MPN[]> {
+  const form = new FormData()
+  form.append("file", file)
+  const { data } = await axiosInstance.post(
+    `/api/v1/ecn/${ecnId}/mpns/bulk`,
+    form,
+    { headers: { "Content-Type": "multipart/form-data" } },
+  )
+  return data
 }
 
 // ── Customer role defaults (SE/PM per customer, admin) ─────────────────────────

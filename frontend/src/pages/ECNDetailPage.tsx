@@ -19,6 +19,8 @@ import ImplementationSchedulePanel from "@/components/ecn/ImplementationSchedule
 import type { ChecklistItem } from "@/components/ecn/ImplementationSchedulePanel"
 import { ActionModal, ModalField } from "@/components/ecn/ActionModal"
 import { ItemUploadDrawer } from "@/components/ecn/ItemUploadDrawer"
+import { RoutingUploadDrawer } from "@/components/ecn/RoutingUploadDrawer"
+import { MPNUploadDrawer } from "@/components/ecn/MPNUploadDrawer"
 
 function transitionErrorMessage(err: unknown): string {
   const detail = (err as any)?.response?.data?.detail
@@ -36,6 +38,8 @@ export default function ECNDetailPage() {
   const user = useAuthStore((s) => s.user)
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
   const [uploadDrawerOpen, setUploadDrawerOpen] = useState(false)
+  const [routingUploadDrawerOpen, setRoutingUploadDrawerOpen] = useState(false)
+  const [mpnUploadDrawerOpen, setMpnUploadDrawerOpen] = useState(false)
   const [toast, setToast] = useState<{ from: string; to: string } | null>(null)
   const [modal, setModal] = useState<{ action: ActionDef } | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -223,21 +227,49 @@ export default function ECNDetailPage() {
           title={`Items (${items.length})`}
           action={
             <div className="flex gap-2">
-              {/* Upload button: visible always, disabled outside DRAFT */}
+              {/* Upload buttons: visible always, disabled outside DRAFT */}
               {ecn.status === 0 ? (
-                <Button size="sm" variant="outline" onClick={() => setUploadDrawerOpen(true)}>
-                  ↑ Upload
-                </Button>
+                <>
+                  <Button size="sm" variant="outline" onClick={() => setUploadDrawerOpen(true)}>
+                    ↑ Upload
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setRoutingUploadDrawerOpen(true)}>
+                    ↑ Upload Routing
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setMpnUploadDrawerOpen(true)}>
+                    ↑ Upload MPNs
+                  </Button>
+                </>
               ) : (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled
-                  title="Uploads only available in Draft status"
-                  className="opacity-40 cursor-not-allowed"
-                >
-                  ↑ Upload
-                </Button>
+                <>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled
+                    title="Uploads only available in Draft status"
+                    className="opacity-40 cursor-not-allowed"
+                  >
+                    ↑ Upload
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled
+                    title="Uploads only available in Draft status"
+                    className="opacity-40 cursor-not-allowed"
+                  >
+                    ↑ Upload Routing
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled
+                    title="Uploads only available in Draft status"
+                    className="opacity-40 cursor-not-allowed"
+                  >
+                    ↑ Upload MPNs
+                  </Button>
+                </>
               )}
               <Button size="sm" variant="outline" onClick={() => setSelectedItemId("new")}>+ Add item</Button>
             </div>
@@ -319,6 +351,30 @@ export default function ECNDetailPage() {
         open={uploadDrawerOpen}
         onClose={() => setUploadDrawerOpen(false)}
         onSuccess={() => qc.invalidateQueries({ queryKey: ["ecn-items", id] })}
+      />
+
+      <RoutingUploadDrawer
+        ecnId={id!}
+        open={routingUploadDrawerOpen}
+        onClose={() => setRoutingUploadDrawerOpen(false)}
+        onSuccess={() => {
+          // Bulk upload can touch many items at once — invalidate every open
+          // item's routing-ops query, plus the items list (mirrors the
+          // per-item MPN mutation convention in ECNItemPanel.tsx).
+          qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === "routing-ops" })
+          qc.invalidateQueries({ queryKey: ["ecn-items", id] })
+        }}
+      />
+
+      <MPNUploadDrawer
+        ecnId={id!}
+        open={mpnUploadDrawerOpen}
+        onClose={() => setMpnUploadDrawerOpen(false)}
+        onSuccess={() => {
+          qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === "mpns" })
+          qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === "ecn-item" })
+          qc.invalidateQueries({ queryKey: ["ecn-items", id] })
+        }}
       />
 
       {modal?.action.needsModal === "reject" && (
