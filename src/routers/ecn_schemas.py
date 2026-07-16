@@ -355,10 +355,49 @@ class RoutingOpPatchBody(BaseModel):
 
     @field_validator("change_type")
     @classmethod
-    def validate_change_type(cls, v: str | None) -> str | None:
+    def _validate_patch_change_type(cls, v: str | None) -> str | None:
         if v is not None and v not in VALID_CHANGE_TYPES:
             raise ValueError(f"change_type must be one of {sorted(VALID_CHANGE_TYPES)}")
         return v
+
+
+class BulkRoutingRow(BaseModel):
+    """One parsed row from the bulk routing upload template (multi-item, ECN-wide).
+
+    item_number resolves to an existing ecn_items row on this ECN — bulk routing
+    upload does not create items. operation_description has no Movex equivalent
+    (PDS002MI only takes PLGR/PITI) but is required here, same as the single-op
+    create form, since it's stored locally on ecn_routing_operations.
+    """
+    item_number: str = Field(..., min_length=1, max_length=15)
+    operation_number: int = Field(..., ge=1)
+    operation_description: str = Field(..., min_length=1, max_length=30)
+    work_centre: str = Field(..., min_length=1, max_length=8)
+    run_time: float = Field(..., ge=0)
+    setup_time: float | None = Field(None, ge=0)
+    change_type: str
+
+    @field_validator("change_type")
+    @classmethod
+    def _validate_change_type(cls, v: str) -> str:
+        if v not in VALID_CHANGE_TYPES:
+            raise ValueError(f"change_type must be one of {sorted(VALID_CHANGE_TYPES)}")
+        return v
+
+
+class BulkMPNRow(BaseModel):
+    """One MPN row after CAD-BOM-row expansion (see _expand_mpn_rows in ecn_items.py).
+
+    item_number resolves to an existing ecn_items row on this ECN — bulk MPN
+    upload does not create items. A blank item_number here means the source
+    CAD BOM row had no C P/N filled in; it is rejected with a clear per-row
+    error rather than silently skipped (auto-resolving those against Movex/
+    DigiKey is a deferred Iteration 2 enhancement, not built yet).
+    """
+    item_number: str = Field(..., min_length=1, max_length=15)
+    mpn: str = Field(..., min_length=1, max_length=30)
+    manufacturer: str | None = Field(None, max_length=60)
+    is_default: bool = False
 
 
 # ---------------------------------------------------------------------------

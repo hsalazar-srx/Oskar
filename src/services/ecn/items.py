@@ -464,6 +464,83 @@ class ECNItemsMixin:
             {"mpn_id": mpn_id},
         )
 
+    async def bulk_create_mpns(
+        self,
+        ecn_id: str,
+        rows: list[dict],
+    ) -> list[ECNMPNDetail]:
+        """Insert MPNs for one or many items on one ECN in one atomic
+        transaction. Modeled on bulk_create_items — see that method for the
+        DRAFT-lock rationale. Rows can span multiple items, same as
+        bulk_create_routing_operations.
+
+        Each dict must match BulkMPNRow fields (item_number, mpn, manufacturer,
+        is_default). Items must already exist on this ECN — this does not
+        create items. No DB-level duplicate constraint on (item, mpn) exists
+        for ecn_mpns (matches the single create_mpn method, which has none
+        either) — only the in-batch duplicate check below applies.
+
+        Raises:
+            ECNNotFound: ECN does not exist.
+            ECNValidationError: ECN is not in DRAFT, a row references an
+                item_number not on this ECN, or a duplicate (item_number, mpn)
+                pair is found in the batch.
+        """
+        # -- Batch-level duplicate check (within the submitted rows) ----------
+        seen: set[tuple[str, str]] = set()
+        for idx, row in enumerate(rows, start=1):
+            key = (row.get("item_number", ""), row.get("mpn", ""))
+            if key in seen:
+                raise ECNValidationError(
+                    f"Row {idx}: MPN '{key[1]}' for item '{key[0]}' appears more "
+                    "than once in the upload"
+                )
+            seen.add(key)
+
+        # -- Lock ECN row and assert DRAFT status inside the transaction ------
+        ecn_row = await self._session.execute(
+            sa.text("SELECT id, status FROM ecn_instances WHERE id = :ecn_id FOR UPDATE"),
+            {"ecn_id": ecn_id},
+        )
+        ecn = ecn_row.first()
+        if not ecn:
+            raise ECNNotFound(ecn_id)
+        if ecn[1] != ECNStatus.DRAFT:
+            raise ECNValidationError("ECN is not in DRAFT status")
+
+        # -- Resolve item_number -> item_id for every item already on this ECN
+        item_rows = await self._session.execute(
+            sa.text("SELECT id, item_number FROM ecn_items WHERE ecn_id = :ecn_id"),
+            {"ecn_id": ecn_id},
+        )
+        item_by_number = {r[1]: r[0] for r in item_rows}
+
+        # -- Insert all rows ----------------------------------------------------
+        created_ids: list[str] = []
+        for idx, row in enumerate(rows, start=1):
+            item_number = row["item_number"]
+            item_id = item_by_number.get(item_number)
+            if item_id is None:
+                raise ECNValidationError(
+                    f"Row {idx}: item_number '{item_number}' was not found on this "
+                    "ECN — add it via item upload first"
+                )
+            mpn_id = str(uuid.uuid4())
+            await self._session.execute(
+                sa.text(
+                    "INSERT INTO ecn_mpns (id, ecn_item_id, mpn, manufacturer, is_default) "
+                    "VALUES (:id, :item_id, :mpn, :manufacturer, :is_default)"
+                ),
+                {
+                    "id": mpn_id, "item_id": item_id, "mpn": row["mpn"],
+                    "manufacturer": row.get("manufacturer"),
+                    "is_default": bool(row.get("is_default", False)),
+                },
+            )
+            created_ids.append(mpn_id)
+
+        return [await self._get_mpn(mpn_id) for mpn_id in created_ids]
+
     # ── Routing operations CRUD (S2-23) ───────────────────────────────────────
 
     def _row_to_routing_op(self, row: Any) -> RoutingOperationResponse:
@@ -591,3 +668,100 @@ class ECNItemsMixin:
             sa.text("DELETE FROM ecn_routing_operations WHERE id = :op_id"),
             {"op_id": op_id},
         )
+
+    async def bulk_create_routing_operations(
+        self,
+        ecn_id: str,
+        rows: list[dict],
+    ) -> list[RoutingOperationResponse]:
+        """Insert routing operations for one or many items on one ECN in one
+        atomic transaction. Modeled on bulk_create_items — see that method for
+        the DRAFT-lock rationale.
+
+        Rows are not required to share an item_number — one upload can carry a
+        single item's full routing (many rows, one item_number, many distinct
+        operation_numbers) or many items' routing changes at once (rows spread
+        across several item_numbers). The only uniqueness constraint is on the
+        (item_number, operation_number) pair.
+
+        Each dict must match BulkRoutingRow fields (item_number, operation_number,
+        operation_description, work_centre, run_time, setup_time, change_type).
+        Items must already exist on this ECN — this does not create items.
+
+        Raises:
+            ECNNotFound: ECN does not exist.
+            ECNValidationError: ECN is not in DRAFT, a row references an
+                item_number not on this ECN, or a duplicate (item_number,
+                operation_number) pair is found in the batch.
+        """
+        # -- Batch-level duplicate check (within the submitted rows) ----------
+        seen: set[tuple[str, int]] = set()
+        for idx, row in enumerate(rows, start=1):
+            key = (row.get("item_number", ""), row.get("operation_number"))
+            if key in seen:
+                raise ECNValidationError(
+                    f"Row {idx}: operation_number '{key[1]}' for item '{key[0]}' "
+                    "appears more than once in the upload"
+                )
+            seen.add(key)
+
+        # -- Lock ECN row and assert DRAFT status inside the transaction ------
+        ecn_row = await self._session.execute(
+            sa.text("SELECT id, status FROM ecn_instances WHERE id = :ecn_id FOR UPDATE"),
+            {"ecn_id": ecn_id},
+        )
+        ecn = ecn_row.first()
+        if not ecn:
+            raise ECNNotFound(ecn_id)
+        if ecn[1] != ECNStatus.DRAFT:
+            raise ECNValidationError("ECN is not in DRAFT status")
+
+        # -- Resolve item_number -> item_id for every item already on this ECN
+        item_rows = await self._session.execute(
+            sa.text("SELECT id, item_number FROM ecn_items WHERE ecn_id = :ecn_id"),
+            {"ecn_id": ecn_id},
+        )
+        item_by_number = {r[1]: r[0] for r in item_rows}
+
+        # -- Insert all rows ----------------------------------------------------
+        created_ids: list[str] = []
+        for idx, row in enumerate(rows, start=1):
+            item_number = row["item_number"]
+            item_id = item_by_number.get(item_number)
+            if item_id is None:
+                raise ECNValidationError(
+                    f"Row {idx}: item_number '{item_number}' was not found on this "
+                    "ECN — add it via item upload first"
+                )
+            op_id = str(uuid.uuid4())
+            await self._session.execute(
+                sa.text(
+                    "INSERT INTO ecn_routing_operations "
+                    "(id, ecn_item_id, operation_number, operation_description, "
+                    "work_centre, run_time, setup_time, change_type) "
+                    "VALUES (:id, :item_id, :opno, :opds, :plgr, :piti, :seti, :change_type)"
+                ),
+                {
+                    "id": op_id, "item_id": item_id, "opno": row["operation_number"],
+                    "opds": row["operation_description"], "plgr": row["work_centre"],
+                    "piti": row["run_time"], "seti": row.get("setup_time"),
+                    "change_type": row["change_type"],
+                },
+            )
+            created_ids.append(op_id)
+
+        result: list[RoutingOperationResponse] = []
+        for op_id in created_ids:
+            row_data = await self._session.execute(
+                sa.text(
+                    "SELECT id, ecn_item_id, operation_number, operation_description, "
+                    "work_centre, run_time, setup_time, change_type, movex_snapshot, "
+                    "created_at, updated_at "
+                    "FROM ecn_routing_operations WHERE id = :op_id"
+                ),
+                {"op_id": op_id},
+            )
+            r = row_data.first()
+            if r:
+                result.append(self._row_to_routing_op(r))
+        return result
