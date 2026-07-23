@@ -38,7 +38,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from src.adapters.erp.base import ERPAdapter
+from src.adapters.erp.base import BOMNotFound, ERPAdapter
 
 # ---------------------------------------------------------------------------
 # Resilience configuration
@@ -270,8 +270,37 @@ class MovexRestAdapter(ERPAdapter):
         data = payload.get("data", {})
         return data.get("records", [])
 
-    async def get_bom(self, item_number: str, bom_type: str = "M") -> dict[str, Any]:
-        resp = await self._get(f"/bom/{item_number}", params={"type": bom_type})
+    async def get_bom(
+        self,
+        item_number: str,
+        facility: str,
+        *,
+        structure_type: str = "001",
+        bom_type: str = "M",
+        effective_on: str | None = None,
+    ) -> dict[str, Any]:
+        """B-1: GET /api/bom/{itno}?cono&faci&strt&effectiveOn.
+
+        bom_type has no B-1 query-param equivalent (see base.py docstring) —
+        accepted only for ERP-neutral interface parity, never sent here.
+        Raises BOMNotFound on HTTP 404 (no MPDHED head record).
+        """
+        params: dict[str, Any] = {
+            "cono": self.cono,
+            "faci": facility,
+            "strt": structure_type,
+        }
+        if effective_on:
+            params["effectiveOn"] = effective_on
+        try:
+            resp = await self._get(f"/bom/{item_number}", params=params)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise BOMNotFound(
+                    f"No BOM found for item_number={item_number!r} facility={facility!r} "
+                    f"structure_type={structure_type!r}"
+                ) from exc
+            raise
         return resp.json()
 
     async def search_items(self, query: str, limit: int = 50) -> list[dict[str, Any]]:

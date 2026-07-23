@@ -15,7 +15,7 @@ class TestFakeERPAdapterGetBom:
     async def test_returns_single_level_fixture_for_known_item(self):
         adapter = FakeERPAdapter()
 
-        result = await adapter.get_bom("LF100001")
+        result = await adapter.get_bom("LF100001", "D")
 
         assert result["data"]["head"]["PRNO"] == "LF100001"
         assert len(result["data"]["records"]) == 12
@@ -24,7 +24,7 @@ class TestFakeERPAdapterGetBom:
         adapter = FakeERPAdapter()
 
         with pytest.raises(LookupError):
-            await adapter.get_bom("NOPE99999")
+            await adapter.get_bom("NOPE99999", "D")
 
 
 class TestFakeERPAdapterCannedDefaults:

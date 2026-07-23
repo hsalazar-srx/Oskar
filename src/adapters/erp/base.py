@@ -28,6 +28,17 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 
+class BOMNotFound(LookupError):
+    """Raised when no BOM head record exists for the requested item/facility/
+    structure_type (B-1: movex-rest-api returns 404 when no MPDHED row matches).
+
+    Subclasses LookupError — the same "not found" contract other ERPAdapter
+    methods use (e.g. FakeERPAdapter.get_bom's plain LookupError for unknown
+    fixture keys) so callers that only care about "was it found" can catch
+    LookupError, while BOM-specific callers can catch BOMNotFound precisely.
+    """
+
+
 class ERPAdapter(ABC):
     """Abstract base for all ERP adapters.
 
@@ -58,12 +69,34 @@ class ERPAdapter(ABC):
         ...
 
     @abstractmethod
-    async def get_bom(self, item_number: str, bom_type: str = "M") -> dict[str, Any]:
-        """Fetch the live BOM structure for an item from Movex.
+    async def get_bom(
+        self,
+        item_number: str,
+        facility: str,
+        *,
+        structure_type: str = "001",
+        bom_type: str = "M",
+        effective_on: str | None = None,
+    ) -> dict[str, Any]:
+        """Fetch the single-level live BOM structure for an item from Movex (B-1).
 
-        Used for BOM concurrency detection at DC_REVIEW: the result is stored as
-        ecn_bom_changes.movex_snapshot_at_review and compared before the APPROVED write.
-        bom_type: 'M' = manufacturing BOM (default).
+        Used for BOM concurrency detection at dc_approve (DC_APPROVED=25, ADR-009):
+        the result is stored as ecn_bom_changes.movex_snapshot_at_review and compared
+        before the APPROVED write. DC_REVIEW does not exist as a workflow state — the
+        DC gate is the dc_approve transition, not a separate review status.
+
+        structure_type: Movex STRT, default '001'.
+        bom_type: 'M' = manufacturing BOM (default). Kept for ERP-neutral parity
+          across adapters — movex-rest-api's B-1 endpoint has no bom_type-equivalent
+          query param (MPDHED/MPDMAT is inherently the manufacturing BOM), so
+          MovexRestAdapter does not forward it.
+        effective_on: optional YYYYMMDD string. B-1 is a full-list read with
+          application-side effectivity filtering (FDAT is a cursor-seek position,
+          not a filter — see docs/movex-rest-api-bom-contract.md) — the service
+          layer (src/services/bom/browse.py), not this adapter, applies the filter.
+
+        Raises BOMNotFound when no head record exists for item_number/facility/
+        structure_type.
         """
         ...
 
