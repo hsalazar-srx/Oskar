@@ -1,0 +1,9 @@
+{
+  "data": {
+    "records": [
+      {"FACI": "D", "PRNO": "LF100001", "STRT": "001", "MSEQ": 10, "FDAT": 20240101, "CIRF": ["R1", "R7", "R12"]},
+      {"FACI": "D", "PRNO": "LF100001", "STRT": "001", "MSEQ": 20, "FDAT": 20240101, "CIRF": ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8"]},
+      {"FACI": "D", "PRNO": "LF100001", "STRT": "001", "MSEQ": 30, "FDAT": 20240101, "CIRF": ["U1"]}
+    ]
+  }
+}

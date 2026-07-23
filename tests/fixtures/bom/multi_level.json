@@ -1,0 +1,13 @@
+{
+  "data": {
+    "records": [
+      {"LEVL": 1, "PRNO": "LF100001", "MSEQ": 10, "MTNO": "LF300001", "ITDS": "Subassembly A",       "OPNO": 10, "CNQT": 1.0, "PEUN": "EA", "FDAT": 20240101, "TDAT": 99999999, "STRT": "001", "WHLO": "MAIN", "ITTY": "4"},
+      {"LEVL": 2, "PRNO": "LF300001", "MSEQ": 10, "MTNO": "LF200010", "ITDS": "Resistor 10K 0603",   "OPNO": 10, "CNQT": 2.0, "PEUN": "EA", "FDAT": 20240101, "TDAT": 99999999, "STRT": "001", "WHLO": "MAIN", "ITTY": "3"},
+      {"LEVL": 2, "PRNO": "LF300001", "MSEQ": 20, "MTNO": "LF400001", "ITDS": "Phantom Subassembly B","OPNO": 10, "CNQT": 1.0, "PEUN": "EA", "FDAT": 20240101, "TDAT": 99999999, "STRT": "001", "WHLO": "MAIN", "ITTY": "9"},
+      {"LEVL": 3, "PRNO": "LF400001", "MSEQ": 10, "MTNO": "LF200011", "ITDS": "Capacitor 100nF 0603","OPNO": 10, "CNQT": 4.0, "PEUN": "EA", "FDAT": 20240101, "TDAT": 99999999, "STRT": "001", "WHLO": "MAIN", "ITTY": "3"},
+      {"LEVL": 3, "PRNO": "LF400001", "MSEQ": 20, "MTNO": "LF200012", "ITDS": "IC MCU STM32F103",    "OPNO": 10, "CNQT": 1.0, "PEUN": "EA", "FDAT": 20240101, "TDAT": 99999999, "STRT": "001", "WHLO": "MAIN", "ITTY": "3"},
+      {"LEVL": 1, "PRNO": "LF100001", "MSEQ": 20, "MTNO": "LF200010", "ITDS": "Resistor 10K 0603",   "OPNO": 20, "CNQT": 3.0, "PEUN": "EA", "FDAT": 20240101, "TDAT": 99999999, "STRT": "001", "WHLO": "MAIN", "ITTY": "3"},
+      {"LEVL": 1, "PRNO": "LF100001", "MSEQ": 30, "MTNO": "LF200014", "ITDS": "PCB Bare Board Rev C","OPNO": 10, "CNQT": 1.0, "PEUN": "EA", "FDAT": 20240101, "TDAT": 99999999, "STRT": "001", "WHLO": "MAIN", "ITTY": "3"}
+    ]
+  }
+}
