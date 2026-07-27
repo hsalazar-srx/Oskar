@@ -7,8 +7,9 @@ onward) that need a fully working adapter returning realistic, mutually consiste
 fixture data across multiple calls in one test.
 
 get_bom routes by item_number through _BOM_FIXTURES; unknown item numbers raise
-LookupError (mirrors MovexRestAdapter's "raises on item not found" contract without
-needing a real httpx.Response to build an httpx.HTTPStatusError from).
+BOMNotFound (mirrors MovexRestAdapter's 404 -> BOMNotFound contract without
+needing a real httpx.Response to build an httpx.HTTPStatusError from). BOMNotFound
+subclasses LookupError, so pytest.raises(LookupError) still matches.
 
 Every other ERPAdapter method is not yet stubbed — it raises NotImplementedError,
 same pattern as src/adapters/erp/ifs.py, so a test that incidentally calls an
@@ -24,7 +25,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.adapters.erp.base import ERPAdapter
+from src.adapters.erp.base import BOMNotFound, ERPAdapter
 
 _FIXTURES_DIR = Path(__file__).parent.parent / "fixtures" / "bom"
 
@@ -32,6 +33,14 @@ _BOM_FIXTURES = {
     "LF100001": "single_level.json",
     "LF100002": "expired_lines.json",
     "LF900001": "large_500.json",
+}
+
+_BOM_INDENTED_FIXTURES = {
+    "LF100001": "multi_level.json",
+}
+
+_WHERE_USED_FIXTURES = {
+    "LF200010": "where_used.json",
 }
 
 _NOT_STUBBED_MSG = (
@@ -53,10 +62,43 @@ class FakeERPAdapter(ERPAdapter):
     async def get_item_facility(self, item_number: str, facility: str) -> dict[str, Any]:
         raise NotImplementedError(_NOT_STUBBED_MSG.format(name="get_item_facility"))
 
-    async def get_bom(self, item_number: str, bom_type: str = "M") -> dict[str, Any]:
+    async def get_bom(
+        self,
+        item_number: str,
+        facility: str,
+        *,
+        structure_type: str = "001",
+        bom_type: str = "M",
+        effective_on: str | None = None,
+    ) -> dict[str, Any]:
         filename = _BOM_FIXTURES.get(item_number)
         if filename is None:
-            raise LookupError(f"no BOM fixture for item_number={item_number!r}")
+            raise BOMNotFound(f"no BOM fixture for item_number={item_number!r}")
+        return json.loads((self._fixtures_dir / filename).read_text())
+
+    async def get_bom_indented(
+        self,
+        item_number: str,
+        facility: str,
+        *,
+        structure_type: str = "001",
+        max_depth: int = 12,
+    ) -> dict[str, Any]:
+        filename = _BOM_INDENTED_FIXTURES.get(item_number)
+        if filename is None:
+            raise BOMNotFound(f"no indented BOM fixture for item_number={item_number!r}")
+        return json.loads((self._fixtures_dir / filename).read_text())
+
+    async def get_where_used(
+        self,
+        component_number: str,
+        facility: str,
+        *,
+        effective_on: str | None = None,
+    ) -> dict[str, Any]:
+        filename = _WHERE_USED_FIXTURES.get(component_number)
+        if filename is None:
+            raise BOMNotFound(f"no where-used fixture for component_number={component_number!r}")
         return json.loads((self._fixtures_dir / filename).read_text())
 
     async def get_routing_operations(

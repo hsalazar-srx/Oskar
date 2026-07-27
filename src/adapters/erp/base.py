@@ -28,6 +28,17 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 
+class BOMNotFound(LookupError):
+    """Raised when no BOM head record exists for the requested item/facility/
+    structure_type (B-1: movex-rest-api returns 404 when no MPDHED row matches).
+
+    Subclasses LookupError — the same "not found" contract other ERPAdapter
+    methods use (e.g. FakeERPAdapter.get_bom's plain LookupError for unknown
+    fixture keys) so callers that only care about "was it found" can catch
+    LookupError, while BOM-specific callers can catch BOMNotFound precisely.
+    """
+
+
 class ERPAdapter(ABC):
     """Abstract base for all ERP adapters.
 
@@ -58,12 +69,75 @@ class ERPAdapter(ABC):
         ...
 
     @abstractmethod
-    async def get_bom(self, item_number: str, bom_type: str = "M") -> dict[str, Any]:
-        """Fetch the live BOM structure for an item from Movex.
+    async def get_bom(
+        self,
+        item_number: str,
+        facility: str,
+        *,
+        structure_type: str = "001",
+        bom_type: str = "M",
+        effective_on: str | None = None,
+    ) -> dict[str, Any]:
+        """Fetch the single-level live BOM structure for an item from Movex (B-1).
 
-        Used for BOM concurrency detection at DC_REVIEW: the result is stored as
-        ecn_bom_changes.movex_snapshot_at_review and compared before the APPROVED write.
-        bom_type: 'M' = manufacturing BOM (default).
+        Used for BOM concurrency detection at dc_approve (DC_APPROVED=25, ADR-009):
+        the result is stored as ecn_bom_changes.movex_snapshot_at_review and compared
+        before the APPROVED write. DC_REVIEW does not exist as a workflow state — the
+        DC gate is the dc_approve transition, not a separate review status.
+
+        structure_type: Movex STRT, default '001'.
+        bom_type: 'M' = manufacturing BOM (default). Kept for ERP-neutral parity
+          across adapters — movex-rest-api's B-1 endpoint has no bom_type-equivalent
+          query param (MPDHED/MPDMAT is inherently the manufacturing BOM), so
+          MovexRestAdapter does not forward it.
+        effective_on: optional YYYYMMDD string. B-1 is a full-list read with
+          application-side effectivity filtering (FDAT is a cursor-seek position,
+          not a filter — see docs/movex-rest-api-bom-contract.md) — the service
+          layer (src/services/bom/browse.py), not this adapter, applies the filter.
+
+        Raises BOMNotFound when no head record exists for item_number/facility/
+        structure_type.
+        """
+        ...
+
+    @abstractmethod
+    async def get_bom_indented(
+        self,
+        item_number: str,
+        facility: str,
+        *,
+        structure_type: str = "001",
+        max_depth: int = 12,
+    ) -> dict[str, Any]:
+        """Fetch the multi-level (indented) explosion for an item (B-2).
+
+        Recursive CTE over MPDMAT on the movex-rest-api side, depth-capped at
+        max_depth and cycle-guarded there; PDZ100MI is broken in M3
+        (user-confirmed) and must not be used. Returns the flat, depth-first
+        Stargile shape (records[{LEVL, PRNO, MSEQ, MTNO, ...}]) — the caller
+        (src/services/bom/explode.py) assembles the tree client-side.
+
+        B-2's own recursive-CTE performance must be validated against a real
+        large multi-level UAT item (<2s target, ADR-012 Decision 4) before
+        this method is relied on for interactive tree-assembly — that gate is
+        external (movex-rest-api team) and cannot be exercised from this repo.
+        """
+        ...
+
+    @abstractmethod
+    async def get_where_used(
+        self,
+        component_number: str,
+        facility: str,
+        *,
+        effective_on: str | None = None,
+    ) -> dict[str, Any]:
+        """Reverse MPDMAT lookup: which assemblies consume this component (B-3).
+
+        Returns records[{PRNO, STRT, FACI, MSEQ, MTNO, OPNO, CNQT, ...}] — one
+        row per (parent assembly, BOM line) that references component_number.
+        Returns an empty records list when the component is used nowhere —
+        that is a legitimate "no usages" result, not an error.
         """
         ...
 

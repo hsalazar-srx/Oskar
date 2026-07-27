@@ -245,3 +245,65 @@ export class ECNCreatePage {
     return this.page.url().split("/ecn/")[1]
   }
 }
+
+// ── BOMBrowserPage ────────────────────────────────────────────────────────────
+
+export class BOMBrowserPage {
+  constructor(private page: Page) {}
+
+  async goto() {
+    await this.page.goto("/bom")
+    await this.page.waitForURL("**/bom")
+  }
+
+  async searchFor(itemNumber: string) {
+    await this.page.getByLabel(/item number/i).fill(itemNumber)
+    await this.page.getByRole("button", { name: /browse/i }).click()
+  }
+
+  async waitForLoaded() {
+    await this.page.waitForSelector("table", { timeout: 10_000 })
+  }
+
+  async waitForNotFound() {
+    await this.page.getByText(/no bom found/i).waitFor({ timeout: 10_000 })
+  }
+
+  async lineCount(): Promise<number> {
+    return this.page.locator("tbody tr").count()
+  }
+
+  async componentNumbers(): Promise<string[]> {
+    return this.page.locator("tbody tr td:nth-child(2)").allTextContents()
+  }
+
+  async toggleIncludeExpired() {
+    await this.page.getByLabel(/include expired/i).click()
+  }
+
+  // ── Slice B: indented / where-used tabs ───────────────────────────────────
+
+  async switchToTab(label: "Lines" | "Indented" | "Where used") {
+    await this.page.getByRole("button", { name: label, exact: true }).click()
+  }
+
+  async waitForTreeLoaded() {
+    await this.page.waitForSelector("text=/qty .* · cum/", { timeout: 10_000 })
+  }
+
+  async expandTreeNode(componentNumber: string) {
+    await this.page.getByText(componentNumber, { exact: true }).first().click()
+  }
+
+  async treeRowCount(): Promise<number> {
+    return this.page.locator("text=/qty .* · cum/").count()
+  }
+
+  async waitForWhereUsedLoaded() {
+    await this.page.waitForSelector("table", { timeout: 10_000 })
+  }
+
+  async whereUsedParentItems(): Promise<string[]> {
+    return this.page.locator("tbody tr td:nth-child(1)").allTextContents()
+  }
+}
