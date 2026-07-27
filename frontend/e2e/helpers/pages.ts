@@ -245,3 +245,39 @@ export class ECNCreatePage {
     return this.page.url().split("/ecn/")[1]
   }
 }
+
+// ── BOMBrowserPage ────────────────────────────────────────────────────────────
+
+export class BOMBrowserPage {
+  constructor(private page: Page) {}
+
+  async goto() {
+    await this.page.goto("/bom")
+    await this.page.waitForURL("**/bom")
+  }
+
+  async searchFor(itemNumber: string) {
+    await this.page.getByLabel(/item number/i).fill(itemNumber)
+    await this.page.getByRole("button", { name: /browse/i }).click()
+  }
+
+  async waitForLoaded() {
+    await this.page.waitForSelector("table", { timeout: 10_000 })
+  }
+
+  async waitForNotFound() {
+    await this.page.getByText(/no bom found/i).waitFor({ timeout: 10_000 })
+  }
+
+  async lineCount(): Promise<number> {
+    return this.page.locator("tbody tr").count()
+  }
+
+  async componentNumbers(): Promise<string[]> {
+    return this.page.locator("tbody tr td:nth-child(2)").allTextContents()
+  }
+
+  async toggleIncludeExpired() {
+    await this.page.getByLabel(/include expired/i).click()
+  }
+}

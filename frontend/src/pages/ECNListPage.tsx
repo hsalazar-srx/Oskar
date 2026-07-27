@@ -163,6 +163,12 @@ export default function ECNListPage() {
               Admin
             </button>
           )}
+          <button
+            onClick={() => navigate("/bom")}
+            className="text-xs text-[#94a3b8] hover:text-[#475569] transition-colors duration-150"
+          >
+            BOM
+          </button>
           <Button size="sm" onClick={() => navigate("/ecn/new")}>
             + New ECN
           </Button>
