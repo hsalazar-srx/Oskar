@@ -6,11 +6,16 @@
  *  - MSEQ ordering in the rendered table
  *  - Unknown item number shows the "no BOM found" state (404)
  *  - Include-expired toggle changes the visible line count
+ *  - Indented tab renders the multi-level explosion tree and supports
+ *    expand/collapse of a node
+ *  - Where used tab renders the reverse-lookup table for a component
  *
  * Requires the backend to be running with MOVEX_API_URL pointed at
  * scripts/movex_stub.py (per D7, ADR-012) so these fixtures resolve:
  *   LF100001 -> tests/fixtures/bom/single_level.json   (12 lines, all effective)
  *   LF100002 -> tests/fixtures/bom/expired_lines.json  (4 lines, 2 effective)
+ *   LF100001 -> tests/fixtures/bom/multi_level.json    (indented, 3 levels)
+ *   LF200010 -> tests/fixtures/bom/where_used.json     (2 parent usages)
  *
  *   uvicorn scripts.movex_stub:app --port 8100
  *   MOVEX_API_URL=http://localhost:8100 <start backend>
@@ -72,5 +77,52 @@ test.describe("BOM Browser — single-level browse", () => {
     const expandedCount = await bom.lineCount()
 
     expect(expandedCount).toBeGreaterThan(defaultCount)
+  })
+})
+
+test.describe("BOM Browser — multi-level explosion (Slice B)", () => {
+  test("indented tab renders the explosion tree with root and top-level children", async ({ page }) => {
+    const bom = await loginAndOpenBOM(page)
+
+    await bom.searchFor("LF100001")
+    await bom.waitForLoaded()
+    await bom.switchToTab("Indented")
+    await bom.waitForTreeLoaded()
+
+    // multi_level.json: root has 3 top-level children by default expansion
+    expect(await bom.treeRowCount()).toBeGreaterThanOrEqual(3)
+  })
+
+  test("expanding a collapsed node reveals its children", async ({ page }) => {
+    const bom = await loginAndOpenBOM(page)
+
+    await bom.searchFor("LF100001")
+    await bom.waitForLoaded()
+    await bom.switchToTab("Indented")
+    await bom.waitForTreeLoaded()
+
+    const before = await bom.treeRowCount()
+    // LF300001 (subassembly) starts expanded per BOMTreeView's default depth,
+    // but its phantom child LF400001 starts collapsed — expanding it should
+    // reveal LF200011/LF200012 underneath.
+    await bom.expandTreeNode("LF400001")
+    const after = await bom.treeRowCount()
+
+    expect(after).toBeGreaterThan(before)
+  })
+})
+
+test.describe("BOM Browser — where-used (Slice B)", () => {
+  test("where-used tab lists every parent assembly for a component", async ({ page }) => {
+    const bom = await loginAndOpenBOM(page)
+
+    await bom.searchFor("LF200010")
+    // LF200010 itself has no head fixture, so the Lines tab will 404 —
+    // that's fine, where-used is queried independently of the Lines tab.
+    await bom.switchToTab("Where used")
+    await bom.waitForWhereUsedLoaded()
+
+    const parents = await bom.whereUsedParentItems()
+    expect(parents).toEqual(expect.arrayContaining(["LF100001", "LF300001"]))
   })
 })

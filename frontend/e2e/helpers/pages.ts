@@ -280,4 +280,30 @@ export class BOMBrowserPage {
   async toggleIncludeExpired() {
     await this.page.getByLabel(/include expired/i).click()
   }
+
+  // ── Slice B: indented / where-used tabs ───────────────────────────────────
+
+  async switchToTab(label: "Lines" | "Indented" | "Where used") {
+    await this.page.getByRole("button", { name: label, exact: true }).click()
+  }
+
+  async waitForTreeLoaded() {
+    await this.page.waitForSelector("text=/qty .* · cum/", { timeout: 10_000 })
+  }
+
+  async expandTreeNode(componentNumber: string) {
+    await this.page.getByText(componentNumber, { exact: true }).first().click()
+  }
+
+  async treeRowCount(): Promise<number> {
+    return this.page.locator("text=/qty .* · cum/").count()
+  }
+
+  async waitForWhereUsedLoaded() {
+    await this.page.waitForSelector("table", { timeout: 10_000 })
+  }
+
+  async whereUsedParentItems(): Promise<string[]> {
+    return this.page.locator("tbody tr td:nth-child(1)").allTextContents()
+  }
 }
