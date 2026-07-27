@@ -1,35 +1,29 @@
 """
-OSKAR — MPN master service tests (Slice C, ADR-012 D3).
+OSKAR — MPN master service tests: pure logic only (Slice C, ADR-012 D3).
 
-normalize_manufacturer() / is_current_default() are pure (no DB) — TDD
-mechanics classifies manufacturer-normalisation as pure unit logic, same as
-the compare engine and explode math.
+normalize_manufacturer() / is_current_default() / wildcard_to_like() are pure
+(no DB, no I/O) — TDD mechanics classifies manufacturer-normalisation as pure
+unit logic, same as the compare engine and explode math.
 
-upsert_item_mpn() needs real persistence (ON CONFLICT + the partial unique
-index on current defaults are genuinely Postgres behaviour, not something a
-mock can verify) — those tests run against the live Postgres test DB via
-tests/services/bom/conftest.py, which reuses tests/integration/conftest.py's
-db_session/db_engine fixtures.
+DB-touching behaviour (upsert_item_mpn ON CONFLICT + partial-unique-index
+demotion, load_synonyms, search_item_mpns) lives in
+tests/integration/test_mpn_master.py instead — pytest 9 no longer allows a
+non-top-level conftest.py to declare `pytest_plugins` to reuse the real-DB
+fixtures here, and hoisting that declaration to the suite root would force
+every test in the whole suite to open a live Postgres connection at session
+start. Matching the codebase's existing convention, DB-dependent tests simply
+live under tests/integration/, which already owns those fixtures.
 """
 from __future__ import annotations
 
 import datetime
-import uuid
-
-import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.services.bom.mpn_master import (
-    ItemMPN,
     NormalizeResult,
-    get_item_mpn,
     is_current_default,
-    load_synonyms,
     normalize_manufacturer,
-    upsert_item_mpn,
+    wildcard_to_like,
 )
-
-pytestmark = pytest.mark.asyncio
 
 
 # ── normalize_manufacturer (pure) ──────────────────────────────────────────
@@ -97,68 +91,20 @@ class TestIsCurrentDefault:
         assert is_current_default(True, far_future) is True
 
 
-# ── load_synonyms (DB) ───────────────────────────────────────────────────────
+# ── wildcard_to_like (pure) ──────────────────────────────────────────────────
 
-class TestLoadSynonyms:
-    async def test_includes_plm_seeded_synonym(self, db_session: AsyncSession):
-        synonyms = await load_synonyms(db_session)
-        assert synonyms["ST MICRO"] == "STMICROELECTRONICS"
-        assert synonyms["TEXAS INSTRUMENT"] == "TEXAS INSTRUMENTS INCORPORATED"
+class TestWildcardToLike:
+    def test_star_becomes_percent(self):
+        assert wildcard_to_like("STM32*") == "STM32%"
 
+    def test_literal_percent_is_escaped(self):
+        assert wildcard_to_like("50%RES") == "50\\%RES"
 
-# ── upsert_item_mpn (DB) ─────────────────────────────────────────────────────
+    def test_literal_underscore_is_escaped(self):
+        assert wildcard_to_like("A_B") == "A\\_B"
 
-class TestUpsertItemMpn:
-    async def test_insert_new_row(self, db_session: AsyncSession):
-        item_number = f"LFTEST{uuid.uuid4().hex[:8].upper()}"
-        result = await upsert_item_mpn(
-            db_session,
-            item_number=item_number,
-            mpn="MPN-001",
-            supplier_number="SUP001",
-            manufacturer_name="Murata",
-            manufacturer_canonical="Murata",
-            is_default=True,
-        )
-        assert isinstance(result, ItemMPN)
-        assert result.item_number == item_number
-        assert result.mpn == "MPN-001"
-        assert result.is_default is True
+    def test_multiple_stars(self):
+        assert wildcard_to_like("*LM358*") == "%LM358%"
 
-    async def test_reinsert_same_natural_key_updates_not_duplicates(
-        self, db_session: AsyncSession
-    ):
-        item_number = f"LFTEST{uuid.uuid4().hex[:8].upper()}"
-        await upsert_item_mpn(
-            db_session, item_number=item_number, mpn="MPN-002",
-            supplier_number="SUP001", manufacturer_name="Old Name",
-        )
-        second = await upsert_item_mpn(
-            db_session, item_number=item_number, mpn="MPN-002",
-            supplier_number="SUP001", manufacturer_name="New Name",
-        )
-        assert second.manufacturer_name == "New Name"
-
-        fetched = await get_item_mpn(db_session, item_number, "SUP001", "MPN-002")
-        assert fetched is not None
-        assert fetched.manufacturer_name == "New Name"
-
-    async def test_setting_new_default_demotes_old_default(self, db_session: AsyncSession):
-        item_number = f"LFTEST{uuid.uuid4().hex[:8].upper()}"
-        await upsert_item_mpn(
-            db_session, item_number=item_number, mpn="MPN-OLD",
-            supplier_number="SUP001", is_default=True,
-        )
-        await upsert_item_mpn(
-            db_session, item_number=item_number, mpn="MPN-NEW",
-            supplier_number="SUP001", is_default=True,
-        )
-        old = await get_item_mpn(db_session, item_number, "SUP001", "MPN-OLD")
-        new = await get_item_mpn(db_session, item_number, "SUP001", "MPN-NEW")
-        assert old.end_effective_date is not None
-        assert new.is_default is True
-        assert new.end_effective_date is None
-
-    async def test_get_item_mpn_returns_none_when_missing(self, db_session: AsyncSession):
-        result = await get_item_mpn(db_session, "NOPE99999", "", "NOPE")
-        assert result is None
+    def test_no_wildcard_is_unchanged_aside_from_escaping(self):
+        assert wildcard_to_like("STM32F103") == "STM32F103"

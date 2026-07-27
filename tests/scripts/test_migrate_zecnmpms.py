@@ -1,20 +1,19 @@
 """
-OSKAR — ZECNMPMS migration tests (Slice C).
+OSKAR — ZECNMPMS migration tests: pure transform layer (Slice C).
 
-Two layers, per ai/tasks/oskar-iteration-2.md "ZECNMPMS migration plan" step 2
-and the Slice C bullet list:
+Pure transform (src/services/bom/zecnmpms_transform.py) — no DB, no I/O.
+Exercised directly against tests/fixtures/bom/zecnmpms_sample.csv, which
+deliberately covers: leading/trailing whitespace, mixed-case ITNO/MPN,
+MPFDAT/MPTDAT = 0 and 99999999 edge cases, two manufacturer-synonym misses
+("ST MICRO", "TEXAS INSTRUMENT"), and one duplicate natural key
+(ITNO, SUNO, MPN).
 
-  1. Pure transform (src/services/bom/zecnmpms_transform.py) — no DB, no I/O.
-     Exercised directly against tests/fixtures/bom/zecnmpms_sample.csv, which
-     deliberately covers: leading/trailing whitespace, mixed-case ITNO/MPN,
-     MPFDAT/MPTDAT = 0 and 99999999 edge cases, two manufacturer-synonym
-     misses ("ST MICRO", "TEXAS INSTRUMENT"), and one duplicate natural key
-     (ITNO, SUNO, MPN).
-
-  2. CLI script (scripts/migrate_zecnmpms.py) — dry-run (writes nothing),
-     idempotency (re-run produces no duplicate/changed rows), --report output.
-     These run against the live Postgres test DB (tests/services/bom/conftest.py
-     plugin reused here too).
+CLI-script-level behaviour (dry-run, idempotent load, --from-api against the
+real scripts/movex_stub.py) needs a live DB and lives in
+tests/integration/test_migrate_zecnmpms.py instead — pytest 9 no longer
+allows a non-top-level conftest.py to reuse tests/integration/conftest.py's
+fixtures via `pytest_plugins`, so DB-dependent tests simply live under
+tests/integration/ per the codebase's existing convention.
 """
 from __future__ import annotations
 
@@ -22,16 +21,12 @@ import csv
 import datetime
 from pathlib import Path
 
-import pytest
-
 from src.services.bom.zecnmpms_transform import (
     TransformedRow,
     natural_key,
     transform_batch,
     transform_row,
 )
-
-pytest_plugins = ["tests.integration.conftest"]
 
 _FIXTURE_CSV = (
     Path(__file__).resolve().parent.parent / "fixtures" / "bom" / "zecnmpms_sample.csv"

@@ -14,6 +14,11 @@ Keyed like ZECNMPMS: (item_number, supplier_number, mpn). This module owns:
     the movex_write_complete workflow hook (src/services/ecn/workflow.py,
     ecn_mpns -> item_mpns), and scripts/add_manufacturer_synonym.py.
 
+  wildcard_to_like() / search_item_mpns()
+    Backs GET /api/v1/mpn/search (src/routers/mpn.py) — user-facing '*'
+    wildcard translated to SQL LIKE '%', with literal '%'/'_' in the query
+    escaped so they don't accidentally act as SQL wildcards themselves.
+
 What "current default" means, and who checks which half of it:
   The business rule is: is_default=True AND (there's no end date, OR the end
   date hasn't passed yet). That's two conditions joined by "AND (this OR that)".
@@ -287,3 +292,96 @@ async def upsert_item_mpn(
     )
     row = result.mappings().first()
     return _row_to_item_mpn(row)
+
+
+# ── Search ────────────────────────────────────────────────────────────────────
+
+_SEARCH_FIELD_COLUMNS = {
+    "item": "item_number",
+    "mfr": "manufacturer_canonical",
+    "mpn": "mpn",
+}
+
+
+def wildcard_to_like(query: str) -> str:
+    """User-facing '*' wildcard -> SQL LIKE pattern.
+
+    Literal '%' and '_' in the input are escaped first (with '\\' as the
+    escape character — search_item_mpns() passes ESCAPE '\\' to match) so a
+    user searching for a real percent sign or underscore in an MPN doesn't
+    accidentally trigger unintended wildcard matching. '*' is converted last,
+    after escaping, so a literal '*' in a query is always a wildcard (Oskar's
+    MPN data doesn't use '*' as a real character).
+    """
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return escaped.replace("*", "%")
+
+
+@dataclass
+class MpnSearchHit:
+    id: str
+    item_number: str
+    supplier_number: str
+    mpn: str
+    manufacturer_name: str | None
+    manufacturer_canonical: str | None
+    is_default: bool
+    end_effective_date: datetime.date | None
+
+
+@dataclass
+class MpnSearchResult:
+    hits: list[MpnSearchHit]
+    total: int
+    limit: int
+    offset: int
+
+
+async def search_item_mpns(
+    session: AsyncSession,
+    *,
+    query: str,
+    field: str = "mpn",
+    limit: int = 50,
+    offset: int = 0,
+) -> MpnSearchResult:
+    """Wildcard search over item_mpns, e.g. GET /api/v1/mpn/search?q=STM32*.
+
+    `field` selects which column the wildcard is matched against: 'item'
+    (item_number), 'mfr' (manufacturer_canonical), or 'mpn' (default). The mpn
+    column has a text_pattern_ops index (migration 0025) supporting this
+    LIKE-prefix pattern efficiently.
+    """
+    column = _SEARCH_FIELD_COLUMNS.get(field, "mpn")
+    like_pattern = wildcard_to_like(query)
+
+    total = (
+        await session.execute(
+            sa.text(
+                f"SELECT COUNT(*) FROM item_mpns WHERE {column} LIKE :pattern ESCAPE '\\'"
+            ),
+            {"pattern": like_pattern},
+        )
+    ).scalar_one()
+
+    result = await session.execute(
+        sa.text(
+            f"SELECT {_SELECT_COLUMNS} FROM item_mpns WHERE {column} LIKE :pattern ESCAPE '\\' "
+            "ORDER BY item_number, supplier_number, mpn LIMIT :limit OFFSET :offset"
+        ),
+        {"pattern": like_pattern, "limit": limit, "offset": offset},
+    )
+    hits = [
+        MpnSearchHit(
+            id=str(row["id"]),
+            item_number=row["item_number"],
+            supplier_number=row["supplier_number"],
+            mpn=row["mpn"],
+            manufacturer_name=row["manufacturer_name"],
+            manufacturer_canonical=row["manufacturer_canonical"],
+            is_default=row["is_default"],
+            end_effective_date=row["end_effective_date"],
+        )
+        for row in result.mappings()
+    ]
+    return MpnSearchResult(hits=hits, total=total, limit=limit, offset=offset)
