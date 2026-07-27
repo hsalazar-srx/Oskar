@@ -7,6 +7,7 @@ import ECNCreatePage from "@/pages/ECNCreatePage"
 import ECNDetailPage from "@/pages/ECNDetailPage"
 import AdminPage from "@/pages/AdminPage"
 import BOMBrowserPage from "@/pages/BOMBrowserPage"
+import MPNSearchPage from "@/pages/MPNSearchPage"
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.accessToken)
@@ -45,6 +46,10 @@ export default function App() {
           <Route
             path="/bom"
             element={<ProtectedRoute><BOMBrowserPage /></ProtectedRoute>}
+          />
+          <Route
+            path="/mpn"
+            element={<ProtectedRoute><MPNSearchPage /></ProtectedRoute>}
           />
           <Route path="/" element={<Navigate to="/ecn" replace />} />
         </Routes>

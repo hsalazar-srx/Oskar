@@ -30,6 +30,7 @@ from src.services.ecn.models import (
     RoleAssignmentResult,
     VALID_ROLE_IDS,
 )
+from src.services.bom.mpn_master import load_synonyms, normalize_manufacturer, upsert_item_mpn
 from src.workflow.machine import (
     ECNStatus,
     ECNWorkflowMachine,
@@ -134,6 +135,7 @@ class ECNWorkflowMixin:
 
         if req.trigger == "movex_write_complete":
             pending_outbox_ids += await self._queue_alias_outbox(ecn_id)
+            await self._upsert_ecn_mpns_to_item_master(ecn_id)
             await self._seed_impl_checklist(ecn_id, dict(row))
 
         if req.trigger == "reject" and req.rejection_reason:
@@ -532,6 +534,54 @@ class ECNWorkflowMixin:
             if result.rowcount:
                 inserted.append(new_id)
         return inserted
+
+    async def _upsert_ecn_mpns_to_item_master(self, ecn_id: str) -> None:
+        """Mirror this ECN's MPNs into item_mpns, the Oskar MPN master
+        (Slice C, ADR-012 D3), at movex_write_complete — after Movex writes
+        for this ECN have completed, so item_number values are final.
+        source_ecn records provenance. Idempotent (upsert_item_mpn is
+        ON CONFLICT-based on the natural key) — safe if this ever runs twice
+        for the same ECN.
+
+        ecn_mpns carries no supplier_number (SUNO) — Oskar-authored MPNs
+        aren't tied to a specific supplier context — so these rows land
+        under item_mpns' default supplier_number='' bucket.
+
+        Skips rows whose item still has no item_number (shouldn't happen at
+        this stage, but guards against inserting a garbage item_mpns row if
+        an upstream new-item write failed silently).
+        """
+        rows = (
+            await self._session.execute(
+                sa.text(
+                    "SELECT m.mpn, m.manufacturer, m.is_default, i.item_number "
+                    "FROM ecn_mpns m "
+                    "JOIN ecn_items i ON i.id = m.ecn_item_id "
+                    "WHERE i.ecn_id = :ecn_id"
+                ),
+                {"ecn_id": ecn_id},
+            )
+        ).all()
+        if not rows:
+            return
+
+        synonyms = await load_synonyms(self._session)
+        for mpn, manufacturer, is_default, item_number in rows:
+            if not item_number:
+                log.warning(
+                    "ecn.mpn_master_upsert_skipped_no_item_number", ecn_id=ecn_id, mpn=mpn
+                )
+                continue
+            norm = normalize_manufacturer(manufacturer, synonyms)
+            await upsert_item_mpn(
+                self._session,
+                item_number=item_number,
+                mpn=mpn,
+                manufacturer_name=manufacturer,
+                manufacturer_canonical=norm.canonical or None,
+                is_default=bool(is_default),
+                source_ecn=ecn_id,
+            )
 
     async def _queue_routing_operations_outbox(self, ecn_id: str) -> list[str]:
         """Queue PDS002MI.AddOperation or UpdateOperation for every routing op on this ECN.

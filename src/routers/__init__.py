@@ -24,6 +24,7 @@ from src.routers.auth import auth_router
 from src.routers.bom import bom_router
 from src.routers.customers import customers_router
 from src.routers.ecn import ecn_router
+from src.routers.mpn import mpn_router
 from src.routers.parts import parts_router
 from src.routers.sse import sse_router
 
@@ -35,3 +36,4 @@ v1_router.include_router(admin_router)
 v1_router.include_router(parts_router)
 v1_router.include_router(customers_router)
 v1_router.include_router(bom_router)
+v1_router.include_router(mpn_router)

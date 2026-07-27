@@ -46,6 +46,7 @@ celery_app.conf.update(
         "src.tasks.movex_outbox",
         "src.tasks.audit_checkpoint",
         "src.tasks.ecn_notifications",
+        "src.tasks.zpopextn_export",
     ],
 
     # Reliability: task is acknowledged only after it returns successfully.
@@ -87,6 +88,10 @@ celery_app.conf.update(
         "ecn-digest-daily": {
             "task": "src.tasks.ecn_notifications.send_ecn_digest",
             "schedule": 86400.0,  # every 24 hours — replaces DBCHK_OpenECN (G-4)
+        },
+        "zpopextn-export-nightly": {
+            "task": "src.tasks.zpopextn_export.export_default_mpns",
+            "schedule": 86400.0,  # every 24 hours — successor to Stargile's PurchaseExtensionNightJob (ADR-012 R7)
         },
     },
 )
