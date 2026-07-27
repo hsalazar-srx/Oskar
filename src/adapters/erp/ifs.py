@@ -67,6 +67,25 @@ class IFSAdapter(ERPAdapter):
     ) -> dict[str, Any]:
         raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
 
+    async def get_bom_indented(
+        self,
+        item_number: str,
+        facility: str,
+        *,
+        structure_type: str = "001",
+        max_depth: int = 12,
+    ) -> dict[str, Any]:
+        raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
+
+    async def get_where_used(
+        self,
+        component_number: str,
+        facility: str,
+        *,
+        effective_on: str | None = None,
+    ) -> dict[str, Any]:
+        raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
+
     async def search_items(self, query: str, limit: int = 50) -> list[dict[str, Any]]:
         raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
 

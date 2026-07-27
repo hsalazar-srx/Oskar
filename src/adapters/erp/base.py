@@ -101,6 +101,47 @@ class ERPAdapter(ABC):
         ...
 
     @abstractmethod
+    async def get_bom_indented(
+        self,
+        item_number: str,
+        facility: str,
+        *,
+        structure_type: str = "001",
+        max_depth: int = 12,
+    ) -> dict[str, Any]:
+        """Fetch the multi-level (indented) explosion for an item (B-2).
+
+        Recursive CTE over MPDMAT on the movex-rest-api side, depth-capped at
+        max_depth and cycle-guarded there; PDZ100MI is broken in M3
+        (user-confirmed) and must not be used. Returns the flat, depth-first
+        Stargile shape (records[{LEVL, PRNO, MSEQ, MTNO, ...}]) — the caller
+        (src/services/bom/explode.py) assembles the tree client-side.
+
+        B-2's own recursive-CTE performance must be validated against a real
+        large multi-level UAT item (<2s target, ADR-012 Decision 4) before
+        this method is relied on for interactive tree-assembly — that gate is
+        external (movex-rest-api team) and cannot be exercised from this repo.
+        """
+        ...
+
+    @abstractmethod
+    async def get_where_used(
+        self,
+        component_number: str,
+        facility: str,
+        *,
+        effective_on: str | None = None,
+    ) -> dict[str, Any]:
+        """Reverse MPDMAT lookup: which assemblies consume this component (B-3).
+
+        Returns records[{PRNO, STRT, FACI, MSEQ, MTNO, OPNO, CNQT, ...}] — one
+        row per (parent assembly, BOM line) that references component_number.
+        Returns an empty records list when the component is used nowhere —
+        that is a legitimate "no usages" result, not an error.
+        """
+        ...
+
+    @abstractmethod
     async def get_routing_operations(
         self, item_number: str, facility: str, structure_type: str = "001"
     ) -> list[dict[str, Any]]:

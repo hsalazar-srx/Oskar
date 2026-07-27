@@ -156,3 +156,123 @@ class TestGetBomNotFound:
 
         with pytest.raises(httpx.HTTPStatusError):
             await adapter.get_bom("LF100001", "D")
+
+
+_MULTI_LEVEL_PAYLOAD = {
+    "data": {
+        "records": [
+            {"LEVL": 1, "PRNO": "LF100001", "MSEQ": 10, "MTNO": "LF300001", "ITDS": "Subassembly A",
+             "OPNO": 10, "CNQT": 1.0, "PEUN": "EA", "FDAT": 20240101, "TDAT": 99999999,
+             "STRT": "001", "WHLO": "MAIN", "ITTY": "4"},
+        ]
+    }
+}
+
+_WHERE_USED_PAYLOAD = {
+    "data": {
+        "records": [
+            {"PRNO": "LF100001", "STRT": "001", "FACI": "D", "MSEQ": 20, "MTNO": "LF200010",
+             "OPNO": 20, "CNQT": 3.0, "PEUN": "EA", "FDAT": 20240101, "TDAT": 99999999},
+        ]
+    }
+}
+
+
+class TestGetBomIndented:
+    """B-2: GET /api/bom/{itno}/indented?cono&faci&strt&levl&effectiveOn"""
+
+    @pytest.mark.asyncio
+    async def test_calls_indented_path_with_item_number(self, adapter: MovexRestAdapter):
+        mock_get = AsyncMock(return_value=_mock_response(_MULTI_LEVEL_PAYLOAD))
+        adapter._get = mock_get
+
+        await adapter.get_bom_indented("LF100001", "D")
+
+        called_path = mock_get.call_args[0][0]
+        assert called_path == "/bom/LF100001/indented"
+
+    @pytest.mark.asyncio
+    async def test_params_include_cono_faci_strt_levl(self, adapter: MovexRestAdapter):
+        mock_get = AsyncMock(return_value=_mock_response(_MULTI_LEVEL_PAYLOAD))
+        adapter._get = mock_get
+
+        await adapter.get_bom_indented("LF100001", "D")
+
+        params = mock_get.call_args.kwargs["params"]
+        assert params["cono"] == adapter.cono
+        assert params["faci"] == "D"
+        assert params["strt"] == "001"
+        assert params["levl"] == 12
+
+    @pytest.mark.asyncio
+    async def test_max_depth_honoured(self, adapter: MovexRestAdapter):
+        mock_get = AsyncMock(return_value=_mock_response(_MULTI_LEVEL_PAYLOAD))
+        adapter._get = mock_get
+
+        await adapter.get_bom_indented("LF100001", "D", max_depth=5)
+
+        params = mock_get.call_args.kwargs["params"]
+        assert params["levl"] == 5
+
+    @pytest.mark.asyncio
+    async def test_returns_response_json(self, adapter: MovexRestAdapter):
+        mock_get = AsyncMock(return_value=_mock_response(_MULTI_LEVEL_PAYLOAD))
+        adapter._get = mock_get
+
+        result = await adapter.get_bom_indented("LF100001", "D")
+
+        assert result == _MULTI_LEVEL_PAYLOAD
+
+
+class TestGetWhereUsed:
+    """B-3: GET /api/bom/where-used/{mtno}?cono&faci&effectiveOn"""
+
+    @pytest.mark.asyncio
+    async def test_calls_where_used_path_with_component_number(self, adapter: MovexRestAdapter):
+        mock_get = AsyncMock(return_value=_mock_response(_WHERE_USED_PAYLOAD))
+        adapter._get = mock_get
+
+        await adapter.get_where_used("LF200010", "D")
+
+        called_path = mock_get.call_args[0][0]
+        assert called_path == "/bom/where-used/LF200010"
+
+    @pytest.mark.asyncio
+    async def test_params_include_cono_faci(self, adapter: MovexRestAdapter):
+        mock_get = AsyncMock(return_value=_mock_response(_WHERE_USED_PAYLOAD))
+        adapter._get = mock_get
+
+        await adapter.get_where_used("LF200010", "D")
+
+        params = mock_get.call_args.kwargs["params"]
+        assert params["cono"] == adapter.cono
+        assert params["faci"] == "D"
+
+    @pytest.mark.asyncio
+    async def test_effective_on_passed_when_provided(self, adapter: MovexRestAdapter):
+        mock_get = AsyncMock(return_value=_mock_response(_WHERE_USED_PAYLOAD))
+        adapter._get = mock_get
+
+        await adapter.get_where_used("LF200010", "D", effective_on="20260101")
+
+        params = mock_get.call_args.kwargs["params"]
+        assert params["effectiveOn"] == "20260101"
+
+    @pytest.mark.asyncio
+    async def test_effective_on_omitted_when_not_provided(self, adapter: MovexRestAdapter):
+        mock_get = AsyncMock(return_value=_mock_response(_WHERE_USED_PAYLOAD))
+        adapter._get = mock_get
+
+        await adapter.get_where_used("LF200010", "D")
+
+        params = mock_get.call_args.kwargs["params"]
+        assert "effectiveOn" not in params
+
+    @pytest.mark.asyncio
+    async def test_returns_response_json(self, adapter: MovexRestAdapter):
+        mock_get = AsyncMock(return_value=_mock_response(_WHERE_USED_PAYLOAD))
+        adapter._get = mock_get
+
+        result = await adapter.get_where_used("LF200010", "D")
+
+        assert result == _WHERE_USED_PAYLOAD

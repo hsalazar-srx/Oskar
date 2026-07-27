@@ -35,6 +35,14 @@ _BOM_FIXTURES = {
     "LF900001": "large_500.json",
 }
 
+_BOM_INDENTED_FIXTURES = {
+    "LF100001": "multi_level.json",
+}
+
+_WHERE_USED_FIXTURES = {
+    "LF200010": "where_used.json",
+}
+
 _NOT_STUBBED_MSG = (
     "FakeERPAdapter.{name} not stubbed — add fixture-backed behaviour when a test needs it"
 )
@@ -66,6 +74,31 @@ class FakeERPAdapter(ERPAdapter):
         filename = _BOM_FIXTURES.get(item_number)
         if filename is None:
             raise BOMNotFound(f"no BOM fixture for item_number={item_number!r}")
+        return json.loads((self._fixtures_dir / filename).read_text())
+
+    async def get_bom_indented(
+        self,
+        item_number: str,
+        facility: str,
+        *,
+        structure_type: str = "001",
+        max_depth: int = 12,
+    ) -> dict[str, Any]:
+        filename = _BOM_INDENTED_FIXTURES.get(item_number)
+        if filename is None:
+            raise BOMNotFound(f"no indented BOM fixture for item_number={item_number!r}")
+        return json.loads((self._fixtures_dir / filename).read_text())
+
+    async def get_where_used(
+        self,
+        component_number: str,
+        facility: str,
+        *,
+        effective_on: str | None = None,
+    ) -> dict[str, Any]:
+        filename = _WHERE_USED_FIXTURES.get(component_number)
+        if filename is None:
+            raise BOMNotFound(f"no where-used fixture for component_number={component_number!r}")
         return json.loads((self._fixtures_dir / filename).read_text())
 
     async def get_routing_operations(

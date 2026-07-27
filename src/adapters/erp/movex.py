@@ -303,6 +303,40 @@ class MovexRestAdapter(ERPAdapter):
             raise
         return resp.json()
 
+    async def get_bom_indented(
+        self,
+        item_number: str,
+        facility: str,
+        *,
+        structure_type: str = "001",
+        max_depth: int = 12,
+    ) -> dict[str, Any]:
+        """B-2: GET /api/bom/{itno}/indented?cono&faci&strt&levl."""
+        resp = await self._get(
+            f"/bom/{item_number}/indented",
+            params={
+                "cono": self.cono,
+                "faci": facility,
+                "strt": structure_type,
+                "levl": max_depth,
+            },
+        )
+        return resp.json()
+
+    async def get_where_used(
+        self,
+        component_number: str,
+        facility: str,
+        *,
+        effective_on: str | None = None,
+    ) -> dict[str, Any]:
+        """B-3: GET /api/bom/where-used/{mtno}?cono&faci&effectiveOn."""
+        params: dict[str, Any] = {"cono": self.cono, "faci": facility}
+        if effective_on:
+            params["effectiveOn"] = effective_on
+        resp = await self._get(f"/bom/where-used/{component_number}", params=params)
+        return resp.json()
+
     async def search_items(self, query: str, limit: int = 50) -> list[dict[str, Any]]:
         resp = await self._get("/items", params={"q": query, "limit": limit})
         return resp.json()
