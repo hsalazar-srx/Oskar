@@ -14,6 +14,7 @@ from src.services.bom.models import (
     WhereUsedLine,
 )
 from src.services.bom.browse import get_single_level_bom
+from src.services.bom.explode import assemble_where_used, build_bom_tree, rollup_quantities
 
 __all__ = [
     "BOMCycleError",
@@ -22,4 +23,7 @@ __all__ = [
     "BOMTreeNode",
     "WhereUsedLine",
     "get_single_level_bom",
+    "assemble_where_used",
+    "build_bom_tree",
+    "rollup_quantities",
 ]
