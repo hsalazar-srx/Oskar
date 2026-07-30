@@ -187,10 +187,20 @@ Paged ZECNMPMS dump, raw/untransformed rows — TRIM, uppercasing, date-null nor
 synonym resolution are the migration script's job (`scripts/migrate_zecnmpms.py`, Slice C), not this
 endpoint's. **Fallback if this isn't built in time:** one-time DB2 `EXPORT ... OF DEL` CSV, DBA-run.
 
+**Real column names, verified 2026-07-27** against the actual Stargile source
+(`c:/Projects/SuperTool/Stargile_Source_Code/workspace/Startronics/DataModels/ECN/Maintenance/{MPMDetail,MPMBrowse}.cml`)
+— superseding the inferred/placeholder names used earlier in this doc and in Slice 0/C's original fixture:
+`MPCONO, MPITNO, MPSUNO, MPZMANPN` (manufacturer part number — not `MPN`), `MPZDEFFL, MPZEEFDT` (effective date),
+`MPZECNID` (originating ECN), `MPTX30` (manufacturer), `MPMPRC` (price — not `MPPRIC`), `MPZMPMOQ` (MOQ — not
+`MPMOQ`), `MPFDAT, MPTDAT, MPCUCD` (currency — not `MPCURR`), `MPZMPSPQ` (SPQ — not `MPSPQ`), `MPZCAWID`
+(cancellation window days), `MPZREWID` (reschedule window days), `MPZMNCNR` (NCNR flag), `MPFACI, MPLMDT, MPLMTM`.
+**`MPDIST`/`MPDISTNM` (distributor number/name) do not exist on this table at all** — they were invented with
+no source backing; `item_mpns.distributor_number`/`distributor_name` stay `NULL` for zecnmpms-origin rows.
+
 ```json
 {
   "data": {
-    "records": [ { "...": "raw ZECNMPMS columns, one dict per row" } ],
+    "records": [ { "...": "raw ZECNMPMS columns above, one dict per row" } ],
     "offset": 0,
     "limit": 1000,
     "total": 4213
@@ -199,8 +209,9 @@ endpoint's. **Fallback if this isn't built in time:** one-time DB2 `EXPORT ... O
 ```
 
 Reference fixture: `tests/fixtures/bom/zecnmpms_sample.csv` (7 rows covering: leading/trailing whitespace,
-mixed case ITNO/MPN, `MPFDAT`/`MPTDAT` = `0` and `99999999` edge cases, two manufacturer-synonym misses, and
-one duplicate natural key `(ITNO, SUNO, MPN)` for the migration's duplicate-key collapse report).
+mixed case `ITNO`/`MPZMANPN`, `MPFDAT`/`MPTDAT` = `0` and `99999999` edge cases, two manufacturer-synonym
+misses, and one duplicate natural key `(ITNO, SUNO, MPZMANPN)` for the migration's duplicate-key collapse
+report).
 
 ---
 

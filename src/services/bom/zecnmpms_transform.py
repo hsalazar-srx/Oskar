@@ -2,19 +2,31 @@
 OSKAR — ZECNMPMS -> item_mpns transform (Slice C).
 
 Pure module (no DB, no I/O) implementing step 2 of the ZECNMPMS migration
-plan (ai/tasks/oskar-iteration-2.md): TRIM; uppercase ITNO/MPN; 0/99999999
-dates -> NULL; MPZDEFFL '1' -> true; YYYYMMDD -> DATE; MPTX30 -> canonical via
-manufacturer_synonyms (miss -> raw + review file); leftover columns ->
-legacy_extra JSONB; source_system='zecnmpms'.
+plan (ai/tasks/oskar-iteration-2.md): TRIM; uppercase ITNO/MPZMANPN;
+0/99999999 dates -> NULL; MPZDEFFL '1' -> true; YYYYMMDD -> DATE; MPTX30 ->
+canonical via manufacturer_synonyms (miss -> raw + review file); leftover
+columns -> legacy_extra JSONB; source_system='zecnmpms'.
 
 Consumed by both scripts/migrate_zecnmpms.py (--input csv) and its --from-api
 mode (M-1 stub/real endpoint — same raw-dict row shape either way, since M-1
 serves untransformed ZECNMPMS columns per the contract doc).
 
 Row shape in: a dict of raw ZECNMPMS columns (str keys/values, as produced by
-csv.DictReader or the M-1 JSON response) — ITNO, SUNO, MPN, MPTX30, MPZDEFFL,
-MPFDAT, MPTDAT, MPPRIC, MPCURR, MPMOQ, MPSPQ, MPDIST, MPDISTNM, plus whatever
-else the source happens to carry (captured into legacy_extra automatically).
+csv.DictReader or the M-1 JSON response). Column names verified 2026-07-27
+against the real Stargile source (c:/Projects/SuperTool/Stargile_Source_Code/
+workspace/Startronics/DataModels/ECN/Maintenance/{MPMDetail,MPMBrowse}.cml) —
+the field names originally used here (MPN, MPPRIC, MPMOQ, MPCURR, MPSPQ) were
+inferred while drafting ADR-012/the Iteration 2 plan, not verified, and were
+wrong: the real columns are MPZMANPN, MPMPRC, MPZMPMOQ, MPCUCD, MPZMPSPQ.
+MPDIST/MPDISTNM never existed on ZECNMPMS at all — invented with no source;
+item_mpns.distributor_number/distributor_name stay NULL for zecnmpms-origin
+rows and are populated by a future Iteration 3 supplier-chain source instead.
+Mapped columns: ITNO, SUNO, MPZMANPN, MPTX30, MPZDEFFL, MPFDAT, MPTDAT,
+MPMPRC, MPCUCD, MPZMPMOQ, MPZMPSPQ. Real columns with no dedicated item_mpns
+field (MPZEEFDT effective date, MPZECNID originating ECN, MPZCAWID/MPZREWID
+cancellation/reschedule windows, MPZMNCNR NCNR flag, MPLMDT/MPLMTM last-
+modified, MPCONO, MPFACI) fall through to legacy_extra like any other
+unmapped column — no special-casing needed.
 """
 from __future__ import annotations
 
@@ -29,11 +41,11 @@ from src.services.bom.mpn_master import normalize_manufacturer
 _SENTINEL_DATES = {0, 99999999}
 
 # Columns explicitly mapped to first-class item_mpns fields. Anything else in
-# the raw row (e.g. MPLMDT — last-modified date, used operationally to select
-# delta-extract rows, not stored per-row) falls through to legacy_extra.
+# the raw row (MPZEEFDT, MPZECNID, MPLMDT, etc. — see module docstring) falls
+# through to legacy_extra.
 _MAPPED_COLUMNS = {
-    "ITNO", "SUNO", "MPN", "MPTX30", "MPZDEFFL", "MPFDAT", "MPTDAT",
-    "MPPRIC", "MPCURR", "MPMOQ", "MPSPQ", "MPDIST", "MPDISTNM",
+    "ITNO", "SUNO", "MPZMANPN", "MPTX30", "MPZDEFFL", "MPFDAT", "MPTDAT",
+    "MPMPRC", "MPCUCD", "MPZMPMOQ", "MPZMPSPQ",
 }
 
 
@@ -131,7 +143,7 @@ def _parse_int(raw: object) -> int | None:
 def transform_row(raw: Mapping[str, object], synonyms: Mapping[str, str]) -> TransformedRow:
     item_number = (_clean_str(raw.get("ITNO")) or "").upper()
     supplier_number = _clean_str(raw.get("SUNO")) or ""
-    mpn = (_clean_str(raw.get("MPN")) or "").upper()
+    mpn = (_clean_str(raw.get("MPZMANPN")) or "").upper()
 
     manufacturer_name = _clean_str(raw.get("MPTX30"))
     norm = normalize_manufacturer(manufacturer_name, synonyms)
@@ -155,12 +167,12 @@ def transform_row(raw: Mapping[str, object], synonyms: Mapping[str, str]) -> Tra
         is_default=is_default,
         from_date=_parse_date(raw.get("MPFDAT")),
         to_date=_parse_date(raw.get("MPTDAT")),
-        price=_parse_float(raw.get("MPPRIC")),
-        currency=_clean_str(raw.get("MPCURR")),
-        moq=_parse_int(raw.get("MPMOQ")),
-        spq=_parse_int(raw.get("MPSPQ")),
-        distributor_number=_clean_str(raw.get("MPDIST")),
-        distributor_name=_clean_str(raw.get("MPDISTNM")),
+        price=_parse_float(raw.get("MPMPRC")),
+        currency=_clean_str(raw.get("MPCUCD")),
+        moq=_parse_int(raw.get("MPZMPMOQ")),
+        spq=_parse_int(raw.get("MPZMPSPQ")),
+        distributor_number=None,  # ZECNMPMS has no distributor columns — see module docstring
+        distributor_name=None,
         legacy_extra=legacy_extra,
         source_system="zecnmpms",
     )

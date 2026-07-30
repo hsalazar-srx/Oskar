@@ -3,10 +3,17 @@ OSKAR — ZECNMPMS migration tests: pure transform layer (Slice C).
 
 Pure transform (src/services/bom/zecnmpms_transform.py) — no DB, no I/O.
 Exercised directly against tests/fixtures/bom/zecnmpms_sample.csv, which
-deliberately covers: leading/trailing whitespace, mixed-case ITNO/MPN,
+deliberately covers: leading/trailing whitespace, mixed-case ITNO/MPZMANPN,
 MPFDAT/MPTDAT = 0 and 99999999 edge cases, two manufacturer-synonym misses
 ("ST MICRO", "TEXAS INSTRUMENT"), and one duplicate natural key
-(ITNO, SUNO, MPN).
+(ITNO, SUNO, MPZMANPN).
+
+Column names verified 2026-07-27 against the real Stargile source
+(c:/Projects/SuperTool/Stargile_Source_Code/workspace/Startronics/DataModels/
+ECN/Maintenance/{MPMDetail,MPMBrowse}.cml) — the plan's original field names
+(MPN, MPPRIC, MPMOQ, MPCURR, MPSPQ) were inferred, not verified, and turned
+out wrong: the real columns are MPZMANPN, MPMPRC, MPZMPMOQ, MPCUCD, MPZMPSPQ.
+MPDIST/MPDISTNM never existed on ZECNMPMS at all — invented with no source.
 
 CLI-script-level behaviour (dry-run, idempotent load, --from-api against the
 real scripts/movex_stub.py) needs a live DB and lives in
@@ -42,40 +49,40 @@ def _load_fixture_rows() -> list[dict]:
 
 class TestTransformRowFieldMapping:
     def test_itno_and_mpn_are_trimmed_and_uppercased(self):
-        raw = {"ITNO": " lf200010 ", "SUNO": "SUP001", "MPN": " STM32F103C8T6 "}
+        raw = {"ITNO": " lf200010 ", "SUNO": "SUP001", "MPZMANPN": " STM32F103C8T6 "}
         row = transform_row(raw, {})
         assert row.item_number == "LF200010"
         assert row.mpn == "STM32F103C8T6"
 
     def test_supplier_number_is_trimmed_not_uppercased(self):
-        raw = {"ITNO": "LF1", "SUNO": " sup001 ", "MPN": "X"}
+        raw = {"ITNO": "LF1", "SUNO": " sup001 ", "MPZMANPN": "X"}
         row = transform_row(raw, {})
         assert row.supplier_number == "sup001"
 
     def test_mpzdeffl_1_maps_to_true(self):
-        raw = {"ITNO": "LF1", "SUNO": "S", "MPN": "X", "MPZDEFFL": "1"}
+        raw = {"ITNO": "LF1", "SUNO": "S", "MPZMANPN": "X", "MPZDEFFL": "1"}
         assert transform_row(raw, {}).is_default is True
 
     def test_mpzdeffl_0_maps_to_false(self):
-        raw = {"ITNO": "LF1", "SUNO": "S", "MPN": "X", "MPZDEFFL": "0"}
+        raw = {"ITNO": "LF1", "SUNO": "S", "MPZMANPN": "X", "MPZDEFFL": "0"}
         assert transform_row(raw, {}).is_default is False
 
     def test_mpfdat_zero_becomes_none(self):
-        raw = {"ITNO": "LF1", "SUNO": "S", "MPN": "X", "MPFDAT": "0"}
+        raw = {"ITNO": "LF1", "SUNO": "S", "MPZMANPN": "X", "MPFDAT": "0"}
         assert transform_row(raw, {}).from_date is None
 
     def test_mptdat_99999999_becomes_none(self):
-        raw = {"ITNO": "LF1", "SUNO": "S", "MPN": "X", "MPTDAT": "99999999"}
+        raw = {"ITNO": "LF1", "SUNO": "S", "MPZMANPN": "X", "MPTDAT": "99999999"}
         assert transform_row(raw, {}).to_date is None
 
     def test_valid_yyyymmdd_becomes_date(self):
-        raw = {"ITNO": "LF1", "SUNO": "S", "MPN": "X", "MPFDAT": "20240101"}
+        raw = {"ITNO": "LF1", "SUNO": "S", "MPZMANPN": "X", "MPFDAT": "20240101"}
         assert transform_row(raw, {}).from_date == datetime.date(2024, 1, 1)
 
     def test_price_currency_moq_spq_parsed(self):
         raw = {
-            "ITNO": "LF1", "SUNO": "S", "MPN": "X",
-            "MPPRIC": "1.25", "MPCURR": "USD", "MPMOQ": "10", "MPSPQ": "100",
+            "ITNO": "LF1", "SUNO": "S", "MPZMANPN": "X",
+            "MPMPRC": "1.25", "MPCUCD": "USD", "MPZMPMOQ": "10", "MPZMPSPQ": "100",
         }
         row = transform_row(raw, {})
         assert row.price == 1.25
@@ -83,35 +90,52 @@ class TestTransformRowFieldMapping:
         assert row.moq == 10
         assert row.spq == 100
 
-    def test_empty_distributor_fields_become_none(self):
-        raw = {"ITNO": "LF1", "SUNO": "S", "MPN": "X", "MPDIST": "", "MPDISTNM": ""}
+    def test_distributor_fields_are_always_none(self):
+        """ZECNMPMS has no distributor number/name columns at all (verified
+        against real source 2026-07-27, see module docstring) — item_mpns'
+        distributor_number/distributor_name columns exist for a future
+        Iteration 3 supplier-chain source, not this one. A raw row can't
+        carry these fields since Stargile never had them; this just locks
+        in that transform_row doesn't invent them either."""
+        raw = {"ITNO": "LF1", "SUNO": "S", "MPZMANPN": "X"}
         row = transform_row(raw, {})
         assert row.distributor_number is None
         assert row.distributor_name is None
 
     def test_zero_price_is_not_none(self):
-        raw = {"ITNO": "LF1", "SUNO": "S", "MPN": "X", "MPPRIC": "0.00"}
+        raw = {"ITNO": "LF1", "SUNO": "S", "MPZMANPN": "X", "MPMPRC": "0.00"}
         assert transform_row(raw, {}).price == 0.0
 
     def test_leftover_column_goes_to_legacy_extra(self):
-        raw = {"ITNO": "LF1", "SUNO": "S", "MPN": "X", "MPLMDT": "20250601"}
+        raw = {"ITNO": "LF1", "SUNO": "S", "MPZMANPN": "X", "MPLMDT": "20250601"}
         row = transform_row(raw, {})
         assert row.legacy_extra == {"MPLMDT": "20250601"}
 
+    def test_effective_date_and_ecn_id_go_to_legacy_extra(self):
+        """MPZEEFDT (effective date) and MPZECNID (originating ECN) are real
+        ZECNMPMS columns with no dedicated item_mpns field — they fall
+        through to legacy_extra like any other unmapped column."""
+        raw = {
+            "ITNO": "LF1", "SUNO": "S", "MPZMANPN": "X",
+            "MPZEEFDT": "20240101", "MPZECNID": "ECN-0912",
+        }
+        row = transform_row(raw, {})
+        assert row.legacy_extra == {"MPZEEFDT": "20240101", "MPZECNID": "ECN-0912"}
+
     def test_source_system_is_zecnmpms(self):
-        raw = {"ITNO": "LF1", "SUNO": "S", "MPN": "X"}
+        raw = {"ITNO": "LF1", "SUNO": "S", "MPZMANPN": "X"}
         assert transform_row(raw, {}).source_system == "zecnmpms"
 
 
 class TestTransformRowManufacturerNormalization:
     def test_synonym_hit_sets_canonical_and_clears_miss_flag(self):
-        raw = {"ITNO": "LF1", "SUNO": "S", "MPN": "X", "MPTX30": "ST MICRO"}
+        raw = {"ITNO": "LF1", "SUNO": "S", "MPZMANPN": "X", "MPTX30": "ST MICRO"}
         row = transform_row(raw, {"ST MICRO": "STMicroelectronics"})
         assert row.manufacturer_canonical == "STMicroelectronics"
         assert row.manufacturer_miss is False
 
     def test_synonym_miss_passes_through_raw_and_sets_miss_flag(self):
-        raw = {"ITNO": "LF1", "SUNO": "S", "MPN": "X", "MPTX30": "SOME UNKNOWN MFR"}
+        raw = {"ITNO": "LF1", "SUNO": "S", "MPZMANPN": "X", "MPTX30": "SOME UNKNOWN MFR"}
         row = transform_row(raw, {})
         assert row.manufacturer_canonical == "SOME UNKNOWN MFR"
         assert row.manufacturer_miss is True
@@ -166,8 +190,8 @@ class TestTransformBatchAgainstFixture:
 class TestTransformBatchDefaultFlagViolation:
     def test_two_defaults_same_item_supplier_flagged(self):
         rows = [
-            {"ITNO": "LF1", "SUNO": "S1", "MPN": "A", "MPZDEFFL": "1"},
-            {"ITNO": "LF1", "SUNO": "S1", "MPN": "B", "MPZDEFFL": "1"},
+            {"ITNO": "LF1", "SUNO": "S1", "MPZMANPN": "A", "MPZDEFFL": "1"},
+            {"ITNO": "LF1", "SUNO": "S1", "MPZMANPN": "B", "MPZDEFFL": "1"},
         ]
         result = transform_batch(rows, {})
         assert len(result.default_flag_violations) == 1
@@ -178,8 +202,8 @@ class TestTransformBatchDefaultFlagViolation:
 
     def test_defaults_across_different_suppliers_not_flagged(self):
         rows = [
-            {"ITNO": "LF1", "SUNO": "S1", "MPN": "A", "MPZDEFFL": "1"},
-            {"ITNO": "LF1", "SUNO": "S2", "MPN": "B", "MPZDEFFL": "1"},
+            {"ITNO": "LF1", "SUNO": "S1", "MPZMANPN": "A", "MPZDEFFL": "1"},
+            {"ITNO": "LF1", "SUNO": "S2", "MPZMANPN": "B", "MPZDEFFL": "1"},
         ]
         result = transform_batch(rows, {})
         assert result.default_flag_violations == []
