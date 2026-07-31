@@ -79,6 +79,23 @@ class _AsyncCircuitBreaker:
 _circuit_breaker = _AsyncCircuitBreaker(fail_max=5, reset_timeout=60)
 
 
+def _uppercase_keys(d: dict[str, Any]) -> dict[str, Any]:
+    """Normalise one record/head dict's top-level keys to uppercase.
+
+    The real movex-rest-api BOM endpoints (B-1/B-2/B-3) return lowercase JSON
+    keys ("prno", "mseq", "mtno", ...) — verified live 2026-07-31 against
+    localhost:5000, item LFRMR241-7278 — not the uppercase M3-MI-style keys
+    the contract doc and every downstream consumer (src/services/bom/
+    browse.py, explode.py, FakeERPAdapter, all Slice A-C fixtures/tests)
+    assumed. This is movex-rest-api's own established, consistent convention
+    (get_next_itno_sequence already reads lowercase "next_seq" from
+    /parts/next-sequence) — Oskar's contract doc was wrong, not the service.
+    Normalising here, once, at the adapter boundary, means nothing
+    downstream needs to change.
+    """
+    return {k.upper(): v for k, v in d.items()}
+
+
 def _is_transient(exc: BaseException) -> bool:
     """Return True for errors that warrant a retry.
 
@@ -301,7 +318,13 @@ class MovexRestAdapter(ERPAdapter):
                     f"structure_type={structure_type!r}"
                 ) from exc
             raise
-        return resp.json()
+        payload = resp.json()
+        data = payload.get("data", {})
+        if "head" in data:
+            data["head"] = _uppercase_keys(data["head"])
+        if "records" in data:
+            data["records"] = [_uppercase_keys(r) for r in data["records"]]
+        return payload
 
     async def get_bom_indented(
         self,
@@ -321,7 +344,11 @@ class MovexRestAdapter(ERPAdapter):
                 "levl": max_depth,
             },
         )
-        return resp.json()
+        payload = resp.json()
+        data = payload.get("data", {})
+        if "records" in data:
+            data["records"] = [_uppercase_keys(r) for r in data["records"]]
+        return payload
 
     async def get_where_used(
         self,
@@ -335,7 +362,11 @@ class MovexRestAdapter(ERPAdapter):
         if effective_on:
             params["effectiveOn"] = effective_on
         resp = await self._get(f"/bom/where-used/{component_number}", params=params)
-        return resp.json()
+        payload = resp.json()
+        data = payload.get("data", {})
+        if "records" in data:
+            data["records"] = [_uppercase_keys(r) for r in data["records"]]
+        return payload
 
     async def search_items(self, query: str, limit: int = 50) -> list[dict[str, Any]]:
         resp = await self._get("/items", params={"q": query, "limit": limit})

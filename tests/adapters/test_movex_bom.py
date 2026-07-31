@@ -158,6 +158,43 @@ class TestGetBomNotFound:
             await adapter.get_bom("LF100001", "D")
 
 
+# Verified live 2026-07-31 against the real movex-rest-api BOM endpoints
+# (localhost:5000, item LFRMR241-7278) — the actual implementation returns
+# lowercase JSON keys ("prno", "mseq", "mtno", ...), not the uppercase
+# M3-MI-style keys the contract doc/fixtures assumed. Every downstream
+# consumer (src/services/bom/browse.py, explode.py, and every test/fixture
+# built in Slices A-C) reads uppercase keys. Fixing this at the adapter
+# boundary — normalise to uppercase immediately after resp.json() — means
+# browse.py/explode.py/FakeERPAdapter/fixtures stay untouched.
+_LIVE_SHAPE_SINGLE_LEVEL_PAYLOAD = {
+    "success": True,
+    "cono": "300",
+    "data": {
+        "head": {"prno": "LF100001", "strt": "001", "faci": "D", "itds": "Widget Assembly A"},
+        "records": [
+            {"mseq": 10, "mtno": "LF200010", "itds": "Resistor 10K 0603", "opno": 10,
+             "cnqt": 4.0, "peun": "EA", "fdat": 20240101, "tdat": 99999999, "itty": "030",
+             "stat": "20", "whlo": ""},
+        ],
+        "count": 1,
+    },
+}
+
+
+class TestGetBomLiveShapeNormalization:
+    @pytest.mark.asyncio
+    async def test_lowercase_head_and_record_keys_are_uppercased(self, adapter: MovexRestAdapter):
+        mock_get = AsyncMock(return_value=_mock_response(_LIVE_SHAPE_SINGLE_LEVEL_PAYLOAD))
+        adapter._get = mock_get
+
+        result = await adapter.get_bom("LF100001", "D")
+
+        assert result["data"]["head"]["PRNO"] == "LF100001"
+        assert result["data"]["records"][0]["MSEQ"] == 10
+        assert result["data"]["records"][0]["MTNO"] == "LF200010"
+        assert result["data"]["records"][0]["ITTY"] == "030"
+
+
 _MULTI_LEVEL_PAYLOAD = {
     "data": {
         "records": [
