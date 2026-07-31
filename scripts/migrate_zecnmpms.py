@@ -114,8 +114,21 @@ async def _fetch_all_pages(
     return rows
 
 
+def _build_headers() -> dict[str, str]:
+    """X-API-Key from MOVEX_API_KEY, same convention as MovexRestAdapter.
+
+    scripts/movex_stub.py requires no auth (harmless to send the header
+    anyway), but the real movex-rest-api does — --from-api 401s against it
+    without this, discovered live 2026-08-03.
+    """
+    api_key = os.environ.get("MOVEX_API_KEY")
+    return {"X-API-Key": api_key} if api_key else {}
+
+
 async def load_rows_from_api(base_url: str, cono: str) -> list[dict]:
-    async with httpx.AsyncClient(base_url=base_url, timeout=30.0) as client:
+    async with httpx.AsyncClient(
+        base_url=base_url, timeout=30.0, headers=_build_headers()
+    ) as client:
         return await _fetch_all_pages(client, cono=cono)
 
 

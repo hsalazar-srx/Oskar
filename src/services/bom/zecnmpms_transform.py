@@ -140,7 +140,14 @@ def _parse_int(raw: object) -> int | None:
     return int(float(s)) if s is not None else None
 
 
-def transform_row(raw: Mapping[str, object], synonyms: Mapping[str, str]) -> TransformedRow:
+def transform_row(raw_in: Mapping[str, object], synonyms: Mapping[str, str]) -> TransformedRow:
+    # Normalise every key to uppercase up front. The CSV path already uses
+    # uppercase headers (no-op here); the real M-1 endpoint returns lowercase
+    # keys ("itno", "mpzmanpn", ...) and, on this endpoint specifically, one
+    # mixed-case key ("mptX30") — verified live 2026-08-03. str.upper()
+    # handles any input casing uniformly without special-casing the quirk.
+    raw = {k.upper(): v for k, v in raw_in.items()}
+
     item_number = (_clean_str(raw.get("ITNO")) or "").upper()
     supplier_number = _clean_str(raw.get("SUNO")) or ""
     mpn = (_clean_str(raw.get("MPZMANPN")) or "").upper()

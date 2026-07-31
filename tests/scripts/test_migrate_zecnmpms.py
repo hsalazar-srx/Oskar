@@ -21,6 +21,14 @@ tests/integration/test_migrate_zecnmpms.py instead — pytest 9 no longer
 allows a non-top-level conftest.py to reuse tests/integration/conftest.py's
 fixtures via `pytest_plugins`, so DB-dependent tests simply live under
 tests/integration/ per the codebase's existing convention.
+
+Verified live 2026-08-03 against the real movex-rest-api M-1 endpoint
+(localhost:5000, GET /api/mpm/export) — same lowercase-key convention as
+B-1/B-2/B-3 (see tests/adapters/test_movex_bom.py), plus one mixed-case
+quirk on this endpoint specifically: the manufacturer field comes back as
+"mptX30", not "mptx30" or "MPTX30". transform_row normalises with
+str.upper() on every raw key up front, which handles any input casing
+uniformly (mixed case included) without needing to special-case it.
 """
 from __future__ import annotations
 
@@ -53,6 +61,24 @@ class TestTransformRowFieldMapping:
         row = transform_row(raw, {})
         assert row.item_number == "LF200010"
         assert row.mpn == "STM32F103C8T6"
+
+    def test_lowercase_keys_from_real_m1_response_are_handled(self):
+        """M-1's real response uses lowercase keys (itno, suno, mpzmanpn, ...)
+        — verified live 2026-08-03 — not the uppercase keys the CSV/fixture
+        path uses. transform_row must handle both without the caller having
+        to normalise first."""
+        raw = {"itno": " lf200010 ", "suno": "sup001", "mpzmanpn": "stm32f103c8t6"}
+        row = transform_row(raw, {})
+        assert row.item_number == "LF200010"
+        assert row.mpn == "STM32F103C8T6"
+
+    def test_mixed_case_key_from_real_m1_response_is_handled(self):
+        """The real M-1 response's manufacturer column comes back as the
+        mixed-case key "mptX30", not "MPTX30" or "mptx30" — a genuine wire
+        quirk, verified live 2026-08-03."""
+        raw = {"ITNO": "LF1", "SUNO": "S", "MPZMANPN": "X", "mptX30": "STMicroelectronics"}
+        row = transform_row(raw, {})
+        assert row.manufacturer_name == "STMicroelectronics"
 
     def test_supplier_number_is_trimmed_not_uppercased(self):
         raw = {"ITNO": "LF1", "SUNO": " sup001 ", "MPZMANPN": "X"}
@@ -207,3 +233,21 @@ class TestTransformBatchDefaultFlagViolation:
         ]
         result = transform_batch(rows, {})
         assert result.default_flag_violations == []
+
+
+# ── --from-api auth header (pure, no network) ───────────────────────────────
+# Discovered 2026-08-03: --from-api against the real movex-rest-api (unlike
+# scripts/movex_stub.py, which requires no auth) 401s, because
+# load_rows_from_api never sent X-API-Key. _build_headers() is the pure
+# piece of that fix — safe to unit test without a network layer.
+
+class TestBuildHeaders:
+    def test_no_env_var_means_no_auth_header(self, monkeypatch):
+        monkeypatch.delenv("MOVEX_API_KEY", raising=False)
+        from scripts.migrate_zecnmpms import _build_headers
+        assert _build_headers() == {}
+
+    def test_env_var_set_adds_x_api_key_header(self, monkeypatch):
+        monkeypatch.setenv("MOVEX_API_KEY", "test-key-123")
+        from scripts.migrate_zecnmpms import _build_headers
+        assert _build_headers() == {"X-API-Key": "test-key-123"}
