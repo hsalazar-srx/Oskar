@@ -141,7 +141,69 @@ Primary key: `(CMCONO, CMZECNID, CMITNO, CMMSEQ)`
 ### ZECNCIRF — Circuit References
 
 Tracks PCB circuit references associated with BOM changes.
-Key fields: `CRZCIRRF` (CLOB), `CRZECNID`.
+
+Primary key: `(CRCONO, CRFACI, CRPRNO, CRSTRT, CRMSEQ, CRFDAT)` — keyed on the ERP BOM line.
+Schema: `MOVEX` library on IBM i (see §10 — Stargile tables on IBM i).
+
+| Field | Meaning |
+|-------|---------|
+| CRCONO | Company number |
+| CRFACI | Facility |
+| CRPRNO | Parent product number |
+| CRSTRT | Product structure type |
+| CRMSEQ | Sequence number |
+| CRFDAT | From-date (YYYYMMDD) |
+| CRZCIRRF | **CLOB** — comma-delimited ref designators, supports range notation (`R1-R5` = R1 through R5) |
+| CRZECNID | Originating ECN ID |
+
+`CRZCIRRF` split logic confirmed from `RequestECNBoMDetailValidationHelper.java`: `zcirrf.split(",")`.
+Range expansion (e.g. `R1-R5` → `["R1","R2","R3","R4","R5"]`) is performed by the movex-rest-api
+`C-1` endpoint (`GET /api/bom/{prno}/circuit-refs`) — see `docs/movex-rest-api-bom-contract.md`.
+
+**Migration note:** Oskar owns `bom_circuit_refs` (D4) going forward. The C-1 endpoint exists only
+to backfill this table during the Stargile decommission window and is retired after cutover.
+
+---
+
+### ZECNMPMS — Manufacturer Part Master
+
+The permanent cross-reference between Scanfil APAC internal part numbers and manufacturer/supplier
+part numbers. Not ECN-specific — this is the site-wide approved parts list that survives across ECNs.
+
+Schema: `MOVEX` library on IBM i (see §10 — Stargile tables on IBM i).
+Primary key: `(MPCONO, MPITNO, MPSUNO, MPZMANPN)`.
+
+Column names source-verified 2026-07-27 from `MPMDetail.cml` / `MPMBrowse.cml` in SuperTool:
+
+| Column | Type | Meaning |
+|--------|------|---------|
+| MPCONO | INT | Company number |
+| MPITNO | CHAR(15) | Scanfil APAC part number (MITMAS.MMITNO) |
+| MPSUNO | CHAR(10) | Supplier number |
+| MPZMANPN | CHAR(30) | **Manufacturer part number (MPN)** |
+| MPTX30 | CHAR(30) | Manufacturer name |
+| MPZDEFFL | INT | Default flag — 1 = preferred purchasing choice |
+| MPZEEFDT | INT | Effective date (YYYYMMDD; 0 = not set) |
+| MPZECNID | CHAR | Originating ECN ID |
+| MPFDAT | INT | From-date (YYYYMMDD; 0 = open) |
+| MPTDAT | INT | To-date (YYYYMMDD; 99999999 = open-ended) |
+| MPMPRC | DECIMAL | Price |
+| MPCUCD | CHAR(3) | Currency code |
+| MPZMPMOQ | DECIMAL | Minimum order quantity |
+| MPZMPSPQ | DECIMAL | Standard pack quantity |
+| MPZCAWID | INT | Cancellation window (days) |
+| MPZREWID | INT | Reschedule window (days) |
+| MPZMNCNR | INT | NCNR flag (non-cancellable, non-returnable) |
+| MPFACI | CHAR(3) | Facility |
+| MPLMDT | INT | Last modified date |
+| MPLMTM | INT | Last modified time |
+
+**`MPDIST`/`MPDISTNM` do not exist** — these names appeared in early Oskar planning docs but have
+no source backing. Distributor data stays NULL for ZECNMPMS-origin rows in `item_mpns`.
+
+**Migration note:** `scripts/migrate_zecnmpms.py` (Slice C) owns all normalisation (TRIM,
+uppercasing, date-null handling, synonym resolution). The M-1 endpoint (`GET /api/mpm/export`)
+returns raw untransformed rows — it is the migration script's input, not its output.
 
 ---
 
@@ -486,6 +548,42 @@ Each step is a separate `movex_outbox` entry. MITMAS must exist before MITFAC; M
 **Why Stargile did not automate this:** Engineers manually created the item in Movex first, then referenced it in Stargile. Confirmed in the 2018-04-17 Branko session (timestamp 43:57): *"this is another step where we use a shortcut sometimes by manually creating it in Movex."* This was a normalised workaround, not a named pain point — OSKAR must eliminate this manual step.
 
 **Track A impact:** All MMS200MI Add* transactions added to `transactions/MMS200MI.json` (2026-04-22). PDS001MI, PDS002MI, MMS025MI transaction files still need to be created before Sprint 2.
+
+---
+
+## 10. Stargile Tables on IBM i — Why movex-rest-api Queries Them
+
+Stargile is a .NET application, but it stores its data directly on the IBM i (AS400) — the same
+physical machine that runs MOVEX/M3. When Stargile was installed, it created its own custom tables
+in a library called `MOVEX` on IBM i. These tables are NOT inside the Stargile .NET process; they
+are DB2 tables that Stargile happens to own and write to.
+
+```
+IBM i (AS400)
+├── MVXCDTA  ← M3/MOVEX standard tables (MPDMAT, MITMAS, MPDHED, ...)
+├── MVXC300  ← M3 company 300 (Dev/UAT)
+└── MOVEX    ← Stargile custom tables (ZECNCIRF, ZECNMPMS, ZECNHEAD, ...)
+              NOT inside the Stargile .NET app — just DB2 tables on the same machine
+```
+
+movex-rest-api already has an IBM i ODBC connection (used for all M3 direct-query endpoints).
+Querying `MOVEX.ZECNCIRF` or `MOVEX.ZECNMPMS` is the same ODBC connection pointed at a different
+library — there is no Stargile API call, no Stargile process dependency, and no new infrastructure.
+This is why movex-rest-api is the right place to expose Stargile table data during migration:
+it already has the connection, and Stargile does not need to stay running to serve these reads.
+
+**Schema config key:** `Db2:SchemaStargile = "MOVEX"` in movex-rest-api `appsettings.json`.
+This is independent of `SchemaCmp100`/`SchemaCmp300` — Stargile tables do not move between
+companies because they are not MOVEX multi-company tables.
+
+**Oskar's migration endpoints (both retired after Stargile cutover):**
+
+| Endpoint | Table | Purpose |
+|----------|-------|---------|
+| `GET /api/bom/{prno}/circuit-refs` (C-1) | `MOVEX.ZECNCIRF` | Backfill `bom_circuit_refs` (D4) in Oskar |
+| `GET /api/mpm/export` (M-1) | `MOVEX.ZECNMPMS` | Feed `scripts/migrate_zecnmpms.py` (Slice C) |
+
+Full endpoint contracts in `docs/movex-rest-api-bom-contract.md`.
 
 ---
 
