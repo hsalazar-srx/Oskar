@@ -382,3 +382,245 @@ class TestSameKeyDuplicatesOnBothSides:
 
         assert len(result.added) == 1
         assert result.removed == []
+
+
+# ---------------------------------------------------------------------------
+# PLM defect (a) regression: inconsistent array-key derivation for
+# multi-value MPN/MFR lines. Fixture: tests/fixtures/bom/customer_bom.csv —
+# LF200010 line has MPN1/MFR1 (STM32F103C8T6/STMicroelectronics) as its only
+# pair; this test constructs the multi-value (2-pair) case explicitly since
+# that shape is what PLM's engine breaks on.
+# ---------------------------------------------------------------------------
+
+
+class TestArrayKeyDerivationDefectFix:
+    def test_multi_value_mpn_line_matches_when_array_order_differs(self):
+        """A line carrying two MPN/MFR pairs must match its counterpart even
+        if the pairs were captured in a different order — PLM derives the
+        key from array fields inconsistently and silently fails to match
+        this case; Oskar's array-key normalisation (sort + case-fold) is
+        applied identically on both sides, every time."""
+        left = [{
+            "ipn": "LF200011",
+            "mpn": ["GRM188R71H104KA93D", "C0603C104K5RACTU"],
+            "mfr": ["Murata", "Kemet"],
+        }]
+        right = [{
+            "ipn": "LF200011",
+            "mpn": ["C0603C104K5RACTU", "GRM188R71H104KA93D"],
+            "mfr": ["Kemet", "Murata"],
+        }]
+
+        result = diff_boms(left, right, opts=CompareOptions(key=("mpn",)))
+
+        assert result.added == []
+        assert result.removed == []
+        assert result.changed == []
+
+    def test_multi_value_mpn_line_used_as_key_still_detects_real_changes(self):
+        """The array-key fix must not become "always matches" — a genuine
+        MPN-set difference is still a real remove+add under an mpn-keyed
+        compare."""
+        left = [{"ipn": "LF200011", "mpn": ["GRM188R71H104KA93D", "C0603C104K5RACTU"]}]
+        right = [{"ipn": "LF200011", "mpn": ["GRM188R71H104KA93D", "DIFFERENT-ALT-PART"]}]
+
+        result = diff_boms(left, right, opts=CompareOptions(key=("mpn",)))
+
+        assert len(result.removed) == 1
+        assert len(result.added) == 1
+
+    def test_mfr_array_field_diffed_by_value_not_reference(self):
+        """MFR as a non-key diffable array field: same defect-(a) fix
+        applies whether the array is the key or just a diffed field."""
+        left = [{"ipn": "LF200011", "mfr": ["Murata", "Kemet"]}]
+        right = [{"ipn": "LF200011", "mfr": ["Kemet", "Murata"]}]
+
+        result = diff_boms(left, right, opts=CompareOptions(key=("ipn",)))
+
+        assert result.changed == []  # same set, different order -> unchanged
+
+        right_real_change = [{"ipn": "LF200011", "mfr": ["Murata"]}]
+        result2 = diff_boms(left, right_real_change, opts=CompareOptions(key=("ipn",)))
+        assert result2.changed[0].field_changes[0].field == "mfr"
+
+
+# ---------------------------------------------------------------------------
+# PLM defect (b) regression: parseFloat-based quantity diffing always flags
+# non-numeric quantities as changed (NaN !== NaN). Fixture:
+# tests/fixtures/bom/customer_bom.csv row 6 — LF200010 duplicate line with
+# Quantity "N/A".
+# ---------------------------------------------------------------------------
+
+
+class TestQuantityDiffingDefectFix:
+    def test_two_equal_non_numeric_quantities_are_not_flagged_as_changed(self):
+        """The exact regression PLM's engine gets wrong: "N/A" vs "N/A"
+        must compare EQUAL, never "changed against itself"."""
+        left = [{"component_number": "LF200010", "operation_number": 20, "quantity": "N/A"}]
+        right = [{"component_number": "LF200010", "operation_number": 20, "quantity": "N/A"}]
+
+        result = diff_boms(left, right, opts=CompareOptions())
+
+        assert result.changed == []
+
+    def test_two_different_non_numeric_quantities_are_flagged_as_changed(self):
+        left = [{"component_number": "LF200010", "operation_number": 20, "quantity": "N/A"}]
+        right = [{"component_number": "LF200010", "operation_number": 20, "quantity": "TBD"}]
+
+        result = diff_boms(left, right, opts=CompareOptions())
+
+        assert len(result.changed) == 1
+        assert result.changed[0].field_changes[0].field == "quantity"
+
+    def test_numeric_quantity_vs_non_numeric_quantity_is_flagged_as_changed(self):
+        """A real numeric-vs-non-numeric mismatch (e.g. "4" vs "N/A") is a
+        genuine change, still correctly detected — the fix is specifically
+        about two EQUAL non-numeric values, not about disabling comparison
+        of non-numeric quantities altogether."""
+        left = [{"component_number": "LF200010", "operation_number": 20, "quantity": 4.0}]
+        right = [{"component_number": "LF200010", "operation_number": 20, "quantity": "N/A"}]
+
+        result = diff_boms(left, right, opts=CompareOptions())
+
+        assert len(result.changed) == 1
+
+    def test_customer_bom_csv_na_quantity_row_diffs_against_itself_as_unchanged(self):
+        """End-to-end regression using the actual Slice 0 fixture row that
+        was built for this defect (customer_bom.csv, LF200010/"N/A")."""
+        import csv as _csv
+
+        with (_FIXTURES_DIR / "customer_bom.csv").open(newline="", encoding="utf-8") as f:
+            rows = list(_csv.DictReader(f))
+        na_row = next(r for r in rows if r["Quantity"] == "N/A")
+        left = [{"ipn": na_row["IPN"], "quantity": na_row["Quantity"]}]
+        right = [{"ipn": na_row["IPN"], "quantity": na_row["Quantity"]}]
+
+        result = diff_boms(left, right, opts=CompareOptions(key=("ipn",)))
+
+        assert result.changed == []
+
+
+# ---------------------------------------------------------------------------
+# PLM defect (c) regression: inconsistent case-sensitivity (case-insensitive
+# for MPN/MFR/Designator, case-sensitive elsewhere). Oskar: one rule, all
+# fields, always case-insensitive.
+# ---------------------------------------------------------------------------
+
+
+class TestCaseSensitivityDefectFix:
+    def test_mpn_field_case_difference_is_not_a_change(self):
+        left = [{"ipn": "LF200011", "mpn": "stm32f103c8t6"}]
+        right = [{"ipn": "LF200011", "mpn": "STM32F103C8T6"}]
+
+        result = diff_boms(left, right, opts=CompareOptions(key=("ipn",)))
+
+        assert result.changed == []
+
+    def test_description_field_case_difference_is_also_not_a_change(self):
+        """The specific PLM inconsistency being fixed: description is one of
+        the fields PLM treats case-SENSITIVELY. Oskar must not replicate
+        that — same rule for every field, no exceptions."""
+        left = [{"ipn": "LF200011", "description": "Capacitor 100nF"}]
+        right = [{"ipn": "LF200011", "description": "CAPACITOR 100NF"}]
+
+        result = diff_boms(left, right, opts=CompareOptions(key=("ipn",)))
+
+        assert result.changed == []
+
+    def test_component_number_case_difference_does_not_break_key_matching(self):
+        """Case-insensitivity also applies to the match key itself, not
+        just diffed fields."""
+        left = [{"component_number": "lf200010", "operation_number": 10, "quantity": 4.0}]
+        right = [{"component_number": "LF200010", "operation_number": 10, "quantity": 4.0}]
+
+        result = diff_boms(left, right, opts=CompareOptions())
+
+        assert result.added == []
+        assert result.removed == []
+
+    def test_case_difference_combined_with_real_change_still_detects_the_real_change(self):
+        """The fix normalises case for comparison purposes; it must not
+        mask an unrelated real change on the same line."""
+        left = [{"ipn": "LF200011", "mpn": "stm32f103c8t6", "quantity": 1.0}]
+        right = [{"ipn": "LF200011", "mpn": "STM32F103C8T6", "quantity": 2.0}]
+
+        result = diff_boms(left, right, opts=CompareOptions(key=("ipn",)))
+
+        assert len(result.changed) == 1
+        changed_fields = {fc.field for fc in result.changed[0].field_changes}
+        assert changed_fields == {"quantity"}
+
+
+# ---------------------------------------------------------------------------
+# One per-field toggle: `fields` controls both diff-inclusion and (by
+# contract with callers) result-table visibility together — no separate
+# "Options modal vs column-click" split (D5).
+# ---------------------------------------------------------------------------
+
+
+class TestPerFieldToggle:
+    def test_field_excluded_from_fields_list_is_never_reported_as_changed(self):
+        left = [{"component_number": "LF200010", "operation_number": 10, "quantity": 4.0, "description": "Old desc"}]
+        right = [{"component_number": "LF200010", "operation_number": 10, "quantity": 6.0, "description": "New desc"}]
+
+        result = diff_boms(left, right, opts=CompareOptions(fields=("quantity",)))
+
+        changed_fields = {fc.field for fc in result.changed[0].field_changes}
+        assert changed_fields == {"quantity"}
+
+    def test_fields_none_diffs_every_field_present_on_either_side(self):
+        left = [{"component_number": "LF200010", "operation_number": 10, "quantity": 4.0}]
+        right = [{"component_number": "LF200010", "operation_number": 10, "quantity": 6.0, "description": "New"}]
+
+        result = diff_boms(left, right, opts=CompareOptions(fields=None))
+
+        changed_fields = {fc.field for fc in result.changed[0].field_changes}
+        assert changed_fields == {"quantity", "description"}
+
+    def test_key_fields_are_never_reported_as_field_changes_even_if_listed(self):
+        """A key field is how two lines were matched — reporting it as
+        "changed" would be meaningless (it's definitionally equal after
+        matching). Explicitly listing it in `fields` is a no-op, not an
+        error."""
+        left = [{"component_number": "LF200010", "operation_number": 10, "quantity": 4.0}]
+        right = [{"component_number": "LF200010", "operation_number": 10, "quantity": 6.0}]
+
+        result = diff_boms(
+            left, right, opts=CompareOptions(fields=("component_number", "quantity"))
+        )
+
+        changed_fields = {fc.field for fc in result.changed[0].field_changes}
+        assert changed_fields == {"quantity"}
+
+
+# ---------------------------------------------------------------------------
+# Performance: 500-line fixture diffed against itself in under 100ms
+# (real assertion, not a formality — tests/fixtures/bom/large_500.json)
+# ---------------------------------------------------------------------------
+
+
+class TestPerformance:
+    def test_500_line_bom_diffed_against_itself_under_100ms(self):
+        records = _load_lines("large_500.json")
+        lines = [
+            {
+                "component_number": r["MTNO"],
+                "operation_number": r["OPNO"],
+                "quantity": r["CNQT"],
+                "unit_of_measure": r["PEUN"],
+                "description": r["ITDS"],
+                "from_date": r["FDAT"],
+                "to_date": r["TDAT"],
+            }
+            for r in records
+        ]
+        right = [dict(ln) for ln in lines]
+
+        start = time.perf_counter()
+        result = diff_boms(lines, right, opts=CompareOptions())
+        elapsed_ms = (time.perf_counter() - start) * 1000
+
+        assert result.changed == []
+        assert result.added == []
+        assert result.removed == []
+        assert elapsed_ms < 100, f"diff_boms took {elapsed_ms:.2f}ms for 500 lines, expected <100ms"
