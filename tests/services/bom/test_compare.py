@@ -242,3 +242,143 @@ class TestOpMoved:
         assert result.changed[0].field_changes[0].field == "operation_number"
         assert result.added == []
         assert result.removed == []
+
+
+# ---------------------------------------------------------------------------
+# Stargile padding equivalence (D5: OPNO/MSEQ pad-4, STRT pad-3,
+# undefined to-date = 99999999)
+# ---------------------------------------------------------------------------
+
+
+class TestPaddingEquivalence:
+    def test_string_and_int_operation_number_compare_equal(self):
+        left = [{"component_number": "LF200010", "operation_number": "10"}]
+        right = [{"component_number": "LF200010", "operation_number": 10}]
+
+        result = diff_boms(left, right, opts=CompareOptions())
+
+        assert result.added == []
+        assert result.removed == []
+
+    def test_zero_padded_operation_number_compares_equal_to_unpadded(self):
+        left = [{"component_number": "LF200010", "operation_number": "0010"}]
+        right = [{"component_number": "LF200010", "operation_number": "10"}]
+
+        result = diff_boms(left, right, opts=CompareOptions())
+
+        assert result.added == []
+        assert result.removed == []
+
+    def test_zero_padded_key_field_matches_and_diffs_other_fields_normally(self):
+        left = [{"component_number": "LF200010", "operation_number": "0010", "quantity": 4.0}]
+        right = [{"component_number": "LF200010", "operation_number": "10", "quantity": 6.0}]
+
+        result = diff_boms(left, right, opts=CompareOptions())
+
+        assert len(result.changed) == 1
+        assert result.changed[0].field_changes[0].field == "quantity"
+
+    def test_padding_equivalence_applies_to_non_key_numeric_fields_too(self):
+        """_values_equal uses the same numeric-parse rule as key derivation
+        — "0004" and "4" are the same quantity, not a string mismatch."""
+        left = [{"component_number": "LF200010", "operation_number": 10, "quantity": "0004"}]
+        right = [{"component_number": "LF200010", "operation_number": 10, "quantity": "4"}]
+
+        result = diff_boms(left, right, opts=CompareOptions())
+
+        assert result.changed == []
+
+
+# ---------------------------------------------------------------------------
+# Duplicate component at different operations — matched independently
+# (regression fixture: tests/fixtures/bom/single_level.json, LF200010 appears
+# at MSEQ 10/OPNO 10 and MSEQ 70/OPNO 20)
+# ---------------------------------------------------------------------------
+
+
+class TestDuplicateComponentAtDifferentOperations:
+    def _erp_lines(self, filename: str) -> list[dict]:
+        records = _load_lines(filename)
+        return [
+            {
+                "component_number": r["MTNO"],
+                "operation_number": r["OPNO"],
+                "quantity": r["CNQT"],
+                "sequence_number": r["MSEQ"],
+            }
+            for r in records
+        ]
+
+    def test_repeated_component_at_two_ops_both_present_and_unchanged(self):
+        lines = self._erp_lines("single_level.json")
+
+        result = diff_boms(lines, lines, opts=CompareOptions())
+
+        assert result.changed == []
+        assert result.added == []
+        assert result.removed == []
+
+    def test_repeated_component_changing_qty_at_only_one_op_reports_one_change(self):
+        left = self._erp_lines("single_level.json")
+        right = [dict(ln) for ln in left]
+        # LF200010 @ OPNO 10 (MSEQ 10): bump quantity. The OPNO 20 occurrence
+        # (MSEQ 70) is untouched and must not be affected by this change.
+        for ln in right:
+            if ln["component_number"] == "LF200010" and ln["operation_number"] == 10:
+                ln["quantity"] = 999.0
+
+        result = diff_boms(left, right, opts=CompareOptions())
+
+        assert len(result.changed) == 1
+        changed = result.changed[0]
+        assert changed.key == ("LF200010", 10.0)
+        assert changed.field_changes[0].new_value == 999.0
+
+    def test_repeated_component_removed_at_only_one_op_is_one_removal(self):
+        left = self._erp_lines("single_level.json")
+        right = [
+            ln for ln in left
+            if not (ln["component_number"] == "LF200010" and ln["operation_number"] == 20)
+        ]
+
+        result = diff_boms(left, right, opts=CompareOptions())
+
+        assert len(result.removed) == 1
+        assert result.removed[0]["operation_number"] == 20
+        assert result.changed == []
+
+
+# ---------------------------------------------------------------------------
+# Same key colliding more than once on the SAME side (a true collision,
+# distinct from the different-operation_number case above)
+# ---------------------------------------------------------------------------
+
+
+class TestSameKeyDuplicatesOnBothSides:
+    def test_two_lines_sharing_a_key_on_both_sides_match_pairwise_by_encounter_order(self):
+        left = [
+            {"component_number": "LF200010", "operation_number": 10, "quantity": 1.0},
+            {"component_number": "LF200010", "operation_number": 10, "quantity": 2.0},
+        ]
+        right = [
+            {"component_number": "LF200010", "operation_number": 10, "quantity": 1.0},
+            {"component_number": "LF200010", "operation_number": 10, "quantity": 2.0},
+        ]
+
+        result = diff_boms(left, right, opts=CompareOptions())
+
+        assert result.changed == []
+        assert result.added == []
+        assert result.removed == []
+
+    def test_unequal_count_of_same_key_duplicates_produces_addition(self):
+        left = [{"component_number": "LF200010", "operation_number": 10, "quantity": 1.0}]
+        right = [
+            {"component_number": "LF200010", "operation_number": 10, "quantity": 1.0},
+            {"component_number": "LF200010", "operation_number": 10, "quantity": 1.0},
+        ]
+
+        result = diff_boms(left, right, opts=CompareOptions())
+
+        assert len(result.added) == 1
+        assert result.removed == []
