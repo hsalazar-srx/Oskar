@@ -1,4 +1,5 @@
 import axiosInstance from "@/api/axios"
+import { downloadFile } from "@/lib/download"
 
 // ── Shared types ──────────────────────────────────────────────────────────────
 
@@ -209,6 +210,9 @@ export interface RoutingOp {
   movex_snapshot: Record<string, unknown> | null
   created_at: string
   updated_at: string
+  // Populated only by fetchAllRoutingOps (ECN-wide aggregate view)
+  item_number?: string | null
+  line_number?: number | null
 }
 
 export interface RoutingOpBody {
@@ -222,6 +226,12 @@ export interface RoutingOpBody {
 
 export async function fetchRoutingOps(ecnId: string, itemId: string): Promise<RoutingOp[]> {
   const { data } = await axiosInstance.get(`/api/v1/ecn/${ecnId}/items/${itemId}/routing`)
+  return data
+}
+
+/** GET /api/v1/ecn/{ecnId}/routing — across every item on the ECN, for the aggregate Routing tab. */
+export async function fetchAllRoutingOps(ecnId: string): Promise<RoutingOp[]> {
+  const { data } = await axiosInstance.get(`/api/v1/ecn/${ecnId}/routing`)
   return data
 }
 
@@ -280,6 +290,9 @@ export interface MPN {
   notes: string | null
   supplier_data_at: string | null
   created_at: string
+  // Populated only by fetchAllMPNs (ECN-wide aggregate view)
+  item_number?: string | null
+  line_number?: number | null
 }
 
 export interface MPNBody {
@@ -299,6 +312,12 @@ export interface MPNBody {
 export async function fetchMPNs(ecnId: string, itemId: string): Promise<MPN[]> {
   const { data } = await axiosInstance.get(`/api/v1/ecn/${ecnId}/items/${itemId}`)
   return (data.mpns ?? []) as MPN[]
+}
+
+/** GET /api/v1/ecn/{ecnId}/mpns — across every item on the ECN, for the aggregate MPNs tab. */
+export async function fetchAllMPNs(ecnId: string): Promise<MPN[]> {
+  const { data } = await axiosInstance.get(`/api/v1/ecn/${ecnId}/mpns`)
+  return data
 }
 
 export async function createMPN(ecnId: string, itemId: string, body: MPNBody): Promise<MPN> {
@@ -424,4 +443,53 @@ export async function fetchMovexOutbox(params?: {
 export async function retryMovexOutboxEntry(id: string): Promise<MovexOutboxEntry> {
   const { data } = await axiosInstance.post(`/api/v1/admin/movex-outbox/${id}/retry`)
   return data
+}
+
+// ── ECN comments ──────────────────────────────────────────────────────────────
+
+export interface Comment {
+  id: string
+  ecn_id: string
+  author_username: string
+  body: string
+  created_at: string
+  updated_at: string | null
+  deleted_at: string | null
+  deleted_by: string | null
+}
+
+export async function fetchComments(ecnId: string, includeDeleted = false): Promise<Comment[]> {
+  const { data } = await axiosInstance.get(`/api/v1/ecn/${ecnId}/comments`, {
+    params: includeDeleted ? { include_deleted: true } : undefined,
+  })
+  return data
+}
+
+export async function postComment(ecnId: string, body: string): Promise<Comment> {
+  const { data } = await axiosInstance.post(`/api/v1/ecn/${ecnId}/comments`, { body })
+  return data
+}
+
+export async function updateComment(ecnId: string, commentId: string, body: string): Promise<Comment> {
+  const { data } = await axiosInstance.patch(`/api/v1/ecn/${ecnId}/comments/${commentId}`, { body })
+  return data
+}
+
+export async function deleteComment(ecnId: string, commentId: string): Promise<void> {
+  await axiosInstance.delete(`/api/v1/ecn/${ecnId}/comments/${commentId}`)
+}
+
+// ── Export (xlsx) ─────────────────────────────────────────────────────────────
+// Gated server-side on IMPLEMENTED ("Movex Updated") status — 403 otherwise.
+
+export async function exportItems(ecnId: string, ecnNumber: string): Promise<void> {
+  await downloadFile(`/api/v1/ecn/${ecnId}/items/export`, `${ecnNumber}-items.xlsx`)
+}
+
+export async function exportRoutingOps(ecnId: string, ecnNumber: string): Promise<void> {
+  await downloadFile(`/api/v1/ecn/${ecnId}/routing/export`, `${ecnNumber}-routing.xlsx`)
+}
+
+export async function exportMPNs(ecnId: string, ecnNumber: string): Promise<void> {
+  await downloadFile(`/api/v1/ecn/${ecnId}/mpns/export`, `${ecnNumber}-mpns.xlsx`)
 }

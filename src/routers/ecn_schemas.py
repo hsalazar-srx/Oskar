@@ -499,6 +499,9 @@ class MPNOut(BaseModel):
     notes: str | None
     supplier_data_at: datetime | None
     created_at: datetime
+    # Populated only in the ECN-wide aggregate list (GET /ecn/{ecn_id}/mpns)
+    item_number: str | None = None
+    line_number: int | None = None
 
     model_config = {"from_attributes": True}
 
@@ -541,6 +544,9 @@ class RoutingOpOut(BaseModel):
     movex_snapshot: dict[str, Any] | None
     created_at: str
     updated_at: str
+    # Populated only in the ECN-wide aggregate list (GET /ecn/{ecn_id}/routing)
+    item_number: str | None = None
+    line_number: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -651,6 +657,8 @@ def mpn_out(m: ECNMPNDetail) -> MPNOut:
         notes=m.notes,
         supplier_data_at=m.supplier_data_at,
         created_at=m.created_at,
+        item_number=m.item_number,
+        line_number=m.line_number,
     )
 
 
@@ -693,6 +701,8 @@ def routing_op_out(op: RoutingOperationResponse) -> RoutingOpOut:
         movex_snapshot=op.movex_snapshot,
         created_at=op.created_at.isoformat(),
         updated_at=op.updated_at.isoformat(),
+        item_number=op.item_number,
+        line_number=op.line_number,
     )
 
 

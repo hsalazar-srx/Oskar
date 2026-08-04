@@ -29,6 +29,26 @@ class ECNItemsMixin:
 
     _session: AsyncSession
 
+    # ── Guards ───────────────────────────────────────────────────────────────
+
+    async def _require_draft(self, ecn_id: str) -> None:
+        """Raise unless the ECN exists and is in DRAFT status.
+
+        Shared by every single-row items/MPN/routing CRUD method. Bulk-create
+        methods keep their own inline `SELECT ... FOR UPDATE` check instead —
+        they need the row lock to close the DRAFT→non-DRAFT race, which this
+        non-locking read does not provide.
+        """
+        row = await self._session.execute(
+            sa.text("SELECT status FROM ecn_instances WHERE id = :ecn_id"),
+            {"ecn_id": ecn_id},
+        )
+        ecn = row.first()
+        if not ecn:
+            raise ECNNotFound(ecn_id)
+        if ecn[0] != ECNStatus.DRAFT:
+            raise ECNValidationError("ECN is not in DRAFT status — this change is no longer allowed")
+
     # ── Row mappers ───────────────────────────────────────────────────────────
 
     def _row_to_mpn(self, row: Any) -> ECNMPNDetail:
@@ -204,6 +224,7 @@ class ECNItemsMixin:
         return self._row_to_item(r, mpns)
 
     async def update_item(self, ecn_id: str, item_id: str, **fields: Any) -> ECNItemDetail:
+        await self._require_draft(ecn_id)
         await self.get_item(ecn_id, item_id)
         allowed = {
             "item_name", "description_2", "drawing_number", "procurement_group",
@@ -358,15 +379,7 @@ class ECNItemsMixin:
         return result
 
     async def delete_item(self, ecn_id: str, item_id: str) -> None:
-        ecn_row = await self._session.execute(
-            sa.text("SELECT status FROM ecn_instances WHERE id = :ecn_id"),
-            {"ecn_id": ecn_id},
-        )
-        ecn = ecn_row.first()
-        if not ecn:
-            raise ECNNotFound(ecn_id)
-        if ecn[0] != ECNStatus.DRAFT:
-            raise ECNValidationError("Cannot delete item — ECN is not in DRAFT status")
+        await self._require_draft(ecn_id)
         item_row = await self._session.execute(
             sa.text("SELECT id FROM ecn_items WHERE id = :item_id AND ecn_id = :ecn_id"),
             {"item_id": item_id, "ecn_id": ecn_id},
@@ -397,6 +410,7 @@ class ECNItemsMixin:
         alt_mpn: str | None = None,
         notes: str | None = None,
     ) -> ECNMPNDetail:
+        await self._require_draft(ecn_id)
         item_row = await self._session.execute(
             sa.text("SELECT id FROM ecn_items WHERE id = :item_id AND ecn_id = :ecn_id"),
             {"item_id": item_id, "ecn_id": ecn_id},
@@ -425,6 +439,7 @@ class ECNItemsMixin:
         return await self._get_mpn(mpn_id)
 
     async def update_mpn(self, ecn_id: str, mpn_id: str, **fields: Any) -> ECNMPNDetail:
+        await self._require_draft(ecn_id)
         row = await self._session.execute(
             sa.text(
                 "SELECT m.id FROM ecn_mpns m "
@@ -449,6 +464,7 @@ class ECNItemsMixin:
         return await self._get_mpn(mpn_id)
 
     async def delete_mpn(self, ecn_id: str, mpn_id: str) -> None:
+        await self._require_draft(ecn_id)
         row = await self._session.execute(
             sa.text(
                 "SELECT m.id FROM ecn_mpns m "
@@ -541,6 +557,40 @@ class ECNItemsMixin:
 
         return [await self._get_mpn(mpn_id) for mpn_id in created_ids]
 
+    async def list_all_mpns(self, ecn_id: str) -> list[ECNMPNDetail]:
+        """MPNs across every item on this ECN, for the aggregate MPNs tab.
+
+        Each row carries its item_number/line_number so the tab can group and
+        label rows without a second per-item fetch.
+        """
+        ecn_row = await self._session.execute(
+            sa.text("SELECT id FROM ecn_instances WHERE id = :ecn_id"),
+            {"ecn_id": ecn_id},
+        )
+        if not ecn_row.first():
+            raise ECNNotFound(ecn_id)
+
+        rows = await self._session.execute(
+            sa.text(
+                "SELECT m.id, m.ecn_item_id, m.mpn, m.manufacturer, m.is_default, "
+                "m.alias_written, m.msl_level, m.lifecycle, m.lead_time_weeks, "
+                "m.eol_date, m.packaging_type, m.do_not_buy, m.alt_mpn, m.notes, "
+                "m.supplier_data_at, m.created_at, i.item_number, i.line_number "
+                "FROM ecn_mpns m "
+                "JOIN ecn_items i ON i.id = m.ecn_item_id "
+                "WHERE i.ecn_id = :ecn_id "
+                "ORDER BY i.line_number, m.is_default DESC, m.created_at"
+            ),
+            {"ecn_id": ecn_id},
+        )
+        result = []
+        for row in rows:
+            mpn = self._row_to_mpn(row)
+            mpn.item_number = row[16]
+            mpn.line_number = row[17]
+            result.append(mpn)
+        return result
+
     # ── Routing operations CRUD (S2-23) ───────────────────────────────────────
 
     def _row_to_routing_op(self, row: Any) -> RoutingOperationResponse:
@@ -564,6 +614,7 @@ class ECNItemsMixin:
         item_id: str,
         req: RoutingOperationRequest,
     ) -> RoutingOperationResponse:
+        await self._require_draft(ecn_id)
         if req.change_type not in VALID_CHANGE_TYPES:
             raise ECNValidationError(
                 f"change_type must be one of {sorted(VALID_CHANGE_TYPES)}, got '{req.change_type}'"
@@ -647,6 +698,7 @@ class ECNItemsMixin:
     async def update_routing_operation(
         self, ecn_id: str, item_id: str, op_id: str, **fields: Any
     ) -> RoutingOperationResponse:
+        await self._require_draft(ecn_id)
         await self._get_routing_op(ecn_id, item_id, op_id)
         allowed = {"operation_description", "work_centre", "run_time", "setup_time", "change_type"}
         updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
@@ -663,6 +715,7 @@ class ECNItemsMixin:
     async def delete_routing_operation(
         self, ecn_id: str, item_id: str, op_id: str
     ) -> None:
+        await self._require_draft(ecn_id)
         await self._get_routing_op(ecn_id, item_id, op_id)
         await self._session.execute(
             sa.text("DELETE FROM ecn_routing_operations WHERE id = :op_id"),
@@ -764,4 +817,36 @@ class ECNItemsMixin:
             r = row_data.first()
             if r:
                 result.append(self._row_to_routing_op(r))
+        return result
+
+    async def list_all_routing_operations(self, ecn_id: str) -> list[RoutingOperationResponse]:
+        """Routing operations across every item on this ECN, for the aggregate
+        Routing tab. Each row carries its item_number/line_number so the tab
+        can group and label rows without a second per-item fetch.
+        """
+        ecn_row = await self._session.execute(
+            sa.text("SELECT id FROM ecn_instances WHERE id = :ecn_id"),
+            {"ecn_id": ecn_id},
+        )
+        if not ecn_row.first():
+            raise ECNNotFound(ecn_id)
+
+        rows = await self._session.execute(
+            sa.text(
+                "SELECT r.id, r.ecn_item_id, r.operation_number, r.operation_description, "
+                "r.work_centre, r.run_time, r.setup_time, r.change_type, r.movex_snapshot, "
+                "r.created_at, r.updated_at, i.item_number, i.line_number "
+                "FROM ecn_routing_operations r "
+                "JOIN ecn_items i ON i.id = r.ecn_item_id "
+                "WHERE i.ecn_id = :ecn_id "
+                "ORDER BY i.line_number, r.operation_number"
+            ),
+            {"ecn_id": ecn_id},
+        )
+        result = []
+        for row in rows:
+            op = self._row_to_routing_op(row)
+            op.item_number = row[11]
+            op.line_number = row[12]
+            result.append(op)
         return result

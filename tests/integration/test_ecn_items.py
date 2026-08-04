@@ -170,6 +170,18 @@ class TestUpdateItem:
         with pytest.raises(ECNValidationError, match="mounting_type"):
             await svc.update_item(ecn_id, item.id, mounting_type="NOPE")
 
+    async def test_update_item_non_draft_raises(self, db_session: AsyncSession):
+        import sqlalchemy as sa
+        svc = ECNService(db_session)
+        ecn_id = await _make_ecn(db_session)
+        item = await svc.create_item(ecn_id, line_number=10, item_number="LF-UPD-ND")
+        await db_session.execute(
+            sa.text("UPDATE ecn_instances SET status = 30 WHERE id = :id"),
+            {"id": ecn_id},
+        )
+        with pytest.raises(ECNValidationError, match="DRAFT"):
+            await svc.update_item(ecn_id, item.id, item_name="Should be rejected")
+
 
 # ---------------------------------------------------------------------------
 # delete_item
@@ -260,6 +272,77 @@ class TestMPNCRUD:
         fetched = await svc.get_item(ecn_id, item.id)
         assert fetched.mpns == []
 
+    async def test_create_mpn_non_draft_raises(self, db_session: AsyncSession):
+        import sqlalchemy as sa
+        svc = ECNService(db_session)
+        ecn_id = await _make_ecn(db_session)
+        item = await svc.create_item(ecn_id, line_number=10, item_number="LF-MPN-ND1")
+        await db_session.execute(
+            sa.text("UPDATE ecn_instances SET status = 30 WHERE id = :id"),
+            {"id": ecn_id},
+        )
+        with pytest.raises(ECNValidationError, match="DRAFT"):
+            await svc.create_mpn(ecn_id, item.id, mpn="SHOULD-FAIL", manufacturer="X")
+
+    async def test_update_mpn_non_draft_raises(self, db_session: AsyncSession):
+        import sqlalchemy as sa
+        svc = ECNService(db_session)
+        ecn_id = await _make_ecn(db_session)
+        item = await svc.create_item(ecn_id, line_number=10, item_number="LF-MPN-ND2")
+        mpn = await svc.create_mpn(ecn_id, item.id, mpn="PRE-EXISTING", manufacturer="X")
+        await db_session.execute(
+            sa.text("UPDATE ecn_instances SET status = 30 WHERE id = :id"),
+            {"id": ecn_id},
+        )
+        with pytest.raises(ECNValidationError, match="DRAFT"):
+            await svc.update_mpn(ecn_id, mpn.id, mpn="SHOULD-FAIL")
+
+    async def test_delete_mpn_non_draft_raises(self, db_session: AsyncSession):
+        import sqlalchemy as sa
+        svc = ECNService(db_session)
+        ecn_id = await _make_ecn(db_session)
+        item = await svc.create_item(ecn_id, line_number=10, item_number="LF-MPN-ND3")
+        mpn = await svc.create_mpn(ecn_id, item.id, mpn="PRE-EXISTING2", manufacturer="X")
+        await db_session.execute(
+            sa.text("UPDATE ecn_instances SET status = 30 WHERE id = :id"),
+            {"id": ecn_id},
+        )
+        with pytest.raises(ECNValidationError, match="DRAFT"):
+            await svc.delete_mpn(ecn_id, mpn.id)
+
+
+class TestListAllMPNs:
+    async def test_returns_mpns_across_all_items_with_item_context(self, db_session: AsyncSession):
+        svc = ECNService(db_session)
+        ecn_id = await _make_ecn(db_session)
+        item1 = await svc.create_item(ecn_id, line_number=10, item_number="LF-ALLMPN-1")
+        item2 = await svc.create_item(ecn_id, line_number=20, item_number="LF-ALLMPN-2")
+        await svc.create_mpn(ecn_id, item1.id, mpn="MPN-A", manufacturer="Yageo")
+        await svc.create_mpn(ecn_id, item2.id, mpn="MPN-B", manufacturer="Murata")
+
+        rows = await svc.list_all_mpns(ecn_id)
+
+        assert len(rows) == 2
+        by_mpn = {r.mpn: r for r in rows}
+        assert by_mpn["MPN-A"].item_number == "LF-ALLMPN-1"
+        assert by_mpn["MPN-A"].line_number == 10
+        assert by_mpn["MPN-B"].item_number == "LF-ALLMPN-2"
+        assert by_mpn["MPN-B"].line_number == 20
+
+    async def test_empty_when_no_mpns(self, db_session: AsyncSession):
+        svc = ECNService(db_session)
+        ecn_id = await _make_ecn(db_session)
+        await svc.create_item(ecn_id, line_number=10, item_number="LF-ALLMPN-EMPTY")
+
+        rows = await svc.list_all_mpns(ecn_id)
+
+        assert rows == []
+
+    async def test_unknown_ecn_raises(self, db_session: AsyncSession):
+        svc = ECNService(db_session)
+        with pytest.raises(ECNNotFound):
+            await svc.list_all_mpns("00000000-0000-0000-0000-000000000000")
+
 
 # ---------------------------------------------------------------------------
 # Routing operations
@@ -324,3 +407,85 @@ class TestRoutingOperations:
         await svc.delete_routing_operation(ecn_id, item.id, op.id)
         ops = await svc.list_routing_operations(ecn_id, item.id)
         assert ops == []
+
+    async def test_create_routing_op_non_draft_raises(self, db_session: AsyncSession):
+        import sqlalchemy as sa
+        svc = ECNService(db_session)
+        ecn_id = await _make_ecn(db_session)
+        item = await svc.create_item(ecn_id, line_number=10, item_number="LF-ROP-ND1")
+        await db_session.execute(
+            sa.text("UPDATE ecn_instances SET status = 30 WHERE id = :id"),
+            {"id": ecn_id},
+        )
+        with pytest.raises(ECNValidationError, match="DRAFT"):
+            await svc.create_routing_operation(ecn_id, item.id, self._op_req())
+
+    async def test_update_routing_op_non_draft_raises(self, db_session: AsyncSession):
+        import sqlalchemy as sa
+        svc = ECNService(db_session)
+        ecn_id = await _make_ecn(db_session)
+        item = await svc.create_item(ecn_id, line_number=10, item_number="LF-ROP-ND2")
+        op = await svc.create_routing_operation(ecn_id, item.id, self._op_req())
+        await db_session.execute(
+            sa.text("UPDATE ecn_instances SET status = 30 WHERE id = :id"),
+            {"id": ecn_id},
+        )
+        with pytest.raises(ECNValidationError, match="DRAFT"):
+            await svc.update_routing_operation(ecn_id, item.id, op.id, work_centre="SMT99")
+
+    async def test_delete_routing_op_non_draft_raises(self, db_session: AsyncSession):
+        import sqlalchemy as sa
+        svc = ECNService(db_session)
+        ecn_id = await _make_ecn(db_session)
+        item = await svc.create_item(ecn_id, line_number=10, item_number="LF-ROP-ND3")
+        op = await svc.create_routing_operation(ecn_id, item.id, self._op_req())
+        await db_session.execute(
+            sa.text("UPDATE ecn_instances SET status = 30 WHERE id = :id"),
+            {"id": ecn_id},
+        )
+        with pytest.raises(ECNValidationError, match="DRAFT"):
+            await svc.delete_routing_operation(ecn_id, item.id, op.id)
+
+
+class TestListAllRoutingOperations:
+    def _op_req(self, **overrides) -> RoutingOperationRequest:
+        defaults = dict(
+            operation_number=10,
+            operation_description="SMT placement",
+            work_centre="SMT01",
+            run_time=120.0,
+            setup_time=30.0,
+            change_type="ADD",
+        )
+        return RoutingOperationRequest(**(defaults | overrides))
+
+    async def test_returns_ops_across_all_items_with_item_context(self, db_session: AsyncSession):
+        svc = ECNService(db_session)
+        ecn_id = await _make_ecn(db_session)
+        item1 = await svc.create_item(ecn_id, line_number=10, item_number="LF-ALLROP-1")
+        item2 = await svc.create_item(ecn_id, line_number=20, item_number="LF-ALLROP-2")
+        await svc.create_routing_operation(ecn_id, item1.id, self._op_req(operation_number=10))
+        await svc.create_routing_operation(ecn_id, item2.id, self._op_req(operation_number=20))
+
+        rows = await svc.list_all_routing_operations(ecn_id)
+
+        assert len(rows) == 2
+        by_op = {r.operation_number: r for r in rows}
+        assert by_op[10].item_number == "LF-ALLROP-1"
+        assert by_op[10].line_number == 10
+        assert by_op[20].item_number == "LF-ALLROP-2"
+        assert by_op[20].line_number == 20
+
+    async def test_empty_when_no_routing_ops(self, db_session: AsyncSession):
+        svc = ECNService(db_session)
+        ecn_id = await _make_ecn(db_session)
+        await svc.create_item(ecn_id, line_number=10, item_number="LF-ALLROP-EMPTY")
+
+        rows = await svc.list_all_routing_operations(ecn_id)
+
+        assert rows == []
+
+    async def test_unknown_ecn_raises(self, db_session: AsyncSession):
+        svc = ECNService(db_session)
+        with pytest.raises(ECNNotFound):
+            await svc.list_all_routing_operations("00000000-0000-0000-0000-000000000000")

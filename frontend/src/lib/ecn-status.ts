@@ -1,5 +1,25 @@
 import type { BadgeProps } from "@/components/ui/badge"
 
+/**
+ * Mirrors src/workflow/machine.py's ECNStatus IntEnum. No codegen keeps these
+ * in sync — update both places by hand when the backend enum changes.
+ * (Plain object, not `enum` — this project's tsconfig has erasableSyntaxOnly.)
+ */
+export const ECNStatus = {
+  DRAFT: 0,
+  DC_APPROVED: 25,
+  ENGINEERING_REVIEW: 30,
+  MANAGEMENT_REVIEW: 40,
+  APPROVED: 50,
+  IMPLEMENTED: 60,
+  REJECTED: 65,
+  CLOSED: 70,
+  CANCELLED: 80,
+  ON_HOLD: 90,
+} as const
+
+export type ECNStatus = (typeof ECNStatus)[keyof typeof ECNStatus]
+
 export const STATUS_LABELS: Record<number, string> = {
   0:  "Draft",
   30: "Eng Review",

@@ -127,6 +127,10 @@ class ECNMPNDetail:
     notes: str | None
     supplier_data_at: datetime | None
     created_at: datetime
+    # Populated only by list_all_mpns (ECN-wide aggregate view) — None on the
+    # per-item paths (_fetch_mpns/_get_mpn), which already scope by item.
+    item_number: str | None = None
+    line_number: int | None = None
 
 
 @dataclass
@@ -246,6 +250,10 @@ class RoutingOperationResponse:
     movex_snapshot: dict | None
     created_at: datetime
     updated_at: datetime
+    # Populated only by list_all_routing_operations (ECN-wide aggregate view)
+    # — None on the per-item path (list_routing_operations), already scoped.
+    item_number: str | None = None
+    line_number: int | None = None
 
 
 # ---------------------------------------------------------------------------

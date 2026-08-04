@@ -7,6 +7,8 @@ GET    /ecn/{ecn_id}/items/{item_id}/routing             List routing ops
 PATCH  /ecn/{ecn_id}/items/{item_id}/routing/{op_id}    Update routing op
 DELETE /ecn/{ecn_id}/items/{item_id}/routing/{op_id}    Remove routing op
 
+GET    /ecn/{ecn_id}/routing/export                       Export routing ops to .xlsx (IMPLEMENTED only)
+
 At DC_APPROVED, _queue_routing_operations_outbox() inserts one
 PDS002MI.AddOperation or UpdateOperation outbox entry per row.
 """
@@ -15,11 +17,13 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+import sqlalchemy as sa
+from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth.dependencies import CurrentUser, get_current_user
 from src.db import get_session
+from src.routers.bulk_export import BulkExportSpec, ExportColumn, build_xlsx
 from src.routers.bulk_upload import BulkUploadSpec, parse_bulk_upload
 from src.services.ecn import (
     ECNConflict,
@@ -28,6 +32,7 @@ from src.services.ecn import (
     ECNValidationError,
     RoutingOperationRequest,
 )
+from src.workflow.machine import ECNStatus
 from src.routers.ecn_schemas import (
     BulkRoutingRow,
     RoutingOpBody,
@@ -35,6 +40,48 @@ from src.routers.ecn_schemas import (
     RoutingOpPatchBody,
     routing_op_out,
 )
+
+_XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+_ROUTING_EXPORT_SPEC = BulkExportSpec(
+    sheet_name="Routing",
+    columns=[
+        ExportColumn(header="Item No", getter=lambda r: r.item_number),
+        ExportColumn(header="Operation No", getter=lambda r: r.operation_number),
+        ExportColumn(header="Operation Description", getter=lambda r: r.operation_description),
+        ExportColumn(header="Work Centre", getter=lambda r: r.work_centre),
+        ExportColumn(header="Run Time", getter=lambda r: r.run_time),
+        ExportColumn(header="Setup Time", getter=lambda r: r.setup_time),
+        ExportColumn(header="Change Type", getter=lambda r: r.change_type),
+    ],
+)
+
+
+async def _require_implemented_for_export(
+    session: AsyncSession, ecn_id: str
+) -> str:
+    """Raise unless the ECN exists and is IMPLEMENTED. Returns ecn_number for the filename."""
+    row = await session.execute(
+        sa.text("SELECT status, ecn_number FROM ecn_instances WHERE id = :id"),
+        {"id": ecn_id},
+    )
+    ecn = row.first()
+    if ecn is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ECN not found")
+    if ecn[0] != ECNStatus.IMPLEMENTED:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Export is only available once the ECN reaches Movex Updated status.",
+        )
+    return ecn[1]
+
+
+def _xlsx_response(xlsx_bytes: bytes, filename: str) -> Response:
+    return Response(
+        content=xlsx_bytes,
+        media_type=_XLSX_CONTENT_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 # ---------------------------------------------------------------------------
 # Bulk routing upload spec — multi-item, ECN-wide template. A row is treated
@@ -136,6 +183,40 @@ async def bulk_create_routing_operations(
         raise HTTPException(status_code=http_status, detail=msg)
 
     return [routing_op_out(op) for op in ops]
+
+
+@ecn_routing_router.get(
+    "/{ecn_id}/routing",
+    response_model=list[RoutingOpOut],
+    summary="List routing operations across every item on this ECN (aggregate Routing tab)",
+)
+async def list_all_routing_operations(
+    ecn_id: str,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> list[RoutingOpOut]:
+    svc = ECNService(session)
+    try:
+        ops = await svc.list_all_routing_operations(ecn_id)
+    except ECNNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ECN not found")
+    return [routing_op_out(op) for op in ops]
+
+
+@ecn_routing_router.get(
+    "/{ecn_id}/routing/export",
+    summary="Export routing operations to .xlsx — only available once the ECN is Movex Updated",
+)
+async def export_routing(
+    ecn_id: str,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> Response:
+    ecn_number = await _require_implemented_for_export(session, ecn_id)
+    svc = ECNService(session)
+    ops = await svc.list_all_routing_operations(ecn_id)
+    xlsx = build_xlsx(ops, _ROUTING_EXPORT_SPEC)
+    return _xlsx_response(xlsx, f"{ecn_number}-routing.xlsx")
 
 
 @ecn_routing_router.post(

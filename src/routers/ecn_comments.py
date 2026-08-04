@@ -1,14 +1,20 @@
 """
 OSKAR — ECN comments/notes endpoints.
 
-Comments are a lightweight annotation thread per ECN with no status restriction.
-Unlike ecn_transition_history (immutable audit chain), comments are editable and
-deletable by their author; DC may delete any comment.
+Comments are a lightweight annotation thread per ECN. Unlike
+ecn_transition_history (immutable audit chain), comments are editable and
+soft-deletable by their author; DC may delete any comment. Deletes are soft
+(deleted_at/deleted_by) so a History view can show what was removed — pass
+include_deleted=true to list_comments to see them.
+
+Mutations (add/edit/delete) are blocked once the ECN reaches IMPLEMENTED
+("Movex Updated") status. Reads (list_comments) stay unrestricted at any
+status, matching the pre-existing no-restriction read behaviour.
 
 GET    /ecn/{ecn_id}/comments                  List comments (oldest first)
 POST   /ecn/{ecn_id}/comments                  Add a comment
 PATCH  /ecn/{ecn_id}/comments/{comment_id}     Edit own comment
-DELETE /ecn/{ecn_id}/comments/{comment_id}     Delete own comment (DC may delete any)
+DELETE /ecn/{ecn_id}/comments/{comment_id}     Soft-delete own comment (DC may delete any)
 """
 
 from __future__ import annotations
@@ -25,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth.dependencies import CurrentUser, get_current_user
 from src.db import get_session
+from src.workflow.machine import ECNStatus
 
 log = structlog.get_logger(__name__)
 
@@ -50,6 +57,8 @@ class CommentOut(BaseModel):
     body: str
     created_at: str
     updated_at: str | None
+    deleted_at: str | None = None
+    deleted_by: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -67,13 +76,14 @@ async def _get_comment(
 ) -> dict[str, Any]:
     row = await session.execute(
         sa.text(
-            "SELECT id, ecn_id, author_username, body, created_at, updated_at "
+            "SELECT id, ecn_id, author_username, body, created_at, updated_at, "
+            "deleted_at, deleted_by "
             "FROM ecn_comments WHERE id = :id AND ecn_id = :ecn_id"
         ),
         {"id": comment_id, "ecn_id": ecn_id},
     )
     result = row.mappings().first()
-    if result is None:
+    if result is None or result["deleted_at"] is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found")
     return dict(result)
 
@@ -84,6 +94,21 @@ async def _ecn_exists(session: AsyncSession, ecn_id: str) -> bool:
         {"id": ecn_id},
     )
     return row.scalar() is not None
+
+
+async def _require_not_implemented(session: AsyncSession, ecn_id: str) -> None:
+    row = await session.execute(
+        sa.text("SELECT status FROM ecn_instances WHERE id = :id"),
+        {"id": ecn_id},
+    )
+    ecn = row.first()
+    if ecn is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ECN not found")
+    if ecn[0] == ECNStatus.IMPLEMENTED:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Notes are locked — this ECN has been marked as Movex Updated.",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -98,15 +123,24 @@ async def list_comments(
     ecn_id: str,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    include_deleted: bool = False,
 ) -> list[CommentOut]:
-    """List all comments for an ECN, ordered oldest first."""
+    """List comments for an ECN, ordered oldest first.
+
+    By default excludes soft-deleted comments. Pass include_deleted=true to
+    get the full history (used by the frontend's History view) — this drops
+    the filter rather than adding a separate endpoint.
+    """
     if not await _ecn_exists(session, ecn_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ECN not found")
 
+    where_deleted = "" if include_deleted else "AND deleted_at IS NULL "
     rows = await session.execute(
         sa.text(
-            "SELECT id, ecn_id, author_username, body, created_at, updated_at "
-            "FROM ecn_comments WHERE ecn_id = :ecn_id ORDER BY created_at ASC"
+            "SELECT id, ecn_id, author_username, body, created_at, updated_at, "
+            "deleted_at, deleted_by "
+            "FROM ecn_comments WHERE ecn_id = :ecn_id " + where_deleted +
+            "ORDER BY created_at ASC"
         ),
         {"ecn_id": ecn_id},
     )
@@ -118,6 +152,8 @@ async def list_comments(
             body=r["body"],
             created_at=_ts(r["created_at"]),
             updated_at=_ts(r.get("updated_at")),
+            deleted_at=_ts(r.get("deleted_at")),
+            deleted_by=r.get("deleted_by"),
         )
         for r in rows.mappings()
     ]
@@ -134,9 +170,8 @@ async def add_comment(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> CommentOut:
-    """Add a comment to an ECN. Allowed at any status including CLOSED."""
-    if not await _ecn_exists(session, ecn_id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ECN not found")
+    """Add a comment to an ECN. Blocked once the ECN is IMPLEMENTED."""
+    await _require_not_implemented(session, ecn_id)
 
     comment_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
@@ -178,6 +213,7 @@ async def update_comment(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> CommentOut:
     """Edit a comment. Only the author may edit their own comment."""
+    await _require_not_implemented(session, ecn_id)
     comment = await _get_comment(session, comment_id, ecn_id)
 
     if comment["author_username"] != user.username:
@@ -215,7 +251,8 @@ async def delete_comment(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> None:
-    """Delete a comment. Author may delete their own; DC may delete any."""
+    """Soft-delete a comment. Author may delete their own; DC may delete any."""
+    await _require_not_implemented(session, ecn_id)
     comment = await _get_comment(session, comment_id, ecn_id)
 
     is_dc = any(
@@ -227,8 +264,12 @@ async def delete_comment(
             detail="Only the comment author or DC may delete this comment.",
         )
 
+    now = datetime.now(timezone.utc)
     await session.execute(
-        sa.text("DELETE FROM ecn_comments WHERE id = :id"),
-        {"id": comment_id},
+        sa.text(
+            "UPDATE ecn_comments SET deleted_at = :deleted_at, deleted_by = :deleted_by "
+            "WHERE id = :id"
+        ),
+        {"deleted_at": now, "deleted_by": user.username, "id": comment_id},
     )
     log.info("ecn.comment.deleted", ecn_id=ecn_id, comment_id=comment_id, actor=user.username)

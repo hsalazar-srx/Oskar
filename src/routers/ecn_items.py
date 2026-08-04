@@ -16,6 +16,9 @@ DELETE /ecn/{ecn_id}/items/{item_id}/mpns/{mpn_id}    Remove MPN
 POST   /ecn/{ecn_id}/mpns/bulk                         Bulk upload MPNs from .xlsx/.csv
                                                          (CAD BOM export shape — C P/N +
                                                          Manufacturer 1/2 + Part Number 1/2)
+
+GET    /ecn/{ecn_id}/items/export                       Export items to .xlsx (IMPLEMENTED only)
+GET    /ecn/{ecn_id}/mpns/export                         Export MPNs to .xlsx (IMPLEMENTED only)
 """
 
 from __future__ import annotations
@@ -23,17 +26,20 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+import sqlalchemy as sa
+from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth.dependencies import CurrentUser, get_current_user
 from src.db import get_session
+from src.routers.bulk_export import BulkExportSpec, ExportColumn, build_xlsx
 from src.routers.bulk_upload import BulkUploadSpec, parse_bulk_upload
 from src.services.ecn import (
     ECNNotFound,
     ECNService,
     ECNValidationError,
 )
+from src.workflow.machine import ECNStatus
 from src.routers.ecn_schemas import (
     BulkItemRow,
     BulkMPNRow,
@@ -48,6 +54,63 @@ from src.routers.ecn_schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+_XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+_ITEM_EXPORT_SPEC = BulkExportSpec(
+    sheet_name="Items",
+    columns=[
+        ExportColumn(header="Item No", getter=lambda r: r.item_number),
+        ExportColumn(header="Item Name", getter=lambda r: r.item_name),
+        ExportColumn(header="Item Description", getter=lambda r: r.description_2),
+        ExportColumn(header="Drawing No", getter=lambda r: r.drawing_number),
+        ExportColumn(header="Procurement Group", getter=lambda r: r.procurement_group),
+        ExportColumn(header="Product Group", getter=lambda r: r.product_group),
+        ExportColumn(header="Unit of Measure", getter=lambda r: r.unit_of_measure),
+        ExportColumn(header="Customer Alias", getter=lambda r: r.customer_alias),
+        ExportColumn(header="Is New Item", getter=lambda r: r.is_new_item),
+    ],
+)
+
+_MPN_EXPORT_SPEC = BulkExportSpec(
+    sheet_name="MPNs",
+    columns=[
+        ExportColumn(header="Item No", getter=lambda r: r.item_number),
+        ExportColumn(header="MPN", getter=lambda r: r.mpn),
+        ExportColumn(header="Manufacturer", getter=lambda r: r.manufacturer),
+        ExportColumn(header="Default", getter=lambda r: r.is_default),
+        ExportColumn(header="Lifecycle", getter=lambda r: r.lifecycle),
+        ExportColumn(header="Lead Time (weeks)", getter=lambda r: r.lead_time_weeks),
+        ExportColumn(header="Do Not Buy", getter=lambda r: r.do_not_buy),
+    ],
+)
+
+
+async def _require_implemented_for_export(
+    session: AsyncSession, ecn_id: str
+) -> str:
+    """Raise unless the ECN exists and is IMPLEMENTED. Returns ecn_number for the filename."""
+    row = await session.execute(
+        sa.text("SELECT status, ecn_number FROM ecn_instances WHERE id = :id"),
+        {"id": ecn_id},
+    )
+    ecn = row.first()
+    if ecn is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ECN not found")
+    if ecn[0] != ECNStatus.IMPLEMENTED:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Export is only available once the ECN reaches Movex Updated status.",
+        )
+    return ecn[1]
+
+
+def _xlsx_response(xlsx_bytes: bytes, filename: str) -> Response:
+    return Response(
+        content=xlsx_bytes,
+        media_type=_XLSX_CONTENT_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 # ---------------------------------------------------------------------------
 # Bulk item upload spec
@@ -272,6 +335,40 @@ async def bulk_create_mpns(
     return [mpn_out(m) for m in mpns]
 
 
+@ecn_items_router.get(
+    "/{ecn_id}/mpns",
+    response_model=list[MPNOut],
+    summary="List MPNs across every item on this ECN (aggregate MPNs tab)",
+)
+async def list_all_mpns(
+    ecn_id: str,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> list[MPNOut]:
+    svc = ECNService(session)
+    try:
+        mpns = await svc.list_all_mpns(ecn_id)
+    except ECNNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ECN not found")
+    return [mpn_out(m) for m in mpns]
+
+
+@ecn_items_router.get(
+    "/{ecn_id}/mpns/export",
+    summary="Export MPNs to .xlsx — only available once the ECN is Movex Updated",
+)
+async def export_mpns(
+    ecn_id: str,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> Response:
+    ecn_number = await _require_implemented_for_export(session, ecn_id)
+    svc = ECNService(session)
+    mpns = await svc.list_all_mpns(ecn_id)
+    xlsx = build_xlsx(mpns, _MPN_EXPORT_SPEC)
+    return _xlsx_response(xlsx, f"{ecn_number}-mpns.xlsx")
+
+
 @ecn_items_router.post(
     "/{ecn_id}/items",
     response_model=ECNItemOut,
@@ -302,6 +399,22 @@ async def list_items(
     svc = ECNService(session)
     items = await svc.list_items(ecn_id)
     return [item_out(i) for i in items]
+
+
+@ecn_items_router.get(
+    "/{ecn_id}/items/export",
+    summary="Export items to .xlsx — only available once the ECN is Movex Updated",
+)
+async def export_items(
+    ecn_id: str,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> Response:
+    ecn_number = await _require_implemented_for_export(session, ecn_id)
+    svc = ECNService(session)
+    items = await svc.list_items(ecn_id)
+    xlsx = build_xlsx(items, _ITEM_EXPORT_SPEC)
+    return _xlsx_response(xlsx, f"{ecn_number}-items.xlsx")
 
 
 @ecn_items_router.get("/{ecn_id}/items/{item_id}", response_model=ECNItemOut)

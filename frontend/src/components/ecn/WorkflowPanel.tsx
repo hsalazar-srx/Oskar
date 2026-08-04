@@ -35,6 +35,7 @@ interface Props {
   isUserDC: boolean
   roleAssignIsPending: boolean
   transitionIsPending: boolean
+  canReassignRoles?: boolean
   onRoleAssign: (roleId: string, username: string) => void
   onApproveRole: (role: string) => void
   onAction: (action: ActionDef) => void
@@ -48,6 +49,7 @@ export default function WorkflowPanel({
   isUserDC,
   roleAssignIsPending,
   transitionIsPending,
+  canReassignRoles = true,
   onRoleAssign,
   onApproveRole,
   onAction,
@@ -156,7 +158,7 @@ export default function WorkflowPanel({
                     roleName={ROLE_LABEL[stage.roleId] ?? stage.roleId}
                     username={stageRa.username}
                     isAutoAssigned={stageRa.is_auto_assigned}
-                    canEdit={isUserDC && stage.roleId !== "OR" && !isDone}
+                    canEdit={canReassignRoles && isUserDC && stage.roleId !== "OR" && !isDone}
                     isSaving={roleAssignIsPending}
                     onSave={(u) => onRoleAssign(stage.roleId!, u)}
                   />
