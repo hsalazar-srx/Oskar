@@ -38,7 +38,7 @@ synonym table lookup itself.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, replace
 from typing import Callable
 
 from src.services.bom.compare import BOMDiff, CompareOptions, UnresolvedLine, diff_boms
@@ -94,3 +94,74 @@ def resolve_customer_lines(
                 ResolvedLine(item_number=matched_mpn_item, resolved_via="mpn", source=line)
             )
     return resolved
+
+
+_UNRESOLVED_REASON = "no CPN alias or MPN match"
+
+
+def _resolved_line_to_dict(resolved: ResolvedLine) -> dict:
+    """Flatten a ResolvedLine into the plain dict shape diff_boms() expects,
+    keyed on item_number so it can be compared against ERP-side lines
+    (already item_number-keyed, e.g. src/services/bom/browse.py output)."""
+    src = resolved.source
+    return {
+        "item_number": resolved.item_number,
+        "cpn": src.cpn,
+        "mpn": src.mpn,
+        "mfr": src.mfr,
+        "designator": src.designator,
+        "description": src.description,
+        "quantity": src.quantity,
+    }
+
+
+def compare_customer_bom(
+    customer_lines: list[CustomerLine],
+    erp_lines: list[dict],
+    *,
+    resolve_cpn: ResolveFn,
+    resolve_mpn: ResolveFn,
+    opts: CompareOptions | None = None,
+) -> BOMDiff:
+    """Resolve every customer_lines entry to an Oskar item_number, diff the
+    resolved set against erp_lines via compare.diff_boms, and merge in an
+    `unresolved` bucket for customer lines that resolved via NEITHER CPN nor
+    MPN (see module docstring).
+
+    Unresolved lines are excluded from the diff itself (never appear as
+    "removed") — see TestCompareCustomerBOM.
+    test_unresolved_customer_line_does_not_also_appear_as_removed for the
+    rationale: a line Oskar couldn't identify at all is not evidence the ERP
+    side lacks that part.
+    """
+    resolved = resolve_customer_lines(customer_lines, resolve_cpn=resolve_cpn, resolve_mpn=resolve_mpn)
+
+    # A customer line is unresolved iff it produced no ResolvedLine at all.
+    # Identity-based (id(line)), not value-based, so two customer lines with
+    # identical field values are never conflated with each other.
+    resolved_sources = {id(r.source) for r in resolved}
+    unresolved = [
+        UnresolvedLine(
+            side="left",
+            line={
+                "cpn": line.cpn,
+                "mpn": line.mpn,
+                "mfr": line.mfr,
+                "designator": line.designator,
+                "description": line.description,
+                "quantity": line.quantity,
+            },
+            reason=_UNRESOLVED_REASON,
+        )
+        for line in customer_lines
+        if id(line) not in resolved_sources
+    ]
+
+    left = [_resolved_line_to_dict(r) for r in resolved]
+    diff = diff_boms(left, erp_lines, opts=opts)
+
+    stats = replace(
+        diff.stats,
+        unresolved_count=len(unresolved),
+    )
+    return replace(diff, unresolved=unresolved, stats=stats)
