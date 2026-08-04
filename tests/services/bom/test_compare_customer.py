@@ -49,3 +49,86 @@ class TestResolveByCPN:
         assert isinstance(resolved[0], ResolvedLine)
         assert resolved[0].item_number == "LF200010"
         assert resolved[0].resolved_via == "cpn"
+
+
+class TestResolveByMPN:
+    def test_line_with_no_cpn_resolves_via_mpn(self):
+        line = CustomerLine(
+            cpn=None, mpn=["STM32F103C8T6"], mfr=["STMicroelectronics"],
+            designator="U1", description="MCU", quantity=1.0,
+        )
+        resolved = resolve_customer_lines(
+            [line], resolve_cpn=_by_cpn({}), resolve_mpn=_by_mpn({"STM32F103C8T6": "LF200010"}),
+        )
+
+        assert len(resolved) == 1
+        assert resolved[0].item_number == "LF200010"
+        assert resolved[0].resolved_via == "mpn"
+
+    def test_cpn_present_but_unresolvable_falls_back_to_mpn(self):
+        line = CustomerLine(
+            cpn="UNKNOWN-CPN", mpn=["STM32F103C8T6"], mfr=[],
+            designator="U1", description="MCU", quantity=1.0,
+        )
+        resolved = resolve_customer_lines(
+            [line], resolve_cpn=_by_cpn({}), resolve_mpn=_by_mpn({"STM32F103C8T6": "LF200010"}),
+        )
+
+        assert resolved[0].item_number == "LF200010"
+        assert resolved[0].resolved_via == "mpn"
+
+    def test_cpn_takes_priority_over_mpn_when_both_resolve(self):
+        line = CustomerLine(
+            cpn="CPN-1001", mpn=["STM32F103C8T6"], mfr=[],
+            designator="U1", description="MCU", quantity=1.0,
+        )
+        resolved = resolve_customer_lines(
+            [line],
+            resolve_cpn=_by_cpn({"CPN-1001": "LF200010"}),
+            resolve_mpn=_by_mpn({"STM32F103C8T6": "LF999999"}),
+        )
+
+        assert resolved[0].item_number == "LF200010"
+        assert resolved[0].resolved_via == "cpn"
+
+    def test_second_mpn_in_array_resolves_when_first_does_not(self):
+        """A customer line can carry multiple MPN/MFR pairs (parity with
+        PLM's array line shape) — the first MPN that actually resolves
+        wins, not necessarily mpn[0]."""
+        line = CustomerLine(
+            cpn=None, mpn=["UNKNOWN-ALT-PART", "GRM188R71H104KA93D"], mfr=["Kemet", "Murata"],
+            designator="C1", description="Capacitor", quantity=4.0,
+        )
+        resolved = resolve_customer_lines(
+            [line], resolve_cpn=_by_cpn({}),
+            resolve_mpn=_by_mpn({"GRM188R71H104KA93D": "LF200011"}),
+        )
+
+        assert resolved[0].item_number == "LF200011"
+        assert resolved[0].resolved_via == "mpn"
+
+
+class TestUnresolvedLines:
+    def test_line_resolving_neither_cpn_nor_mpn_is_dropped_by_resolve_customer_lines(self):
+        """resolve_customer_lines alone drops unresolvable lines — the
+        unresolved bucket itself is exposed by compare_customer_bom, tested
+        separately below."""
+        line = CustomerLine(
+            cpn="UNKNOWN-CPN", mpn=["UNKNOWN-MPN"], mfr=[],
+            designator=None, description="Mystery part", quantity=1.0,
+        )
+        resolved = resolve_customer_lines(
+            [line], resolve_cpn=_by_cpn({}), resolve_mpn=_by_mpn({}),
+        )
+
+        assert resolved == []
+
+    def test_line_with_no_cpn_and_empty_mpn_array_is_dropped(self):
+        line = CustomerLine(
+            cpn=None, mpn=[], mfr=[], designator=None, description="Blank row", quantity=1.0,
+        )
+        resolved = resolve_customer_lines(
+            [line], resolve_cpn=_by_cpn({}), resolve_mpn=_by_mpn({}),
+        )
+
+        assert resolved == []
