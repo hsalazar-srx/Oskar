@@ -8,16 +8,19 @@ GET /api/v1/bom/{item_number}/where-used       Where-used lookup (Slice B, B-3)
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapters.erp.base import BOMNotFound
 from src.adapters.erp.movex import MovexRestAdapter
 from src.auth.dependencies import CurrentUser, get_current_user
+from src.db import get_session
 from src.services.bom.browse import get_single_level_bom
+from src.services.bom.comparisons import get_comparison, insert_comparison
 from src.services.bom.explode import assemble_where_used, build_bom_tree
 from src.services.bom.models import BOMCycleError, BOMHead, BOMTreeNode, WhereUsedLine
 
@@ -132,6 +135,54 @@ def _raise_for_erp_error(exc: Exception) -> None:
             detail="ERP connection failed after retries.",
         )
     raise exc
+
+
+# ── Slice D: BOM comparison engine ──────────────────────────────────────────────
+# Declared BEFORE the "/{item_number}" routes below (Slice A/B) — "compare"
+# and "comparisons" would otherwise be swallowed as an item_number path
+# param, same reasoning as ecn_items.py's bulk-upload-before-{item_id} note.
+
+class ComparisonResponse(BaseModel):
+    id: str
+    left_descriptor: dict[str, Any]
+    right_descriptor: dict[str, Any]
+    comparison_result: dict[str, Any]
+    cost_impact: float | None
+    risk_flags: list[str]
+    created_by: str
+    created_at: str
+
+
+def _comparison_to_response(comp) -> ComparisonResponse:
+    return ComparisonResponse(
+        id=comp.id,
+        left_descriptor=comp.left_descriptor,
+        right_descriptor=comp.right_descriptor,
+        comparison_result=comp.comparison_result,
+        cost_impact=float(comp.cost_impact) if comp.cost_impact is not None else None,
+        risk_flags=comp.risk_flags,
+        created_by=comp.created_by,
+        created_at=comp.created_at.isoformat(),
+    )
+
+
+@bom_router.get(
+    "/comparisons/{comparison_id}",
+    response_model=ComparisonResponse,
+    summary="Fetch a saved BOM comparison (Slice D)",
+)
+async def get_bom_comparison(
+    comparison_id: str,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ComparisonResponse:
+    comparison = await get_comparison(session, comparison_id)
+    if comparison is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No saved comparison found for id {comparison_id!r}.",
+        )
+    return _comparison_to_response(comparison)
 
 
 # ── Slice A: single-level browse ──────────────────────────────────────────────
