@@ -14,8 +14,11 @@ here goes through the service layer, which is itself patched.
 """
 from __future__ import annotations
 
+import io
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import openpyxl
 import pytest
 from fastapi.testclient import TestClient
 
@@ -323,3 +326,188 @@ class TestPostCompareSnapshotSide:
             )
 
         assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/bom/compare/upload — multipart customer-BOM upload vs ERP item
+# ---------------------------------------------------------------------------
+
+_FIXTURES_DIR = Path(__file__).parent.parent / "fixtures" / "bom"
+
+_UPLOAD_HEADERS = ["IPN", "CPN", "MFR1", "MPN1", "MFR2", "MPN2", "Designator", "Description", "Quantity", "Footprint"]
+
+
+def _make_upload_csv(rows: list[dict]) -> bytes:
+    lines = [",".join(_UPLOAD_HEADERS)]
+    for row in rows:
+        lines.append(",".join(str(row.get(h, "")) for h in _UPLOAD_HEADERS))
+    return "\n".join(lines).encode("utf-8")
+
+
+class TestPostCompareUpload:
+    def test_valid_upload_returns_200(self):
+        csv_bytes = _make_upload_csv([
+            {"IPN": "LF200010", "CPN": "CPN-1001", "MFR1": "STMicroelectronics",
+             "MPN1": "STM32F103C8T6", "Designator": "U1", "Description": "MCU", "Quantity": "1"},
+        ])
+
+        with patch("src.routers.bom.get_single_level_bom", new_callable=AsyncMock) as mock_bom, \
+             patch("src.routers.bom.insert_comparison", new_callable=AsyncMock) as mock_insert, \
+             patch("src.routers.bom.MovexRestAdapter.lookup_by_alias", new_callable=AsyncMock) as mock_alias:
+            from src.services.bom.models import BOMHead, BOMLine
+
+            mock_bom.return_value = BOMHead(
+                item_number="LF100001", structure_type="001", facility="D", description="A",
+                lines=[
+                    BOMLine(sequence_number=10, component_number="LF200010", description="MCU",
+                            operation_number=10, quantity=1.0, unit_of_measure="EA",
+                            from_date=20240101, to_date=99999999),
+                ],
+            )
+            mock_alias.return_value = [{"ITNO": "LF200010", "POPN": "CPN-1001", "ALWT": "1", "ALWQ": "", "E0PA": ""}]
+            mock_insert.return_value = _SAVED_COMPARISON
+
+            client = _make_client(_ENGINEER)
+            resp = client.post(
+                "/api/v1/bom/compare/upload",
+                files={"file": ("customer_bom.csv", csv_bytes, "text/csv")},
+                data={"item_number": "LF100001", "facility": "D"},
+            )
+
+        assert resp.status_code == 200
+
+    def test_real_customer_bom_csv_fixture_uploads_successfully(self):
+        """End-to-end against the actual Slice 0 fixture (multi-row-per-IPN,
+        N/A quantity, blank-MFR/MPN row all present in this file)."""
+        csv_bytes = (_FIXTURES_DIR / "customer_bom.csv").read_bytes()
+
+        with patch("src.routers.bom.get_single_level_bom", new_callable=AsyncMock) as mock_bom, \
+             patch("src.routers.bom.insert_comparison", new_callable=AsyncMock) as mock_insert, \
+             patch("src.routers.bom.MovexRestAdapter.lookup_by_alias", new_callable=AsyncMock) as mock_alias:
+            from src.services.bom.models import BOMHead
+
+            mock_bom.return_value = BOMHead(
+                item_number="LF100001", structure_type="001", facility="D", description="A", lines=[],
+            )
+            mock_alias.return_value = []
+            mock_insert.return_value = _SAVED_COMPARISON
+
+            client = _make_client(_ENGINEER)
+            resp = client.post(
+                "/api/v1/bom/compare/upload",
+                files={"file": ("customer_bom.csv", csv_bytes, "text/csv")},
+                data={"item_number": "LF100001", "facility": "D"},
+            )
+
+        assert resp.status_code == 200
+
+    def test_real_customer_bom_xlsx_fixture_uploads_successfully(self):
+        """The xlsx fixture has a title row above the real header row —
+        parse_bulk_upload's header-detection (first non-blank row) handles
+        that; this test proves the upload endpoint end-to-end for xlsx too."""
+        xlsx_bytes = (_FIXTURES_DIR / "customer_bom.xlsx").read_bytes()
+
+        with patch("src.routers.bom.get_single_level_bom", new_callable=AsyncMock) as mock_bom, \
+             patch("src.routers.bom.insert_comparison", new_callable=AsyncMock) as mock_insert, \
+             patch("src.routers.bom.MovexRestAdapter.lookup_by_alias", new_callable=AsyncMock) as mock_alias:
+            from src.services.bom.models import BOMHead
+
+            mock_bom.return_value = BOMHead(
+                item_number="LF100001", structure_type="001", facility="D", description="A", lines=[],
+            )
+            mock_alias.return_value = []
+            mock_insert.return_value = _SAVED_COMPARISON
+
+            client = _make_client(_ENGINEER)
+            resp = client.post(
+                "/api/v1/bom/compare/upload",
+                files={"file": (
+                    "customer_bom.xlsx", xlsx_bytes,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )},
+                data={"item_number": "LF100001", "facility": "D"},
+            )
+
+        assert resp.status_code == 200
+
+    def test_missing_required_columns_returns_422(self):
+        bad_csv = b"Foo,Bar\n1,2\n"
+
+        client = _make_client(_ENGINEER)
+        resp = client.post(
+            "/api/v1/bom/compare/upload",
+            files={"file": ("bad.csv", bad_csv, "text/csv")},
+            data={"item_number": "LF100001", "facility": "D"},
+        )
+
+        assert resp.status_code == 422
+
+    def test_row_missing_quantity_returns_422_naming_the_row_number(self):
+        """Per-row validation (plan: "422 with row numbers on bad rows").
+        Quantity presence is required; quantity does NOT have to be numeric
+        (defect (b) — a non-numeric quantity like "N/A" is valid data, only
+        a genuinely BLANK quantity is a row-level error)."""
+        csv_bytes = (
+            b"IPN,CPN,MFR1,MPN1,MFR2,MPN2,Designator,Description,Quantity,Footprint\n"
+            b"LF200010,CPN-1001,STMicroelectronics,STM32F103C8T6,,,U1,MCU,,LQFP48\n"
+        )
+
+        client = _make_client(_ENGINEER)
+        resp = client.post(
+            "/api/v1/bom/compare/upload",
+            files={"file": ("bad_row.csv", csv_bytes, "text/csv")},
+            data={"item_number": "LF100001", "facility": "D"},
+        )
+
+        assert resp.status_code == 422
+        assert "Row 1" in resp.json()["detail"]
+
+    def test_non_numeric_quantity_is_not_a_row_validation_error(self):
+        """The defect-(b) regression at the endpoint layer: "N/A" quantity
+        is accepted (only a genuinely blank quantity is rejected)."""
+        csv_bytes = (
+            b"IPN,CPN,MFR1,MPN1,MFR2,MPN2,Designator,Description,Quantity,Footprint\n"
+            b"LF200010,CPN-1001,STMicroelectronics,STM32F103C8T6,,,U1,MCU,N/A,LQFP48\n"
+        )
+
+        with patch("src.routers.bom.get_single_level_bom", new_callable=AsyncMock) as mock_bom, \
+             patch("src.routers.bom.insert_comparison", new_callable=AsyncMock) as mock_insert, \
+             patch("src.routers.bom.MovexRestAdapter.lookup_by_alias", new_callable=AsyncMock) as mock_alias:
+            from src.services.bom.models import BOMHead
+
+            mock_bom.return_value = BOMHead(
+                item_number="LF100001", structure_type="001", facility="D", description="A", lines=[],
+            )
+            mock_alias.return_value = [{"ITNO": "LF200010", "POPN": "CPN-1001", "ALWT": "1", "ALWQ": "", "E0PA": ""}]
+            mock_insert.return_value = _SAVED_COMPARISON
+
+            client = _make_client(_ENGINEER)
+            resp = client.post(
+                "/api/v1/bom/compare/upload",
+                files={"file": ("na_qty.csv", csv_bytes, "text/csv")},
+                data={"item_number": "LF100001", "facility": "D"},
+            )
+
+        assert resp.status_code == 200
+
+    def test_wrong_content_type_returns_422(self):
+        client = _make_client(_ENGINEER)
+        resp = client.post(
+            "/api/v1/bom/compare/upload",
+            files={"file": ("data.txt", b"not a spreadsheet", "text/plain")},
+            data={"item_number": "LF100001", "facility": "D"},
+        )
+
+        assert resp.status_code == 422
+
+    def test_empty_file_returns_422(self):
+        empty_csv = (",".join(_UPLOAD_HEADERS) + "\n").encode("utf-8")
+
+        client = _make_client(_ENGINEER)
+        resp = client.post(
+            "/api/v1/bom/compare/upload",
+            files={"file": ("empty.csv", empty_csv, "text/csv")},
+            data={"item_number": "LF100001", "facility": "D"},
+        )
+
+        assert resp.status_code == 422
