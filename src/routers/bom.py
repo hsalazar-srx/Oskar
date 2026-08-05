@@ -20,9 +20,11 @@ from src.adapters.erp.movex import MovexRestAdapter
 from src.auth.dependencies import CurrentUser, get_current_user
 from src.db import get_session
 from src.services.bom.browse import get_single_level_bom
+from src.services.bom.compare import CompareOptions, diff_boms
 from src.services.bom.comparisons import get_comparison, insert_comparison
 from src.services.bom.explode import assemble_where_used, build_bom_tree
 from src.services.bom.models import BOMCycleError, BOMHead, BOMTreeNode, WhereUsedLine
+from src.services.bom.snapshots import get_snapshot
 
 bom_router = APIRouter(prefix="/bom", tags=["bom"])
 
@@ -183,6 +185,139 @@ async def get_bom_comparison(
             detail=f"No saved comparison found for id {comparison_id!r}.",
         )
     return _comparison_to_response(comparison)
+
+
+class CompareSideDescriptor(BaseModel):
+    """{type: erp|snapshot, ...identifying fields} — no "upload" here; upload
+    sides go through POST /bom/compare/upload instead, which builds its
+    customer-line list directly from the multipart file rather than via a
+    descriptor round trip."""
+    type: str
+    item_number: str | None = None
+    facility: str | None = None
+    structure_type: str | None = "001"
+    snapshot_id: str | None = None
+
+
+class CompareOptionsBody(BaseModel):
+    key: list[str] | None = None
+    fields: list[str] | None = None
+
+
+class CompareRequest(BaseModel):
+    left: CompareSideDescriptor
+    right: CompareSideDescriptor
+    options: CompareOptionsBody = CompareOptionsBody()
+
+
+async def _resolve_compare_side(
+    descriptor: CompareSideDescriptor,
+    erp: MovexRestAdapter,
+    session: AsyncSession,
+) -> list[dict[str, Any]]:
+    """Descriptor -> plain line-dict list for diff_boms(). 'erp' calls
+    get_single_level_bom (Slice A) and flattens BOMLine dataclasses to
+    dicts; 'snapshot' fetches a bom_snapshots row (Slice D, migration 0026)
+    and returns its stored lines as-is (already plain dicts, JSONB round
+    trip)."""
+    if descriptor.type == "erp":
+        if not descriptor.item_number or not descriptor.facility:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="'erp' descriptor requires item_number and facility.",
+            )
+        head = await get_single_level_bom(
+            erp, descriptor.item_number, descriptor.facility,
+            structure_type=descriptor.structure_type or "001",
+        )
+        return [vars(line) for line in head.lines]
+
+    if descriptor.type == "snapshot":
+        if not descriptor.snapshot_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="'snapshot' descriptor requires snapshot_id.",
+            )
+        snapshot = await get_snapshot(session, descriptor.snapshot_id)
+        if snapshot is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No snapshot found for id {descriptor.snapshot_id!r}.",
+            )
+        return snapshot.lines
+
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail=f"Unsupported compare side type {descriptor.type!r}. Use 'erp' or 'snapshot'.",
+    )
+
+
+@bom_router.post(
+    "/compare",
+    response_model=ComparisonResponse,
+    summary="Compare two BOMs (ERP item or saved snapshot) and save the result (Slice D)",
+)
+async def post_bom_compare(
+    body: CompareRequest,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    erp: Annotated[MovexRestAdapter, Depends(_get_erp_adapter)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ComparisonResponse:
+    """Resolve both descriptors to line lists, diff via compare.diff_boms,
+    persist the result (bom_comparisons, migration 0027), and return it.
+
+    Match key defaults to compare.py's own default
+    (component_number, operation_number) when options.key is omitted —
+    the ERP-vs-ERP default per D5. options.fields=None diffs every field
+    common to both sides (compare.py's own default), i.e. the "no toggle
+    applied" case.
+    """
+    try:
+        left_lines = await _resolve_compare_side(body.left, erp, session)
+        right_lines = await _resolve_compare_side(body.right, erp, session)
+    except BOMNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except (RuntimeError, httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException) as exc:
+        _raise_for_erp_error(exc)
+        raise  # unreachable
+
+    opts_kwargs: dict[str, Any] = {}
+    if body.options.key is not None:
+        opts_kwargs["key"] = tuple(body.options.key)
+    if body.options.fields is not None:
+        opts_kwargs["fields"] = tuple(body.options.fields)
+    opts = CompareOptions(**opts_kwargs)
+
+    diff = diff_boms(left_lines, right_lines, opts=opts)
+    result_payload = {
+        "added": diff.added,
+        "removed": diff.removed,
+        "changed": [
+            {
+                "key": list(c.key),
+                "left": c.left,
+                "right": c.right,
+                "field_changes": [
+                    {"field": fc.field, "old_value": fc.old_value, "new_value": fc.new_value}
+                    for fc in c.field_changes
+                ],
+            }
+            for c in diff.changed
+        ],
+        "unresolved": [
+            {"side": u.side, "line": u.line, "reason": u.reason} for u in diff.unresolved
+        ],
+        "stats": vars(diff.stats),
+    }
+
+    saved = await insert_comparison(
+        session,
+        left_descriptor=body.left.model_dump(exclude_none=True),
+        right_descriptor=body.right.model_dump(exclude_none=True),
+        comparison_result=result_payload,
+        created_by=user.username,
+    )
+    return _comparison_to_response(saved)
 
 
 # ── Slice A: single-level browse ──────────────────────────────────────────────
