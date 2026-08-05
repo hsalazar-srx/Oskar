@@ -490,6 +490,95 @@ class TestPostCompareUpload:
 
         assert resp.status_code == 200
 
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/bom/comparisons/{id}/export — xlsx, fixed field set regardless
+# of which fields the compare itself was restricted to (parity with PLM:
+# "Export to .xlsx only, always using the full fixed field set regardless of
+# on-screen column visibility").
+# ---------------------------------------------------------------------------
+
+_EXPORT_COMPARISON = BOMComparison(
+    id="22222222-2222-2222-2222-222222222222",
+    left_descriptor={"type": "erp", "item_number": "LF100001", "facility": "D"},
+    right_descriptor={"type": "erp", "item_number": "LF100002", "facility": "D"},
+    comparison_result={
+        "added": [{"item_number": "LF200099", "quantity": 1.0}],
+        "removed": [{"item_number": "LF200098", "quantity": 2.0}],
+        "changed": [
+            {
+                "key": ["LF200010"],
+                "left": {"item_number": "LF200010", "quantity": 4.0},
+                "right": {"item_number": "LF200010", "quantity": 6.0},
+                "field_changes": [{"field": "quantity", "old_value": 4.0, "new_value": 6.0}],
+            },
+        ],
+        "unresolved": [],
+        "stats": {"left_count": 2, "right_count": 2, "added_count": 1,
+                  "removed_count": 1, "changed_count": 1, "unresolved_count": 0},
+    },
+    cost_impact=None,
+    risk_flags=[],
+    created_by="eng_user",
+    created_at=__import__("datetime").datetime(2026, 8, 1, tzinfo=__import__("datetime").timezone.utc),
+)
+
+
+class TestExportComparison:
+    def test_existing_comparison_export_returns_200(self):
+        with patch("src.routers.bom.get_comparison", new_callable=AsyncMock) as mock:
+            mock.return_value = _EXPORT_COMPARISON
+            client = _make_client(_ENGINEER)
+            resp = client.get(f"/api/v1/bom/comparisons/{_EXPORT_COMPARISON.id}/export")
+
+        assert resp.status_code == 200
+
+    def test_export_returns_xlsx_content_type(self):
+        with patch("src.routers.bom.get_comparison", new_callable=AsyncMock) as mock:
+            mock.return_value = _EXPORT_COMPARISON
+            client = _make_client(_ENGINEER)
+            resp = client.get(f"/api/v1/bom/comparisons/{_EXPORT_COMPARISON.id}/export")
+
+        assert resp.headers["content-type"] == (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    def test_export_is_a_valid_workbook_with_all_three_diff_sections(self):
+        with patch("src.routers.bom.get_comparison", new_callable=AsyncMock) as mock:
+            mock.return_value = _EXPORT_COMPARISON
+            client = _make_client(_ENGINEER)
+            resp = client.get(f"/api/v1/bom/comparisons/{_EXPORT_COMPARISON.id}/export")
+
+        wb = openpyxl.load_workbook(io.BytesIO(resp.content))
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        statuses = {row[0] for row in rows[1:]}  # skip header row
+        assert statuses == {"Added", "Removed", "Changed"}
+
+    def test_export_uses_fixed_field_set_regardless_of_compare_fields_restriction(self):
+        """PLM parity: export always uses the full fixed field set, even
+        though this comparison's own diff was computed with fields
+        restricted (comparison_result still carries whatever the diff
+        touched — export presents it via a fixed column layout, not a
+        layout that varies with what was toggled at compare time)."""
+        with patch("src.routers.bom.get_comparison", new_callable=AsyncMock) as mock:
+            mock.return_value = _EXPORT_COMPARISON
+            client = _make_client(_ENGINEER)
+            resp = client.get(f"/api/v1/bom/comparisons/{_EXPORT_COMPARISON.id}/export")
+
+        wb = openpyxl.load_workbook(io.BytesIO(resp.content))
+        ws = wb.active
+        header = [c.value for c in next(ws.iter_rows(max_row=1))]
+        assert header == ["Status", "Key", "Field", "Old Value", "New Value"]
+
+    def test_unknown_comparison_id_export_returns_404(self):
+        with patch("src.routers.bom.get_comparison", new_callable=AsyncMock) as mock:
+            mock.return_value = None
+            client = _make_client(_ENGINEER)
+            resp = client.get("/api/v1/bom/comparisons/99999999-9999-9999-9999-999999999999/export")
+
+        assert resp.status_code == 404
+
     def test_wrong_content_type_returns_422(self):
         client = _make_client(_ENGINEER)
         resp = client.post(

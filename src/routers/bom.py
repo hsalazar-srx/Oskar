@@ -13,7 +13,7 @@ from typing import Annotated, Any
 
 import httpx
 import openpyxl
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response, UploadFile, status
 from openpyxl import Workbook
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -190,6 +190,79 @@ async def get_bom_comparison(
             detail=f"No saved comparison found for id {comparison_id!r}.",
         )
     return _comparison_to_response(comparison)
+
+
+_EXPORT_HEADER = ["Status", "Key", "Field", "Old Value", "New Value"]
+
+
+def _comparison_result_to_workbook(comparison_result: dict[str, Any]) -> Workbook:
+    """PLM parity: export always uses this FIXED field set, regardless of
+    what CompareOptions.fields the comparison itself was restricted to on
+    screen (ai/tasks/oskar-iteration-2.md Context: "Export to .xlsx only,
+    always using the full fixed field set regardless of on-screen column
+    visibility"). One row per (line, field_change) — a changed line with
+    three field changes produces three export rows, one per changed field,
+    so every value that differs is individually visible rather than
+    collapsed into one cell."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "BOM Comparison"
+    ws.append(_EXPORT_HEADER)
+
+    for line in comparison_result.get("added", []):
+        ws.append(["Added", _line_display_key(line), "", "", _line_display_value(line)])
+    for line in comparison_result.get("removed", []):
+        ws.append(["Removed", _line_display_key(line), "", _line_display_value(line), ""])
+    for changed in comparison_result.get("changed", []):
+        key_display = "/".join(str(k) for k in changed.get("key", []))
+        for fc in changed.get("field_changes", []):
+            ws.append([
+                "Changed", key_display, fc.get("field", ""),
+                fc.get("old_value"), fc.get("new_value"),
+            ])
+
+    return wb
+
+
+def _line_display_key(line: dict[str, Any]) -> str:
+    for candidate in ("item_number", "component_number", "ipn"):
+        if candidate in line:
+            return str(line[candidate])
+    return ""
+
+
+def _line_display_value(line: dict[str, Any]) -> str:
+    return ", ".join(f"{k}={v}" for k, v in line.items())
+
+
+@bom_router.get(
+    "/comparisons/{comparison_id}/export",
+    summary="Export a saved BOM comparison to .xlsx (Slice D — fixed field set, PLM parity)",
+)
+async def export_bom_comparison(
+    comparison_id: str,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+):
+    comparison = await get_comparison(session, comparison_id)
+    if comparison is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No saved comparison found for id {comparison_id!r}.",
+        )
+
+    wb = _comparison_result_to_workbook(comparison.comparison_result)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="bom-comparison-{comparison_id}.xlsx"'
+        },
+    )
 
 
 class CompareSideDescriptor(BaseModel):
