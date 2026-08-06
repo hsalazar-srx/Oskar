@@ -612,6 +612,9 @@ each ECN based on customer. Built as a per-customer SE/PM candidate table, seede
 ## Iteration 2 — Backlog (Post-PoC)
 
 > Items confirmed as out of scope for Iteration 1 and queued for Iteration 2 planning.
+> Last updated 2026-08-06: BOM module Slices 0/A/B/C/D landed (ADR-012) — I2-2 delivered
+> (customer BOM compare, see Slice D notes and follow-up gaps I2-15/16/17 below); I2-6
+> (BOM concurrency detection) still open, targeted for Slice E.
 > Last updated 2026-07-09: Sprint 7 shipped DMR, Implementation Schedule, Admin CRUD, Cancel ECN.
 > I2-7 (routing ops UI) and I2-3 (MPN extended fields) pulled into Sprint 8.
 > I2-14 (originator reassignment) remains Iteration 2.
@@ -619,7 +622,7 @@ each ECN based on customer. Built as a per-customer SE/PM candidate table, seede
 | # | Item | Source | Notes |
 |---|------|--------|-------|
 | I2-1 | Facility-scoped ECN digest — send per-facility digest emails so JB DCs only see JB ECNs and Melbourne DCs only see Melbourne ECNs. Current `_fetch_open_ecns()` has no facility filter — when both facilities go live, DC recipients will see cross-facility ECNs. Fix: filter digest query by `facility` and dispatch one email per facility group, or add a facility column + filter UI on the digest. | Gap analysis vs `ECN-Open-NextAction-Johor.xls` 2026-06-22 | `src/tasks/ecn_notifications.py:132-156` |
-| I2-2 | Customer BOM vs Quoted BOM comparison | Karen/Nick 2026-04-29 meeting (1:10:42) | Iteration 2/3 per Karen |
+| I2-2 | ✅ Customer BOM vs Quoted BOM comparison | Karen/Nick 2026-04-29 meeting (1:10:42) | Delivered Slice D (ADR-012), 2026-08-06 — `src/services/bom/customer_bom.py`, `POST /bom/compare/upload`. Three known follow-up gaps tracked as I2-15/16/17. |
 | I2-3 | MPN extended fields UI — `lifecycle`, `eol_date`, `lead_time_weeks`, `msl_level`, `packaging_type`, `do_not_buy`, `alt_mpn` display in ECN item panel | S2-15 deferred | → Sprint 8 (S8-B) |
 | I2-4 | DC recovery panel — Movex write status display (SSE infra + pg_notify ✅) | S2-16 deferred | Display panel UI build |
 | I2-5 | ECN version/revision lineage — UI display of SHA-256 audit chain | S2-17 deferred | Audit chain ✅ in DB |
@@ -632,6 +635,9 @@ each ECN based on customer. Built as a per-customer SE/PM candidate table, seede
 | I2-12 | G — BOM enhancements — TXT format export, cross-reference ECN deletion vs active BOM, DigiKey attribute lookup, MPN not-found flow → new ECN | Iteration 2/3 | Full analysis in plan file |
 | I2-13 | H — Transmittal & SharePoint document management — Oskar-native PDF transmittal generation; email distribution; legacy DMR path redirect | Iteration 2/3 | Requires SharePoint Graph API |
 | I2-14 | I — Originator reassignment — `PATCH /api/v1/ecn/{id}/reassign`; DC-only; bypasses OR lock; transition history entry; notification email. Low-frequency edge case (user leaves, handover). | Moved from Sprint 7 | OR role is explicitly blocked from `assign_role`; needs dedicated endpoint |
+| I2-15 | Movex BOM-finder dialog on `BOMComparePage` — search-by-item/customer picker for the "live ERP item" compare source, matching the finder pattern PLM's `/bomcomparison` uses. Backend (`GET /api/v1/bom/{item}`) already supports it; no picker UI exists yet — users must know the item number. | Slice D delivery gap, 2026-08-06 | `frontend/src/pages/BOMComparePage.tsx` |
+| I2-16 | Saved-snapshot picker UI on `BOMComparePage` — browse/select a prior `bom_snapshots` row as a compare source. Backend already supports `snapshot` descriptors and `GET /bom/comparisons/{id}`; no snapshot-browse page exists in any slice yet. | Slice D delivery gap, 2026-08-06 | `src/services/bom/snapshots.py` (backend done); no frontend page |
+| I2-17 | Comparison history list — `GET /api/v1/bom/comparisons` (list, not just get-by-id) + a history page/tab, so "save + history" is a real browsable list rather than only reachable via a comparison's own URL. | Slice D delivery gap, 2026-08-06 | Router scope for Slice D was get-by-id only; list endpoint not built |
 
 ---
 
