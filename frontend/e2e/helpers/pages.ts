@@ -306,4 +306,61 @@ export class BOMBrowserPage {
   async whereUsedParentItems(): Promise<string[]> {
     return this.page.locator("tbody tr td:nth-child(1)").allTextContents()
   }
+
+  // ── Slice D: "Compare against…" launcher ───────────────────────────────────
+
+  async clickCompareAgainst() {
+    await this.page.getByRole("button", { name: /compare against/i }).click()
+  }
+}
+
+// ── BOMComparePage (Slice D, ADR-012 D5) ─────────────────────────────────────
+
+export class BOMComparePage {
+  constructor(private page: Page) {}
+
+  async goto() {
+    await this.page.goto("/bom/compare")
+    await this.page.waitForURL("**/bom/compare**")
+  }
+
+  async setLeftItem(itemNumber: string) {
+    await this.page.getByLabel(/old \(left\) item number/i).fill(itemNumber)
+  }
+
+  async setRightItem(itemNumber: string) {
+    await this.page.getByLabel(/new \(right\) item number/i).fill(itemNumber)
+  }
+
+  async clickCompare() {
+    await this.page.getByRole("button", { name: /^compare$/i }).click()
+  }
+
+  async waitForResult() {
+    await this.page.waitForSelector("text=/Differences|No differences/", { timeout: 10_000 })
+  }
+
+  async summaryCounts(): Promise<{ differences: number; additions: number; subtractions: number }> {
+    const tiles = this.page.locator(".rounded-lg.border.px-3.py-2")
+    const differences = Number(await tiles.nth(0).locator(".text-lg").textContent())
+    const additions = Number(await tiles.nth(1).locator(".text-lg").textContent())
+    const subtractions = Number(await tiles.nth(2).locator(".text-lg").textContent())
+    return { differences, additions, subtractions }
+  }
+
+  async diffRowCount(): Promise<number> {
+    return this.page.locator("tbody tr").count()
+  }
+
+  async toggleField(fieldName: string) {
+    await this.page.getByLabel(new RegExp(`toggle field ${fieldName}`, "i")).click()
+  }
+
+  async clickExport() {
+    await this.page.getByRole("link", { name: /export \.xlsx/i }).click()
+  }
+
+  async leftItemPrefill(): Promise<string> {
+    return this.page.getByLabel(/old \(left\) item number/i).inputValue()
+  }
 }
