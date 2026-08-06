@@ -23,17 +23,23 @@ ecn_id is nullable (a compare/manual snapshot is not tied to any ECN) with
 ON DELETE SET NULL — deleting an ECN must not cascade-delete its submit
 snapshots (the D2 "audit trail" reason those exist at all).
 
-Revision ID: 0026
-Revises: 0025
+Revision ID: 0027
+Revises: 0026
 Create Date: 2026-08-04
+
+Renumbered 2026-08-06: originally authored as 0026 in an isolated worktree
+(claude/oskar-bom-slice-d) branched before 0026_ecn_comments_soft_delete.py
+landed on master via a separate, concurrent line of work. Collision caught
+before this revision was ever safely applied — see 0026_ecn_comments_soft_delete.py
+for the unrelated migration that keeps the original 0026 slot.
 """
 from __future__ import annotations
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0026"
-down_revision = "0025"
+revision = "0027"
+down_revision = "0026"
 branch_labels = None
 depends_on = None
 

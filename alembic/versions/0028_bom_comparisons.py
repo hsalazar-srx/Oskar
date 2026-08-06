@@ -21,16 +21,19 @@ costing/risk-scoring logic exists yet); the columns exist now so a later
 slice (Iteration 3 costing intelligence, or an earlier Slice E BOM-scrub
 overlap) can populate them without a further migration.
 
-Revision ID: 0027
-Revises: 0026
+Revision ID: 0028
+Revises: 0027
 Create Date: 2026-08-04
+
+Renumbered 2026-08-06 alongside 0027_bom_snapshots.py — see that file's
+docstring for why.
 """
 from __future__ import annotations
 
 from alembic import op
 
-revision = "0027"
-down_revision = "0026"
+revision = "0028"
+down_revision = "0027"
 branch_labels = None
 depends_on = None
 
