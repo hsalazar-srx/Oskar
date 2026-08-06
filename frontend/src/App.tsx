@@ -7,6 +7,7 @@ import ECNCreatePage from "@/pages/ECNCreatePage"
 import ECNDetailPage from "@/pages/ECNDetailPage"
 import AdminPage from "@/pages/AdminPage"
 import BOMBrowserPage from "@/pages/BOMBrowserPage"
+import BOMComparePage from "@/pages/BOMComparePage"
 import MPNSearchPage from "@/pages/MPNSearchPage"
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -46,6 +47,10 @@ export default function App() {
           <Route
             path="/bom"
             element={<ProtectedRoute><BOMBrowserPage /></ProtectedRoute>}
+          />
+          <Route
+            path="/bom/compare"
+            element={<ProtectedRoute><BOMComparePage /></ProtectedRoute>}
           />
           <Route
             path="/mpn"

@@ -157,16 +157,25 @@ export default function BOMBrowserPage() {
 
         {itemNumber && data && !isLoading && (
           <div className="space-y-4">
-            <div className="rounded-xl border border-[#e8ecf0] bg-white px-5 py-4 shadow-[var(--shadow-sm)]">
-              <div className="flex items-baseline gap-3">
-                <span className="font-mono text-lg font-semibold text-[#0066cc]">{data.item_number}</span>
-                <span className="text-sm text-[#0f172a]">{data.description}</span>
+            <div className="rounded-xl border border-[#e8ecf0] bg-white px-5 py-4 shadow-[var(--shadow-sm)] flex items-start justify-between gap-4">
+              <div>
+                <div className="flex items-baseline gap-3">
+                  <span className="font-mono text-lg font-semibold text-[#0066cc]">{data.item_number}</span>
+                  <span className="text-sm text-[#0f172a]">{data.description}</span>
+                </div>
+                <div className="mt-1 flex gap-4 text-xs text-[#94a3b8]">
+                  <span>Facility: <span className="font-mono text-[#475569]">{data.facility}</span></span>
+                  <span>Structure: <span className="font-mono text-[#475569]">{data.structure_type}</span></span>
+                  <span>{data.lines.length} line{data.lines.length !== 1 ? "s" : ""}</span>
+                </div>
               </div>
-              <div className="mt-1 flex gap-4 text-xs text-[#94a3b8]">
-                <span>Facility: <span className="font-mono text-[#475569]">{data.facility}</span></span>
-                <span>Structure: <span className="font-mono text-[#475569]">{data.structure_type}</span></span>
-                <span>{data.lines.length} line{data.lines.length !== 1 ? "s" : ""}</span>
-              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => navigate(`/bom/compare?left=${encodeURIComponent(data.item_number)}&leftFacility=${encodeURIComponent(data.facility)}`)}
+              >
+                Compare against…
+              </Button>
             </div>
 
             {/* Tab bar */}
