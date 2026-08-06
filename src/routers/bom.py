@@ -8,18 +8,28 @@ GET /api/v1/bom/{item_number}/where-used       Where-used lookup (Slice B, B-3)
 
 from __future__ import annotations
 
-from typing import Annotated
+import io
+from typing import Annotated, Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel
+import openpyxl
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response, UploadFile, status
+from openpyxl import Workbook
+from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.adapters.erp.base import BOMNotFound
 from src.adapters.erp.movex import MovexRestAdapter
 from src.auth.dependencies import CurrentUser, get_current_user
+from src.db import get_session
+from src.routers.bulk_upload import BulkUploadSpec, parse_bulk_upload
 from src.services.bom.browse import get_single_level_bom
+from src.services.bom.compare import CompareOptions, diff_boms
+from src.services.bom.comparisons import get_comparison, insert_comparison
+from src.services.bom.customer_bom import CustomerLine, compare_customer_bom
 from src.services.bom.explode import assemble_where_used, build_bom_tree
 from src.services.bom.models import BOMCycleError, BOMHead, BOMTreeNode, WhereUsedLine
+from src.services.bom.snapshots import get_snapshot
 
 bom_router = APIRouter(prefix="/bom", tags=["bom"])
 
@@ -132,6 +142,503 @@ def _raise_for_erp_error(exc: Exception) -> None:
             detail="ERP connection failed after retries.",
         )
     raise exc
+
+
+# ── Slice D: BOM comparison engine ──────────────────────────────────────────────
+# Declared BEFORE the "/{item_number}" routes below (Slice A/B) — "compare"
+# and "comparisons" would otherwise be swallowed as an item_number path
+# param, same reasoning as ecn_items.py's bulk-upload-before-{item_id} note.
+
+class ComparisonResponse(BaseModel):
+    id: str
+    left_descriptor: dict[str, Any]
+    right_descriptor: dict[str, Any]
+    comparison_result: dict[str, Any]
+    cost_impact: float | None
+    risk_flags: list[str]
+    created_by: str
+    created_at: str
+
+
+def _comparison_to_response(comp) -> ComparisonResponse:
+    return ComparisonResponse(
+        id=comp.id,
+        left_descriptor=comp.left_descriptor,
+        right_descriptor=comp.right_descriptor,
+        comparison_result=comp.comparison_result,
+        cost_impact=float(comp.cost_impact) if comp.cost_impact is not None else None,
+        risk_flags=comp.risk_flags,
+        created_by=comp.created_by,
+        created_at=comp.created_at.isoformat(),
+    )
+
+
+@bom_router.get(
+    "/comparisons/{comparison_id}",
+    response_model=ComparisonResponse,
+    summary="Fetch a saved BOM comparison (Slice D)",
+)
+async def get_bom_comparison(
+    comparison_id: str,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ComparisonResponse:
+    comparison = await get_comparison(session, comparison_id)
+    if comparison is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No saved comparison found for id {comparison_id!r}.",
+        )
+    return _comparison_to_response(comparison)
+
+
+_EXPORT_HEADER = ["Status", "Key", "Field", "Old Value", "New Value"]
+
+
+def _comparison_result_to_workbook(comparison_result: dict[str, Any]) -> Workbook:
+    """PLM parity: export always uses this FIXED field set, regardless of
+    what CompareOptions.fields the comparison itself was restricted to on
+    screen (ai/tasks/oskar-iteration-2.md Context: "Export to .xlsx only,
+    always using the full fixed field set regardless of on-screen column
+    visibility"). One row per (line, field_change) — a changed line with
+    three field changes produces three export rows, one per changed field,
+    so every value that differs is individually visible rather than
+    collapsed into one cell."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "BOM Comparison"
+    ws.append(_EXPORT_HEADER)
+
+    for line in comparison_result.get("added", []):
+        ws.append(["Added", _line_display_key(line), "", "", _line_display_value(line)])
+    for line in comparison_result.get("removed", []):
+        ws.append(["Removed", _line_display_key(line), "", _line_display_value(line), ""])
+    for changed in comparison_result.get("changed", []):
+        key_display = "/".join(str(k) for k in changed.get("key", []))
+        for fc in changed.get("field_changes", []):
+            ws.append([
+                "Changed", key_display, fc.get("field", ""),
+                fc.get("old_value"), fc.get("new_value"),
+            ])
+
+    return wb
+
+
+def _line_display_key(line: dict[str, Any]) -> str:
+    for candidate in ("item_number", "component_number", "ipn"):
+        if candidate in line:
+            return str(line[candidate])
+    return ""
+
+
+def _line_display_value(line: dict[str, Any]) -> str:
+    return ", ".join(f"{k}={v}" for k, v in line.items())
+
+
+@bom_router.get(
+    "/comparisons/{comparison_id}/export",
+    summary="Export a saved BOM comparison to .xlsx (Slice D — fixed field set, PLM parity)",
+)
+async def export_bom_comparison(
+    comparison_id: str,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+):
+    comparison = await get_comparison(session, comparison_id)
+    if comparison is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No saved comparison found for id {comparison_id!r}.",
+        )
+
+    wb = _comparison_result_to_workbook(comparison.comparison_result)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="bom-comparison-{comparison_id}.xlsx"'
+        },
+    )
+
+
+class CompareSideDescriptor(BaseModel):
+    """{type: erp|snapshot, ...identifying fields} — no "upload" here; upload
+    sides go through POST /bom/compare/upload instead, which builds its
+    customer-line list directly from the multipart file rather than via a
+    descriptor round trip."""
+    type: str
+    item_number: str | None = None
+    facility: str | None = None
+    structure_type: str | None = "001"
+    snapshot_id: str | None = None
+
+
+class CompareOptionsBody(BaseModel):
+    key: list[str] | None = None
+    fields: list[str] | None = None
+
+
+class CompareRequest(BaseModel):
+    left: CompareSideDescriptor
+    right: CompareSideDescriptor
+    options: CompareOptionsBody = CompareOptionsBody()
+
+
+async def _resolve_compare_side(
+    descriptor: CompareSideDescriptor,
+    erp: MovexRestAdapter,
+    session: AsyncSession,
+) -> list[dict[str, Any]]:
+    """Descriptor -> plain line-dict list for diff_boms(). 'erp' calls
+    get_single_level_bom (Slice A) and flattens BOMLine dataclasses to
+    dicts; 'snapshot' fetches a bom_snapshots row (Slice D, migration 0026)
+    and returns its stored lines as-is (already plain dicts, JSONB round
+    trip)."""
+    if descriptor.type == "erp":
+        if not descriptor.item_number or not descriptor.facility:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="'erp' descriptor requires item_number and facility.",
+            )
+        head = await get_single_level_bom(
+            erp, descriptor.item_number, descriptor.facility,
+            structure_type=descriptor.structure_type or "001",
+        )
+        return [vars(line) for line in head.lines]
+
+    if descriptor.type == "snapshot":
+        if not descriptor.snapshot_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="'snapshot' descriptor requires snapshot_id.",
+            )
+        snapshot = await get_snapshot(session, descriptor.snapshot_id)
+        if snapshot is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No snapshot found for id {descriptor.snapshot_id!r}.",
+            )
+        return snapshot.lines
+
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail=f"Unsupported compare side type {descriptor.type!r}. Use 'erp' or 'snapshot'.",
+    )
+
+
+@bom_router.post(
+    "/compare",
+    response_model=ComparisonResponse,
+    summary="Compare two BOMs (ERP item or saved snapshot) and save the result (Slice D)",
+)
+async def post_bom_compare(
+    body: CompareRequest,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    erp: Annotated[MovexRestAdapter, Depends(_get_erp_adapter)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ComparisonResponse:
+    """Resolve both descriptors to line lists, diff via compare.diff_boms,
+    persist the result (bom_comparisons, migration 0027), and return it.
+
+    Match key defaults to compare.py's own default
+    (component_number, operation_number) when options.key is omitted —
+    the ERP-vs-ERP default per D5. options.fields=None diffs every field
+    common to both sides (compare.py's own default), i.e. the "no toggle
+    applied" case.
+    """
+    try:
+        left_lines = await _resolve_compare_side(body.left, erp, session)
+        right_lines = await _resolve_compare_side(body.right, erp, session)
+    except BOMNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except (RuntimeError, httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException) as exc:
+        _raise_for_erp_error(exc)
+        raise  # unreachable
+
+    opts_kwargs: dict[str, Any] = {}
+    if body.options.key is not None:
+        opts_kwargs["key"] = tuple(body.options.key)
+    if body.options.fields is not None:
+        opts_kwargs["fields"] = tuple(body.options.fields)
+    opts = CompareOptions(**opts_kwargs)
+
+    diff = diff_boms(left_lines, right_lines, opts=opts)
+    result_payload = {
+        "added": diff.added,
+        "removed": diff.removed,
+        "changed": [
+            {
+                "key": list(c.key),
+                "left": c.left,
+                "right": c.right,
+                "field_changes": [
+                    {"field": fc.field, "old_value": fc.old_value, "new_value": fc.new_value}
+                    for fc in c.field_changes
+                ],
+            }
+            for c in diff.changed
+        ],
+        "unresolved": [
+            {"side": u.side, "line": u.line, "reason": u.reason} for u in diff.unresolved
+        ],
+        "stats": vars(diff.stats),
+    }
+
+    saved = await insert_comparison(
+        session,
+        left_descriptor=body.left.model_dump(exclude_none=True),
+        right_descriptor=body.right.model_dump(exclude_none=True),
+        comparison_result=result_payload,
+        created_by=user.username,
+    )
+    return _comparison_to_response(saved)
+
+
+# ── Slice D: customer-BOM compare via file upload ───────────────────────────────
+# Reuses BulkUploadSpec/parse_bulk_upload (src/routers/bulk_upload.py) per the
+# plan's "reuse ecn_items.py bulk constants" note. Canonical customer-BOM
+# column shape (parity with PLM's upload flow, ai/tasks/oskar-iteration-2.md
+# Context): IPN, CPN, MFR1/MPN1, MFR2/MPN2 (repeated manufacturer/part-number
+# pairs collapse into CustomerLine.mpn[]/mfr[] arrays), Designator,
+# Description, Quantity. Footprint is a mappable column but dropped before
+# comparison (dead in PLM too, per the plan) — simply absent from column_map.
+
+_CUSTOMER_BOM_UPLOAD_SPEC = BulkUploadSpec(
+    template_name="customer BOM compare template",
+    required_columns={"IPN", "MFR1", "MPN1", "Quantity"},
+    column_map={
+        "ipn": "ipn",
+        "cpn": "cpn",
+        "mfr1": "mfr_1",
+        "mpn1": "mpn_1",
+        "mfr2": "mfr_2",
+        "mpn2": "mpn_2",
+        "designator": "designator",
+        "description": "description",
+        "quantity": "quantity",
+    },
+    row_key_field="ipn",
+)
+
+
+async def _strip_leading_title_row_xlsx(file: UploadFile, spec: BulkUploadSpec) -> UploadFile:
+    """Work around parse_bulk_upload/_parse_xlsx's fixed "first non-blank
+    row is the header" rule (src/routers/bulk_upload.py — outside this
+    slice's file boundary, reused as-is, not modified) for the one real
+    case Slice 0's customer_bom.xlsx fixture was deliberately built to
+    exercise: a title row ("Customer BOM Export — generated ...") above the
+    real header row (its own docstring: "PLM's upload flow lets the user
+    pick which row is the header... this fixture exercises that row is not
+    always row 1"). Rather than silently failing that fixture or extending
+    the shared helper, this endpoint-local pre-pass finds the first row
+    that actually contains every one of spec.required_columns and rewrites
+    the workbook to start there before handing bytes to parse_bulk_upload.
+    A no-op (returns the original UploadFile untouched) for any file whose
+    first row already IS the header, or for non-xlsx content types."""
+    content_type = (file.content_type or "").lower().split(";")[0].strip()
+    if content_type not in (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel",
+    ):
+        return file
+
+    raw = await file.read()
+    await file.seek(0)
+
+    wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+    ws = wb.active
+    required_normalised = {c.strip().lower() for c in spec.required_columns}
+
+    rows = list(ws.iter_rows(values_only=True))
+    header_row_idx = None
+    for idx, row in enumerate(rows):
+        cells = {str(c).strip().lower() for c in row if c is not None}
+        if required_normalised <= cells:
+            header_row_idx = idx
+            break
+    wb.close()
+
+    if header_row_idx is None or header_row_idx == 0:
+        return file  # no title row to strip (or headers never found — let
+        # parse_bulk_upload's own missing-columns 422 report that clearly)
+
+    new_wb = Workbook()
+    new_ws = new_wb.active
+    for row in rows[header_row_idx:]:
+        new_ws.append(row)
+    buf = io.BytesIO()
+    new_wb.save(buf)
+    buf.seek(0)
+    return UploadFile(filename=file.filename, file=buf, headers=file.headers)
+
+
+class _CustomerBomUploadRow(BaseModel):
+    """Per-row validation (plan: "422 with row numbers on bad rows"). Only
+    quantity presence is enforced here — quantity does NOT have to be
+    numeric (defect (b) fix, compare.py module docstring: a non-numeric
+    quantity like "N/A" is valid data, not an error, and diffs correctly
+    via string-equality fallback). ipn is guaranteed non-blank already by
+    parse_bulk_upload's row_key_field mechanism, so is not re-validated
+    here."""
+    ipn: str = Field(..., min_length=1)
+    cpn: str | None = None
+    mfr_1: str | None = None
+    mpn_1: str | None = None
+    mfr_2: str | None = None
+    mpn_2: str | None = None
+    designator: str | None = None
+    description: str | None = None
+    quantity: str = Field(..., min_length=1)
+
+
+def _row_to_customer_line(row: _CustomerBomUploadRow) -> CustomerLine:
+    mpn = [m for m in (row.mpn_1, row.mpn_2) if m]
+    mfr = [m for m in (row.mfr_1, row.mfr_2) if m]
+    return CustomerLine(
+        cpn=row.cpn,
+        mpn=mpn,
+        mfr=mfr,
+        designator=row.designator,
+        description=row.description,
+        quantity=row.quantity,
+        ipn=row.ipn,
+    )
+
+
+@bom_router.post(
+    "/compare/upload",
+    response_model=ComparisonResponse,
+    summary="Compare an uploaded customer BOM (xlsx/csv) against an ERP item (Slice D, I2-2)",
+)
+async def post_bom_compare_upload(
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    erp: Annotated[MovexRestAdapter, Depends(_get_erp_adapter)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    file: UploadFile,
+    item_number: Annotated[str, Form(description="Oskar/Movex item to compare the upload against")],
+    facility: Annotated[str, Form(description="Movex facility (MPDHED.FACI)")] = "D",
+) -> ComparisonResponse:
+    """Parse the uploaded customer BOM, resolve each line to an Oskar
+    item_number via src/services/bom/customer_bom.py's resolution rule (CPN
+    alias through ERPAdapter.lookup_by_alias first, then MPN through
+    item_mpns — see compare_customer_bom's docstring for why CPN takes
+    priority), diff the resolved set against the ERP item's current
+    single-level BOM, persist, and return the result. Lines resolving via
+    neither path land in the response's `unresolved` bucket rather than
+    silently vanishing from the comparison.
+
+    422 (with per-row detail from parse_bulk_upload / row validation) on
+    unparseable files, missing required columns, or an empty data set —
+    same guard sequence as ecn_items.py's bulk endpoints.
+    """
+    file = await _strip_leading_title_row_xlsx(file, _CUSTOMER_BOM_UPLOAD_SPEC)
+    raw_rows = await parse_bulk_upload(file, _CUSTOMER_BOM_UPLOAD_SPEC)
+
+    validated_rows: list[_CustomerBomUploadRow] = []
+    row_errors: list[str] = []
+    for idx, raw in enumerate(raw_rows, start=1):
+        try:
+            validated_rows.append(_CustomerBomUploadRow(**raw))
+        except Exception as exc:
+            row_errors.append(f"Row {idx} ({raw.get('ipn', '?')}): {exc}")
+    if row_errors:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="; ".join(row_errors),
+        )
+
+    customer_lines = [_row_to_customer_line(row) for row in validated_rows]
+
+    try:
+        erp_head = await get_single_level_bom(erp, item_number, facility)
+    except BOMNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except (RuntimeError, httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException) as exc:
+        _raise_for_erp_error(exc)
+        raise  # unreachable
+
+    erp_lines = [
+        {"item_number": line.component_number, **vars(line)} for line in erp_head.lines
+    ]
+
+    # customer_bom.py's resolve_cpn/resolve_mpn contract is SYNCHRONOUS by
+    # design (pure-logic module — see its docstring: DB/HTTP wiring happens
+    # at the router layer). lookup_by_alias is a real async HTTP call, so
+    # every CPN is resolved up front here (one lookup_by_alias call per
+    # distinct CPN, not per line) into a plain dict, then handed to
+    # compare_customer_bom as a synchronous dict.get closure.
+    distinct_cpns = {ln.cpn for ln in customer_lines if ln.cpn}
+    cpn_to_item: dict[str, str] = {}
+    for cpn in distinct_cpns:
+        # MITPOP reverse-alias lookup (same mechanism as GET /parts/alias).
+        # Only a FULL MATCH (exactly one candidate) resolves — an ambiguous
+        # (partial_match) or absent (no_match) alias is not a safe automatic
+        # resolution and instead falls through to MPN, then to unresolved.
+        candidates = await erp.lookup_by_alias(cpn)
+        if len(candidates) == 1:
+            cpn_to_item[cpn] = str(candidates[0]["ITNO"]).strip()
+
+    # MPN resolution for this endpoint's specific compare-against-one-item
+    # shape: a customer MPN resolves only if it matches an MPN already
+    # present in the target item's OWN current BOM lines (no general
+    # cross-catalogue item_mpns query is issued here — that would let a
+    # customer file resolve to items entirely unrelated to the compare
+    # target, which is not what "compare this upload against item X"
+    # means). Exact-match on component_number text, since Slice A's browse
+    # layer does not expose manufacturer_canonical per line for a synonym-
+    # aware match.
+    mpn_to_item: dict[str, str] = {
+        str(ln.get("component_number", "")).strip().upper(): ln["item_number"]
+        for ln in erp_lines
+    }
+
+    def _resolve_cpn(cpn: str) -> str | None:
+        return cpn_to_item.get(cpn)
+
+    def _resolve_mpn(mpn: str) -> str | None:
+        return mpn_to_item.get(mpn.strip().upper())
+
+    result = compare_customer_bom(
+        customer_lines,
+        erp_lines,
+        resolve_cpn=_resolve_cpn,
+        resolve_mpn=_resolve_mpn,
+        opts=CompareOptions(key=("item_number",), fields=("quantity",)),
+    )
+
+    result_payload = {
+        "added": result.added,
+        "removed": result.removed,
+        "changed": [
+            {
+                "key": list(c.key),
+                "left": c.left,
+                "right": c.right,
+                "field_changes": [
+                    {"field": fc.field, "old_value": fc.old_value, "new_value": fc.new_value}
+                    for fc in c.field_changes
+                ],
+            }
+            for c in result.changed
+        ],
+        "unresolved": [
+            {"side": u.side, "line": u.line, "reason": u.reason} for u in result.unresolved
+        ],
+        "stats": vars(result.stats),
+    }
+
+    saved = await insert_comparison(
+        session,
+        left_descriptor={"type": "upload", "filename": file.filename},
+        right_descriptor={"type": "erp", "item_number": item_number, "facility": facility},
+        comparison_result=result_payload,
+        created_by=user.username,
+    )
+    return _comparison_to_response(saved)
 
 
 # ── Slice A: single-level browse ──────────────────────────────────────────────
