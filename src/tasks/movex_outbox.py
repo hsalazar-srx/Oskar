@@ -44,6 +44,17 @@ from src.tasks.celery_app import celery_app
 
 log = structlog.get_logger(__name__)
 
+# Fixed short delay for a dependency-not-ready requeue (Slice E0). Not part
+# of the attempt_count-driven retry schedule below — waiting on a dependency
+# isn't a failure, so it must never consume attempt budget, never trigger
+# the attempt-3 DC alert, and never itself count toward abandonment. 5s: the
+# dependency was dispatched concurrently with this entry (both created in
+# the same transition, both apply_async'd together), so it's typically
+# already in-flight, one MI call away from completing — short enough that
+# the common case costs ~1 poll cycle of added latency, long enough to
+# avoid a tight busy-loop if the dependency is genuinely stuck retrying.
+_DEPENDENCY_POLL_DELAY = timedelta(seconds=5)
+
 # ---------------------------------------------------------------------------
 # Retry schedule (attempt_count after the failing attempt)
 # ---------------------------------------------------------------------------
@@ -76,7 +87,7 @@ def _load_outbox_entry(cur: Any, outbox_id: str) -> dict[str, Any] | None:
         """
         SELECT id, ecn_id, ecn_item_id, mi_transaction, mi_params,
                idempotency_key, state, attempt_count, max_attempts,
-               next_retry_at, last_error
+               next_retry_at, last_error, depends_on
         FROM movex_outbox
         WHERE id = %s
         FOR UPDATE SKIP LOCKED
@@ -85,6 +96,19 @@ def _load_outbox_entry(cur: Any, outbox_id: str) -> dict[str, Any] | None:
     )
     row = cur.fetchone()
     return dict(row) if row else None
+
+
+def _load_dependency_state(cur: Any, depends_on_id: str) -> str | None:
+    """State of another outbox row this entry depends_on (Slice E0).
+
+    Returns None if the dependency row no longer exists (depends_on's
+    ON DELETE SET NULL means this shouldn't normally happen via the FK
+    itself, but a defensive caller still treats None the same as "no
+    dependency" — dispatch, don't hang forever on a row that's gone).
+    """
+    cur.execute("SELECT state FROM movex_outbox WHERE id = %s", (depends_on_id,))
+    row = cur.fetchone()
+    return row["state"] if row else None
 
 
 def _mark_processing(cur: Any, outbox_id: str) -> None:
@@ -436,6 +460,46 @@ def process_outbox_entry(self: Any, outbox_id: str) -> str:
                     state=entry["state"],
                 )
                 return f"skipped:{entry['state']}"
+
+            # Dependency gate (Slice E0, ADR-012 Decision 3) — must not
+            # dispatch until depends_on (if set) has completed. A missing
+            # dependency row (None) is treated the same as no dependency:
+            # dispatching is the safe default over hanging forever on a
+            # row that no longer exists.
+            depends_on_id = entry.get("depends_on")
+            if depends_on_id is not None:
+                dep_state = _load_dependency_state(cur, depends_on_id)
+                if dep_state == "abandoned":
+                    ecn_id = str(entry["ecn_id"])
+                    error = f"Dependency {depends_on_id} was abandoned"
+                    _mark_abandoned(cur, outbox_id, error)
+                    ecn_number = _get_ecn_number(cur, ecn_id)
+                    em_emails = _get_em_emails(cur, ecn_id)
+                    dc_emails = _get_dc_emails(cur, ecn_id)
+                    all_emails = list(set(em_emails + dc_emails))
+                    log.error(
+                        "outbox.abandoned_dependency_abandoned",
+                        outbox_id=outbox_id,
+                        ecn_id=ecn_id,
+                        depends_on=depends_on_id,
+                    )
+                    send_em_abandoned_alert.apply_async(args=[
+                        ecn_number, ecn_id, entry["mi_transaction"],
+                        entry["attempt_count"], error, all_emails,
+                    ])
+                    return "abandoned:dependency_abandoned"
+                if dep_state is not None and dep_state != "completed":
+                    log.info(
+                        "outbox.waiting_on_dependency",
+                        outbox_id=outbox_id,
+                        depends_on=depends_on_id,
+                        dependency_state=dep_state,
+                    )
+                    process_outbox_entry.apply_async(
+                        args=[outbox_id],
+                        countdown=_DEPENDENCY_POLL_DELAY.total_seconds(),
+                    )
+                    return "waiting_on_dependency"
 
             ecn_id = str(entry["ecn_id"])
             mi_transaction = entry["mi_transaction"]
