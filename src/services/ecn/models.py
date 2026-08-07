@@ -257,6 +257,69 @@ class RoutingOperationResponse:
 
 
 # ---------------------------------------------------------------------------
+# BOM change dataclasses (Slice E, ADR-012 D6/D4)
+# ---------------------------------------------------------------------------
+
+VALID_BOM_CHANGE_TYPES = {"ADD", "CHANGE", "DELETE"}
+
+
+@dataclass
+class BOMChangeRequest:
+    """One ecn_bom_changes row authored by an engineer on an ECN item.
+
+    CHANGE/DELETE require old_from_date (validated in the service layer, not
+    here — see ECNBomChangesMixin.create_bom_change) since it identifies
+    which live Movex line (MPDMAT key: CONO+FACI+PRNO+STRT+MSEQ+OPNO+FDAT) is
+    being superseded/closed at dc_approve (D6).
+    """
+    change_type: str                    # 'ADD' | 'CHANGE' | 'DELETE'
+    component_number: str
+    quantity: float | None = None
+    unit_of_measure: str | None = None
+    operation_number: int | None = None
+    sequence_number: int | None = None
+    from_date: int | None = None
+    to_date: int | None = None
+    bom_type: str = "M"
+    notes: str | None = None
+    old_quantity: float | None = None
+    old_operation_number: int | None = None
+    old_from_date: int | None = None
+    old_to_date: int | None = None
+    circuit_refs_old: list[str] | None = None
+    circuit_refs_new: list[str] | None = None
+
+
+@dataclass
+class BOMChangeResponse:
+    """ecn_bom_changes row as returned by the API."""
+    id: str
+    ecn_item_id: str
+    change_type: str
+    component_number: str
+    quantity: float | None
+    unit_of_measure: str | None
+    operation_number: int | None
+    sequence_number: int | None
+    from_date: int | None
+    to_date: int | None
+    bom_type: str
+    notes: str | None
+    old_quantity: float | None
+    old_operation_number: int | None
+    old_from_date: int | None
+    old_to_date: int | None
+    circuit_refs_old: list[str] | None
+    circuit_refs_new: list[str] | None
+    snapshot_id: str | None
+    movex_snapshot_at_review: dict | None
+    created_at: datetime
+    # Populated only by an ECN-wide aggregate list, mirroring the routing-op
+    # response's item_number/line_number convention — None on the per-item path.
+    item_number: str | None = None
+
+
+# ---------------------------------------------------------------------------
 # Error types
 # ---------------------------------------------------------------------------
 
@@ -269,7 +332,20 @@ class ECNValidationError(Exception):
 
 
 class ECNTransitionError(Exception):
-    pass
+    """Raised when a workflow trigger's guard fails or is otherwise invalid.
+
+    `payload` is optional structured detail attached for callers that need
+    more than a message string — introduced by Slice E's BOM concurrency
+    gate (ADR-012, dc_approve re-fetch-and-diff), which attaches the BOMDiff
+    JSONB so the frontend can render a conflict banner. Existing call sites
+    (workflow.py's guard/invalid-transition mapping, resubmit's rejection
+    check) construct this with just a message and get payload=None, so this
+    is a backward-compatible addition, not a breaking change to the
+    exception's existing single-string-arg call sites.
+    """
+    def __init__(self, message: str, *, payload: dict[str, Any] | None = None) -> None:
+        self.payload = payload
+        super().__init__(message)
 
 
 class ECNForbidden(Exception):

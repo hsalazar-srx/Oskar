@@ -6,10 +6,13 @@ that all existing imports (routers, tasks, tests) continue to work unchanged.
 """
 
 from src.services.ecn.models import (
+    VALID_BOM_CHANGE_TYPES,
     VALID_CHANGE_TYPES,
     VALID_FACILITIES,
     VALID_ROLE_IDS,
     ApprovalStep,
+    BOMChangeRequest,
+    BOMChangeResponse,
     ECNConflict,
     ECNCreateRequest,
     ECNDetail,
@@ -31,10 +34,13 @@ from src.services.ecn.models import (
 from src.services.ecn.service import ECNService
 
 __all__ = [
+    "VALID_BOM_CHANGE_TYPES",
     "VALID_CHANGE_TYPES",
     "VALID_FACILITIES",
     "VALID_ROLE_IDS",
     "ApprovalStep",
+    "BOMChangeRequest",
+    "BOMChangeResponse",
     "ECNConflict",
     "ECNCreateRequest",
     "ECNDetail",
