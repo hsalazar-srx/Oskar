@@ -31,6 +31,7 @@ from src.services.ecn.models import (
     VALID_ROLE_IDS,
 )
 from src.services.bom.mpn_master import load_synonyms, normalize_manufacturer, upsert_item_mpn
+from src.services.bom.snapshots import insert_snapshot
 from src.workflow.machine import (
     ECNStatus,
     ECNWorkflowMachine,
@@ -60,6 +61,7 @@ class ECNWorkflowMixin:
         req: ECNStatusTransitionRequest,
         actor_username: str,
         if_unmodified_since: datetime | None = None,
+        erp: Any = None,
     ) -> ECNDetail:
         from src.services.ecn.helpers import _check_not_modified
 
@@ -129,6 +131,9 @@ class ECNWorkflowMixin:
             await self._seed_approval_steps(ecn_id, dict(row))
 
         pending_outbox_ids: list[str] = []
+
+        if req.trigger == "submit":
+            await self._capture_bom_snapshots_at_submit(ecn_id, erp)
 
         if req.trigger == "dc_approve":
             pending_outbox_ids += await self._queue_routing_operations_outbox(ecn_id)
@@ -399,6 +404,7 @@ class ECNWorkflowMixin:
         actor_username: str,
         actor_role: str,
         notes: str | None = None,
+        erp: Any = None,
     ) -> ECNDetail:
         if actor_role != "OR":
             raise ECNForbidden("Only the originator (OR) may resubmit a rejected ECN.")
@@ -453,6 +459,14 @@ class ECNWorkflowMixin:
                 ),
                 {"status": new_status, "rev": new_revision, "now": now, "ecn_id": ecn_id},
             )
+            # restart sends the ECN back through ENGINEERING_REVIEW as a
+            # fresh authoring round (revision_number bumped) — re-capture
+            # BOM snapshots the same way submit does (R8: "Re-capture on
+            # resubmit"). 'proceed' does not re-open authoring (only the
+            # rejecting role's step resets), so no new snapshot is taken
+            # there — the original submit-time snapshot is still the right
+            # baseline.
+            await self._capture_bom_snapshots_at_submit(ecn_id, erp)
         else:
             rejecting_role = str(rejection["role_id"])
             rejected_at_status = int(rejection["rejected_at_status"])
@@ -500,6 +514,102 @@ class ECNWorkflowMixin:
         log.info("ecn.resubmitted", ecn_id=ecn_id, resolution=resolution,
                  new_status=new_status, actor=actor_username)
         return await self.get(ecn_id)
+
+    # ── BOM snapshot capture (Slice E, ADR-012 D2/D6/R8) ──────────────────────
+
+    async def _capture_bom_snapshots_at_submit(self, ecn_id: str, erp: Any) -> None:
+        """Capture one bom_snapshots row (reason='ecn_submit') per DISTINCT
+        parent item referenced by this ECN's ecn_bom_changes rows, and stamp
+        each of those ecn_bom_changes rows with the resulting snapshot_id.
+
+        This is the audit-trail baseline the dc_approve concurrency gate
+        (test_concurrency_gate.py) diffs the live BOM against — "what did
+        the DC actually approve against" (D2's retention rationale: these
+        rows are never pruned).
+
+        Resilience (deliberate — plan's stated design, R8's "DC gate always
+        re-fetches live" already covers the up-to-date check; submit-time
+        capture is a best-effort baseline, not a hard gate): if erp is None
+        (no adapter was supplied — e.g. the zero-outbox auto-advance
+        self-call in transition() never passes one) or the ERP read fails
+        for a given item (BOMNotFound, connection error, timeout — any
+        Exception), that item's snapshot is skipped with a logged warning.
+        submit must never be blocked by an ERP outage; the concurrency gate
+        (Slice E's next piece) treats a missing snapshot as "cannot verify,
+        proceed with a warning" rather than a hard failure, so a skipped
+        capture here degrades gracefully rather than corrupting the flow.
+        """
+        if erp is None:
+            log.warning("ecn.bom_snapshot.skipped_no_erp_adapter", ecn_id=ecn_id)
+            return
+
+        rows = await self._session.execute(
+            sa.text(
+                "SELECT DISTINCT i.item_number, i.id AS item_id "
+                "FROM ecn_bom_changes b "
+                "JOIN ecn_items i ON i.id = b.ecn_item_id "
+                "WHERE i.ecn_id = :ecn_id"
+            ),
+            {"ecn_id": ecn_id},
+        )
+        parent_items = rows.mappings().all()
+        if not parent_items:
+            return
+
+        ecn_row = await self._session.execute(
+            sa.text("SELECT facility FROM ecn_instances WHERE id = :ecn_id"),
+            {"ecn_id": ecn_id},
+        )
+        facility = ecn_row.scalar_one()
+
+        from src.services.bom.browse import get_single_level_bom
+
+        for parent in parent_items:
+            item_number = parent["item_number"]
+            try:
+                bom_head = await get_single_level_bom(
+                    erp, item_number, facility, include_expired=True,
+                )
+            except Exception as exc:  # noqa: BLE001 — any ERP failure is non-blocking here
+                log.warning(
+                    "ecn.bom_snapshot.capture_failed",
+                    ecn_id=ecn_id, item_number=item_number, error=str(exc),
+                )
+                continue
+
+            lines = [
+                {
+                    "sequence_number": ln.sequence_number,
+                    "component_number": ln.component_number,
+                    "description": ln.description,
+                    "operation_number": ln.operation_number,
+                    "quantity": ln.quantity,
+                    "unit_of_measure": ln.unit_of_measure,
+                    "from_date": ln.from_date,
+                    "to_date": ln.to_date,
+                }
+                for ln in bom_head.lines
+            ]
+            snapshot = await insert_snapshot(
+                self._session,
+                item_number=item_number,
+                facility=facility,
+                lines=lines,
+                reason="ecn_submit",
+                captured_by="system:submit",
+                ecn_id=ecn_id,
+            )
+            await self._session.execute(
+                sa.text(
+                    "UPDATE ecn_bom_changes SET snapshot_id = :snapshot_id "
+                    "WHERE ecn_item_id = :item_id"
+                ),
+                {"snapshot_id": snapshot.id, "item_id": str(parent["item_id"])},
+            )
+            log.info(
+                "ecn.bom_snapshot.captured",
+                ecn_id=ecn_id, item_number=item_number, snapshot_id=snapshot.id,
+            )
 
     # ── Outbox queuing ────────────────────────────────────────────────────────
 

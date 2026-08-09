@@ -279,6 +279,7 @@ async def transition_ecn_status(
     background_tasks: BackgroundTasks,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    erp: Annotated[MovexRestAdapter, Depends(_get_erp_adapter)],
     if_unmodified_since: Annotated[str | None, Header()] = None,
 ) -> ECNDetailOut:
     """Fire a workflow trigger on an ECN.
@@ -309,7 +310,7 @@ async def transition_ecn_status(
     ts = parse_if_unmodified_since(if_unmodified_since)
     try:
         detail, outbox_ids = await svc.transition(
-            ecn_id, req, actor_username=user.username, if_unmodified_since=ts
+            ecn_id, req, actor_username=user.username, if_unmodified_since=ts, erp=erp,
         )
     except (ECNPreconditionRequired, ECNConflict) as exc:
         raise_optimistic_lock_errors(exc)
@@ -396,6 +397,7 @@ async def resubmit_ecn(
     body: ResubmitBody,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    erp: Annotated[MovexRestAdapter, Depends(_get_erp_adapter)],
 ) -> ECNDetailOut:
     """Resubmit a REJECTED ECN via restart or proceed path.
 
@@ -410,6 +412,7 @@ async def resubmit_ecn(
             actor_username=user.username,
             actor_role=body.actor_role,
             notes=body.notes,
+            erp=erp,
         )
     except ECNForbidden as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
