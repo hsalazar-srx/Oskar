@@ -92,6 +92,7 @@ class _MutableStubERPAdapter(ERPAdapter):
     async def create_product(self, *a, **kw): raise NotImplementedError
     async def add_bom_component(self, *a, **kw): raise NotImplementedError
     async def delete_bom_component(self, *a, **kw): raise NotImplementedError
+    async def update_bom_component(self, *a, **kw): raise NotImplementedError
     async def update_routing_operation(self, *a, **kw): raise NotImplementedError
     async def add_routing_operation(self, *a, **kw): raise NotImplementedError
     async def add_item_alias(self, *a, **kw): raise NotImplementedError

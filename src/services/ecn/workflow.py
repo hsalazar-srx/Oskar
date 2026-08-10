@@ -946,7 +946,8 @@ class ECNWorkflowMixin:
                 "SELECT b.id, b.ecn_item_id, i.item_number, e.facility, "
                 "b.change_type, b.component_number, b.quantity, b.unit_of_measure, "
                 "b.operation_number, b.from_date, b.to_date, b.bom_type, "
-                "b.old_operation_number, b.old_from_date, b.old_to_date "
+                "b.old_operation_number, b.old_from_date, b.old_to_date, "
+                "b.sequence_number, b.circuit_refs_new "
                 "FROM ecn_bom_changes b "
                 "JOIN ecn_items i ON i.id = b.ecn_item_id "
                 "JOIN ecn_instances e ON e.id = i.ecn_id "
@@ -979,8 +980,34 @@ class ECNWorkflowMixin:
         for (
             change_id, item_id, item_number, facility, change_type, component_number,
             quantity, uom, opno, from_date, to_date, bom_type,
-            old_opno, old_from_date, old_to_date,
+            old_opno, old_from_date, old_to_date, seqno, circuit_refs_new,
         ) in rows:
+            # Circuit-ref metadata (D4) travels alongside an AddComponent
+            # row's mi_params under a leading-underscore key — _dispatch_mi_
+            # call strips it before calling add_bom_component (whose
+            # signature has no circuit_refs param) but process_outbox_entry
+            # reads it back on success to upsert bom_circuit_refs, keyed by
+            # the ERP line key (facility, parent_item, structure_type,
+            # sequence_number, from_date). structure_type defaults to '001'
+            # — ecn_bom_changes has no structure_type column of its own
+            # (BOM changes are always against the default manufacturing
+            # structure in this slice's scope; a multi-structure-type ECN UI
+            # is not part of I2-6), matching every other BOM read/write path
+            # in this codebase's own '001' default.
+            _circuit_refs_meta = (
+                {
+                    "facility": facility,
+                    "parent_item": item_number,
+                    "structure_type": "001",
+                    "sequence_number": seqno,
+                    "from_date": from_date,
+                    "circuit_refs": circuit_refs_new,
+                    "source_ecn": ecn_id,
+                }
+                if circuit_refs_new
+                else None
+            )
+
             if change_type == "ADD":
                 mi_tx = "PDS002MI.AddComponent"
                 idempotency_key = f"{mi_tx}:{ecn_id}:{change_id}"
@@ -994,6 +1021,8 @@ class ECNWorkflowMixin:
                     "bom_type": bom_type,
                     "facility": facility,
                 }
+                if _circuit_refs_meta:
+                    mi_params["_circuit_refs"] = _circuit_refs_meta
                 new_id = await _insert(item_id, mi_tx, idempotency_key, mi_params)
                 if new_id:
                     inserted.append(new_id)
@@ -1045,6 +1074,8 @@ class ECNWorkflowMixin:
                     "bom_type": bom_type,
                     "facility": facility,
                 }
+                if _circuit_refs_meta:
+                    add_params["_circuit_refs"] = _circuit_refs_meta
                 # depends_on: use the id we just inserted if this is a fresh
                 # dispatch; on a replay where the close row already existed
                 # (ON CONFLICT DO NOTHING -> close_id is None), look its id

@@ -161,6 +161,47 @@ def _mark_abandoned(cur: Any, outbox_id: str, error: str) -> None:
     )
 
 
+def _upsert_bom_circuit_refs(cur: Any, meta: dict[str, Any]) -> None:
+    """Upsert one bom_circuit_refs row (Slice E, ADR-012 D4) on successful
+    completion of a PDS002MI.AddComponent outbox entry that carried
+    _circuit_refs metadata (both a plain ADD and the add-half of a CHANGE —
+    see _dispatch_mi_call/workflow.py's _queue_bom_changes_outbox).
+
+    Keyed by the ERP line key (facility, parent_item, structure_type,
+    sequence_number, from_date) — matches migration 0030's UNIQUE
+    constraint. ON CONFLICT DO UPDATE rather than DO NOTHING: unlike the
+    movex_outbox idempotency-key inserts (which must never duplicate a
+    write), a circuit-ref upsert replaying the same ERP line key is
+    expected to happen legitimately (e.g. a later ECN editing ref-des on the
+    same line) and should overwrite, not silently skip.
+    """
+    import json as _json
+
+    cur.execute(
+        """
+        INSERT INTO bom_circuit_refs
+        (id, facility, parent_item, structure_type, sequence_number, from_date,
+         circuit_refs, source_ecn, source_system)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'oskar')
+        ON CONFLICT (facility, parent_item, structure_type, sequence_number, from_date)
+        DO UPDATE SET
+            circuit_refs = EXCLUDED.circuit_refs,
+            source_ecn   = EXCLUDED.source_ecn,
+            updated_at   = now()
+        """,
+        (
+            str(uuid.uuid4()),
+            meta["facility"],
+            meta["parent_item"],
+            meta.get("structure_type") or "001",
+            meta["sequence_number"],
+            meta.get("from_date"),
+            _json.dumps(meta.get("circuit_refs") or []),
+            meta.get("source_ecn"),
+        ),
+    )
+
+
 def _record_error(
     cur: Any,
     outbox_id: str,
@@ -372,10 +413,19 @@ async def _dispatch_mi_call(
         PDS001MI.AddProduct       → create_product
         PDS002MI.AddComponent     → add_bom_component
         PDS002MI.DeleteComponent  → delete_bom_component
+        PDS002MI.UpdateComponent  → update_bom_component   (Slice E, W-1 — see docstring below)
         PDS002MI.UpdateOperation  → update_routing_operation
         PDS002MI.AddOperation     → add_routing_operation
         MMS025MI.AddAlias         → add_item_alias
     Returns the MI response dict.  Caller must check MSID.
+
+    PDS002MI.UpdateComponent (Slice E's DELETE/CHANGE-close BOM writes) is
+    confirmed NOT YET BUILT on movex-rest-api as of this writing — dispatch
+    is wired so Oskar-side code is ready the moment it lands, but any real
+    call against a live movex-rest-api instance will fail until then. Tracked
+    as I2-19 (ai/tasks/sprint-backlog.md) for live-OQ verification once W-1
+    ships; until then this fails at dispatch (standard outbox retry/DC-alert
+    schedule applies), not silently.
     """
     from src.adapters.erp.movex import MovexRestAdapter
 
@@ -386,6 +436,7 @@ async def _dispatch_mi_call(
         "PDS001MI.AddProduct": adapter.create_product,
         "PDS002MI.AddComponent": adapter.add_bom_component,
         "PDS002MI.DeleteComponent": adapter.delete_bom_component,
+        "PDS002MI.UpdateComponent": adapter.update_bom_component,
         "PDS002MI.UpdateOperation": adapter.update_routing_operation,
         "PDS002MI.AddOperation": adapter.add_routing_operation,
         "MMS025MI.AddAlias": adapter.add_item_alias,
@@ -396,9 +447,15 @@ async def _dispatch_mi_call(
         await adapter.close()
         raise ValueError(f"Unknown MI transaction: {mi_transaction!r}")
 
+    # _circuit_refs (Slice E, D4) travels alongside an AddComponent row's
+    # mi_params for process_outbox_entry's post-success bom_circuit_refs
+    # upsert (see that function) — not an add_bom_component parameter, so it
+    # must never reach the adapter call itself.
+    call_params = {k: v for k, v in mi_params.items() if k != "_circuit_refs"}
+
     try:
         # idempotency_key is always injected regardless of other params
-        return await handler(**mi_params, idempotency_key=idempotency_key)
+        return await handler(**call_params, idempotency_key=idempotency_key)
     finally:
         await adapter.close()
 
@@ -545,6 +602,21 @@ def process_outbox_entry(self: Any, outbox_id: str) -> str:
                     mi_transaction=mi_transaction,
                     attempt=attempt_count,
                 )
+
+                # bom_circuit_refs upsert (Slice E, D4) — only AddComponent
+                # entries ever carry _circuit_refs metadata (set by
+                # _queue_bom_changes_outbox for both a plain ADD and the
+                # add-half of a CHANGE); DeleteComponent/UpdateComponent
+                # close rows never do, so this is a no-op for them.
+                circuit_refs_meta = mi_params.get("_circuit_refs") if isinstance(mi_params, dict) else None
+                if circuit_refs_meta:
+                    _upsert_bom_circuit_refs(cur, circuit_refs_meta)
+                    log.info(
+                        "outbox.bom_circuit_refs_upserted",
+                        outbox_id=outbox_id, ecn_id=ecn_id,
+                        parent_item=circuit_refs_meta.get("parent_item"),
+                        sequence_number=circuit_refs_meta.get("sequence_number"),
+                    )
 
                 # Check if all outbox entries for this ECN are now complete
                 cur.execute(
