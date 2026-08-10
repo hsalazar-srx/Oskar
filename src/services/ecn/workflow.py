@@ -149,6 +149,7 @@ class ECNWorkflowMixin:
 
         if req.trigger == "dc_approve":
             pending_outbox_ids += await self._queue_routing_operations_outbox(ecn_id)
+            pending_outbox_ids += await self._queue_bom_changes_outbox(ecn_id)
 
         if req.trigger == "movex_write_complete":
             pending_outbox_ids += await self._queue_alias_outbox(ecn_id)
@@ -913,6 +914,150 @@ class ECNWorkflowMixin:
             )
             if result.rowcount:
                 inserted.append(new_id)
+        return inserted
+
+    async def _queue_bom_changes_outbox(self, ecn_id: str) -> list[str]:
+        """Queue PDS002MI writes for every ecn_bom_changes row on this ECN,
+        following the Stargile supersession model (D6): CHANGE = close old
+        line + add new date-effective line; DELETE = close, never physical
+        delete.
+
+          ADD    -> 1 row: PDS002MI.AddComponent.
+          DELETE -> 1 row: PDS002MI.UpdateComponent "close" (TDAT = the
+                    change's old_to_date if given, else today — closes the
+                    live line without a replacement).
+          CHANGE -> 2 rows: an UpdateComponent close row (TDAT = new
+                    from_date - 1, per D6's "TDAT = new FDAT - 1" rule) and
+                    an AddComponent add row whose depends_on is the close
+                    row's id (Slice E0's dispatch-ordering mechanism) — the
+                    add is gated behind the close's completion so Movex
+                    never sees two overlapping date-effective lines for the
+                    same key.
+
+        Idempotency key format: PDS002MI.{transaction}:{ecn_id}:{bom_change_id}[:close|:add].
+        ON CONFLICT DO NOTHING — safe to call twice for the same ECN (see
+        TestIdempotencyOnReplay in tests/integration/test_queue_bom_changes_outbox.py).
+        Returns list of newly inserted outbox IDs for post-commit Celery dispatch.
+        """
+        from datetime import date
+
+        rows = await self._session.execute(
+            sa.text(
+                "SELECT b.id, b.ecn_item_id, i.item_number, e.facility, "
+                "b.change_type, b.component_number, b.quantity, b.unit_of_measure, "
+                "b.operation_number, b.from_date, b.to_date, b.bom_type, "
+                "b.old_operation_number, b.old_from_date, b.old_to_date "
+                "FROM ecn_bom_changes b "
+                "JOIN ecn_items i ON i.id = b.ecn_item_id "
+                "JOIN ecn_instances e ON e.id = i.ecn_id "
+                "WHERE i.ecn_id = :ecn_id"
+            ),
+            {"ecn_id": ecn_id},
+        )
+        inserted: list[str] = []
+
+        async def _insert(
+            item_id: str, mi_tx: str, idempotency_key: str, mi_params: dict,
+            depends_on: str | None = None,
+        ) -> str | None:
+            new_id = str(uuid.uuid4())
+            result = await self._session.execute(
+                sa.text(
+                    "INSERT INTO movex_outbox "
+                    "(id, ecn_id, ecn_item_id, mi_transaction, mi_params, idempotency_key, depends_on) "
+                    "VALUES (:id, :ecn_id, :item_id, :mi_tx, CAST(:mi_params AS jsonb), :ikey, :depends_on) "
+                    "ON CONFLICT (idempotency_key) DO NOTHING RETURNING id"
+                ),
+                {
+                    "id": new_id, "ecn_id": ecn_id, "item_id": str(item_id),
+                    "mi_tx": mi_tx, "mi_params": json.dumps(mi_params),
+                    "ikey": idempotency_key, "depends_on": depends_on,
+                },
+            )
+            return new_id if result.rowcount else None
+
+        for (
+            change_id, item_id, item_number, facility, change_type, component_number,
+            quantity, uom, opno, from_date, to_date, bom_type,
+            old_opno, old_from_date, old_to_date,
+        ) in rows:
+            if change_type == "ADD":
+                mi_tx = "PDS002MI.AddComponent"
+                idempotency_key = f"{mi_tx}:{ecn_id}:{change_id}"
+                mi_params = {
+                    "parent_item": item_number,
+                    "component_item": component_number,
+                    "quantity": float(quantity) if quantity is not None else None,
+                    "unit_of_measure": uom,
+                    "operation_number": opno,
+                    "from_date": from_date,
+                    "bom_type": bom_type,
+                }
+                new_id = await _insert(item_id, mi_tx, idempotency_key, mi_params)
+                if new_id:
+                    inserted.append(new_id)
+
+            elif change_type == "DELETE":
+                mi_tx = "PDS002MI.UpdateComponent"
+                idempotency_key = f"{mi_tx}:{ecn_id}:{change_id}:close"
+                close_to_date = old_to_date or int(date.today().strftime("%Y%m%d"))
+                mi_params = {
+                    "parent_item": item_number,
+                    "component_item": component_number,
+                    "operation_number": old_opno if old_opno is not None else opno,
+                    "from_date": old_from_date,
+                    "to_date": close_to_date,
+                    "bom_type": bom_type,
+                    "facility": facility,
+                }
+                new_id = await _insert(item_id, mi_tx, idempotency_key, mi_params)
+                if new_id:
+                    inserted.append(new_id)
+
+            elif change_type == "CHANGE":
+                close_mi_tx = "PDS002MI.UpdateComponent"
+                close_key = f"{close_mi_tx}:{ecn_id}:{change_id}:close"
+                # D6: "CHANGE = close old line (TDAT = new FDAT - 1)".
+                close_to_date = from_date - 1 if from_date is not None else old_to_date
+                close_params = {
+                    "parent_item": item_number,
+                    "component_item": component_number,
+                    "operation_number": old_opno if old_opno is not None else opno,
+                    "from_date": old_from_date,
+                    "to_date": close_to_date,
+                    "bom_type": bom_type,
+                    "facility": facility,
+                }
+                close_id = await _insert(item_id, close_mi_tx, close_key, close_params)
+                if close_id:
+                    inserted.append(close_id)
+
+                add_mi_tx = "PDS002MI.AddComponent"
+                add_key = f"{add_mi_tx}:{ecn_id}:{change_id}:add"
+                add_params = {
+                    "parent_item": item_number,
+                    "component_item": component_number,
+                    "quantity": float(quantity) if quantity is not None else None,
+                    "unit_of_measure": uom,
+                    "operation_number": opno,
+                    "from_date": from_date,
+                    "bom_type": bom_type,
+                }
+                # depends_on: use the id we just inserted if this is a fresh
+                # dispatch; on a replay where the close row already existed
+                # (ON CONFLICT DO NOTHING -> close_id is None), look its id
+                # up so the add row still gets linked correctly.
+                dependency_id = close_id
+                if dependency_id is None:
+                    existing_close = await self._session.execute(
+                        sa.text("SELECT id FROM movex_outbox WHERE idempotency_key = :ikey"),
+                        {"ikey": close_key},
+                    )
+                    dependency_id = existing_close.scalar_one_or_none()
+                add_id = await _insert(item_id, add_mi_tx, add_key, add_params, depends_on=dependency_id)
+                if add_id:
+                    inserted.append(add_id)
+
         return inserted
 
     # ── Implementation checklist ──────────────────────────────────────────────
