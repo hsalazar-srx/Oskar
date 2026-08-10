@@ -320,6 +320,18 @@ async def transition_ecn_status(
             detail=f"ECN {ecn_id!r} not found",
         )
     except ECNTransitionError as exc:
+        # Slice E's BOM concurrency gate (ADR-012, dc_approve) attaches a
+        # structured diff payload for conflicts — those are genuine 409s
+        # (a real state conflict the caller must resolve, not a guard/role
+        # failure), with the diff in the response body so the frontend can
+        # render it. Plain guard/invalid-transition failures (no payload,
+        # the pre-Slice-E behaviour) stay 422 — unchanged for every existing
+        # caller of this endpoint.
+        if exc.payload is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"message": str(exc), "diff": exc.payload},
+            )
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
     # Dispatch pending outbox rows post-commit (BackgroundTasks run after get_session commits).

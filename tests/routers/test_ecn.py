@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from src.adapters.erp.movex import MovexRestAdapter
 from src.auth.dependencies import CurrentUser, get_current_user
 from src.db import get_session
 from src.main import app
@@ -34,6 +35,16 @@ from src.services.ecn import (
     RoleAssignment,
 )
 from src.workflow.machine import ECNStatus
+
+# Same convention as tests/routers/test_bom_browse.py / test_parts_alias.py:
+# seed app.state.erp_adapter with a bare (uninitialised) MovexRestAdapter so
+# every _get_erp_adapter Depends() in ecn_core.py resolves without needing
+# real MOVEX_* env vars. This file's endpoints (create_ecn/get_ecn/update_ecn
+# via _resolve_customer_name, and now transition_ecn_status/resubmit_ecn
+# since Slice E added erp: Depends(...) to both, ADR-012) all need this —
+# ECNService itself is separately mocked per test, so this stub is never
+# actually called, just resolved as a dependency.
+app.state.erp_adapter = MovexRestAdapter.__new__(MovexRestAdapter)
 
 
 # ── Fixtures / helpers ────────────────────────────────────────────────────────
@@ -267,6 +278,30 @@ class TestTransitionECNStatus:
             )
         assert resp.status_code == 422
         assert "DC" in resp.json()["detail"]
+
+    def test_transition_error_with_payload_returns_409_with_diff(self, client: TestClient) -> None:
+        """Slice E's BOM concurrency gate (ADR-012, dc_approve) attaches a
+        structured diff payload to ECNTransitionError — this must surface as
+        409 (not the plain-message 422 path above) with the payload in the
+        response body, so the frontend can render a conflict banner."""
+        diff_payload = {
+            "item_number": "LF100001",
+            "conflicting_keys": [["LF200010", 10]],
+            "added": [], "removed": [],
+            "changed": [{"key": ["LF200010", 10], "left": {}, "right": {}, "field_changes": []}],
+        }
+        with patch.object(
+            ECNService, "transition", new_callable=AsyncMock,
+            side_effect=ECNTransitionError("Live BOM has changed.", payload=diff_payload),
+        ):
+            resp = client.patch(
+                "/api/v1/ecn/ecn-0001/status",
+                json={"trigger": "dc_approve", "actor_role": "DC"},
+            )
+        assert resp.status_code == 409
+        body = resp.json()
+        assert body["detail"]["message"] == "Live BOM has changed."
+        assert body["detail"]["diff"] == diff_payload
 
     def test_not_found_returns_404(self, client: TestClient) -> None:
         with patch.object(
