@@ -158,6 +158,7 @@ class FakeERPAdapter(ERPAdapter):
         operation_number: int,
         from_date: int,
         *,
+        facility: str = "D",
         bom_type: str = "M",
         idempotency_key: str,
     ) -> dict[str, Any]:
@@ -174,6 +175,20 @@ class FakeERPAdapter(ERPAdapter):
         idempotency_key: str,
     ) -> dict[str, Any]:
         raise NotImplementedError(_NOT_STUBBED_MSG.format(name="delete_bom_component"))
+
+    async def update_bom_component(
+        self,
+        parent_item: str,
+        component_item: str,
+        operation_number: int,
+        from_date: int,
+        to_date: int,
+        *,
+        facility: str = "D",
+        bom_type: str = "M",
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        raise NotImplementedError(_NOT_STUBBED_MSG.format(name="update_bom_component"))
 
     async def update_routing_operation(
         self,

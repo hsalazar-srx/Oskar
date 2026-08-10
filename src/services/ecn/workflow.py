@@ -992,6 +992,7 @@ class ECNWorkflowMixin:
                     "operation_number": opno,
                     "from_date": from_date,
                     "bom_type": bom_type,
+                    "facility": facility,
                 }
                 new_id = await _insert(item_id, mi_tx, idempotency_key, mi_params)
                 if new_id:
@@ -1042,6 +1043,7 @@ class ECNWorkflowMixin:
                     "operation_number": opno,
                     "from_date": from_date,
                     "bom_type": bom_type,
+                    "facility": facility,
                 }
                 # depends_on: use the id we just inserted if this is a fresh
                 # dispatch; on a replay where the close row already existed

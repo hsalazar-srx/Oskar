@@ -286,6 +286,7 @@ class ERPAdapter(ABC):
         operation_number: int,
         from_date: int,
         *,
+        facility: str = "D",
         bom_type: str = "M",
         idempotency_key: str,
     ) -> dict[str, Any]:
@@ -294,6 +295,11 @@ class ERPAdapter(ABC):
         from_date is an YYYYMMDD integer (Movex DB2 numeric date format).
         Pre-validate from_date against ecn_bom_changes.movex_snapshot_at_review before calling.
         Returns MI response. Caller must check MSID.
+
+        facility (R9, ADR-012, fixed in Slice E — MovexRestAdapter previously
+        hardcoded 'faci': 'D'): parameterised from the ECN's actual facility,
+        matching add_routing_operation/update_routing_operation. Defaults to
+        'D' only for backward compatibility with pre-fix callers.
         """
         ...
 
@@ -311,6 +317,34 @@ class ERPAdapter(ABC):
         """Remove a component line from a BOM (PDS002MI.DeleteComponent).
 
         from_date is an YYYYMMDD integer (Movex DB2 numeric date format).
+        Returns MI response. Caller must check MSID.
+        """
+        ...
+
+    @abstractmethod
+    async def update_bom_component(
+        self,
+        parent_item: str,
+        component_item: str,
+        operation_number: int,
+        from_date: int,
+        to_date: int,
+        *,
+        facility: str = "D",
+        bom_type: str = "M",
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Close an existing date-effective BOM line by setting TDAT
+        (PDS002MI.UpdateComponent, Slice E W-1 — confirmed NOT YET BUILT on
+        movex-rest-api as of this writing; mock-verified only, tracked as
+        I2-19 for live-OQ verification once W-1 ships).
+
+        Used by the BOM supersession model (D6): DELETE = close, never
+        physical delete; CHANGE = close old line (TDAT = new FDAT - 1) then
+        add a new date-effective line via add_bom_component.
+
+        from_date identifies which existing line to close (part of its
+        MPDMAT key). to_date is the new TDAT value being written.
         Returns MI response. Caller must check MSID.
         """
         ...

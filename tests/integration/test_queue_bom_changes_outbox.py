@@ -117,7 +117,7 @@ class TestAddChangeType:
 
         rows = await db_session.execute(
             sa.text(
-                "SELECT mi_transaction, idempotency_key, depends_on FROM movex_outbox "
+                "SELECT mi_transaction, idempotency_key, depends_on, mi_params FROM movex_outbox "
                 "WHERE ecn_id = :ecn_id"
             ),
             {"ecn_id": ecn_id},
@@ -127,6 +127,10 @@ class TestAddChangeType:
         assert outbox_rows[0]["mi_transaction"] == "PDS002MI.AddComponent"
         assert outbox_rows[0]["idempotency_key"] == f"PDS002MI.AddComponent:{ecn_id}:{change_id}"
         assert outbox_rows[0]["depends_on"] is None
+        # R9 regression guard — facility must flow through into mi_params so
+        # add_bom_component's now-parameterised facility field never falls
+        # back to its 'D' default for a non-D-facility ECN.
+        assert outbox_rows[0]["mi_params"]["facility"] == _FACILITY
 
 
 class TestDeleteChangeType:
