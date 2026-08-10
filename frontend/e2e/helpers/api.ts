@@ -103,6 +103,62 @@ export async function addItem(
   if (!res.ok()) throw new Error(`addItem failed: ${res.status()} ${await res.text()}`)
 }
 
+/** Slice E — add a BOM change row to an item, returning its id. Must be
+ * called BEFORE the ECN is submitted (snapshot capture happens at submit,
+ * ADR-012 D2/D6) for the concurrency-gate scenario to be meaningful. */
+export async function addBomChange(
+  request: APIRequestContext,
+  token: string,
+  ecnId: string,
+  itemId: string,
+  opts: {
+    change_type?: string
+    component_number?: string
+    quantity?: number
+    operation_number?: number
+    from_date?: number
+    old_from_date?: number
+    old_quantity?: number
+  } = {},
+): Promise<{ id: string }> {
+  const res = await request.post(
+    `${API_BASE}/api/v1/ecn/${ecnId}/items/${itemId}/bom-changes`,
+    {
+      headers: authHeaders(token),
+      data: {
+        change_type: opts.change_type ?? "CHANGE",
+        component_number: opts.component_number ?? "LF200010",
+        quantity: opts.quantity ?? 6.0,
+        operation_number: opts.operation_number ?? 10,
+        from_date: opts.from_date ?? 20260901,
+        old_from_date: opts.old_from_date ?? 20240101,
+        old_quantity: opts.old_quantity ?? 4.0,
+      },
+    },
+  )
+  if (!res.ok()) throw new Error(`addBomChange failed: ${res.status()} ${await res.text()}`)
+  return res.json()
+}
+
+/** Fetch a created item's id by item_number (helper for tests that used
+ * addItem's fire-and-forget signature and now need the id for
+ * addBomChange). */
+export async function findItemId(
+  request: APIRequestContext,
+  token: string,
+  ecnId: string,
+  itemNumber: string,
+): Promise<string> {
+  const res = await request.get(`${API_BASE}/api/v1/ecn/${ecnId}/items`, {
+    headers: authHeaders(token),
+  })
+  if (!res.ok()) throw new Error(`findItemId failed: ${res.status()} ${await res.text()}`)
+  const items = await res.json()
+  const match = items.find((i: { item_number: string }) => i.item_number === itemNumber)
+  if (!match) throw new Error(`No item found with item_number=${itemNumber}`)
+  return match.id
+}
+
 // ── Transition helper ─────────────────────────────────────────────────────────
 
 export async function fireTransition(

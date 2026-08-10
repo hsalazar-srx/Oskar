@@ -18,6 +18,7 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
@@ -62,9 +63,37 @@ def create_app(fixtures_dir: Path | None = None) -> FastAPI:
     fixtures_dir = fixtures_dir or _DEFAULT_FIXTURES_DIR
     app = FastAPI(title="movex-rest-api BOM contract stub")
 
+    # In-memory override store (Slice E e2e need, ecn-bom-changes.spec.ts):
+    # not part of the real movex-rest-api contract — the "_test-" prefix and
+    # separate mutation namespace make that unambiguous. Lets an e2e test
+    # simulate "someone else changed the live Movex BOM between this ECN's
+    # submit and its dc_approve" without needing an actual M3 write, which
+    # is exactly the DC concurrency-gate scenario (ADR-012 R8) the spec
+    # exercises. GET /api/bom/{itno} checks this override before falling
+    # back to the static fixture file.
+    _bom_overrides: dict[str, dict[str, Any]] = {}
+
     @app.get("/api/bom/{itno}")
     def get_bom(itno: str) -> dict:
+        if itno in _bom_overrides:
+            return _bom_overrides[itno]
         return _load_fixture(fixtures_dir, _BOM_FIXTURES, itno, not_found_label="BOM")
+
+    @app.post("/_test-mutate/bom/{itno}")
+    def test_mutate_bom(itno: str, payload: dict) -> dict:
+        """e2e-only: overrides itno's GET /api/bom/{itno} response until
+        reset. Not part of the real movex-rest-api contract (see docstring
+        above) — used by ecn-bom-changes.spec.ts to mutate the live BOM
+        mid-test, simulating a real Movex write happening between an ECN's
+        submit and dc_approve."""
+        _bom_overrides[itno] = payload
+        return {"status": "ok", "itno": itno}
+
+    @app.post("/_test-mutate/bom/{itno}/reset")
+    def test_reset_bom(itno: str) -> dict:
+        """e2e-only: clears itno's override, reverting to the static fixture."""
+        _bom_overrides.pop(itno, None)
+        return {"status": "ok", "itno": itno}
 
     @app.get("/api/bom/{itno}/indented")
     def get_bom_indented(itno: str) -> dict:

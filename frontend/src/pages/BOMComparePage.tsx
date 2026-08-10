@@ -325,7 +325,13 @@ function lineKeyDisplay(line: Record<string, unknown>): string {
   return "—"
 }
 
-function DiffTable({ comparison }: { comparison: BOMComparison }) {
+/**
+ * Exported (not just page-local) so Slice E's BOMChangesPanel can reuse it
+ * verbatim for the dc_approve concurrency-conflict banner (409 payload has
+ * the same {added, removed, changed, stats} shape as a BOMComparison's
+ * comparison_result) — see frontend/src/components/ecn/BOMChangesPanel.tsx.
+ */
+export function DiffTable({ comparison }: { comparison: BOMComparison }) {
   const { added, removed, changed } = comparison.comparison_result
 
   if (added.length === 0 && removed.length === 0 && changed.length === 0) {

@@ -271,6 +271,105 @@ export async function bulkCreateRoutingOps(ecnId: string, file: File): Promise<R
   return data
 }
 
+// ── BOM changes (Slice E, I2-6) ────────────────────────────────────────────────
+
+export interface BOMChange {
+  id: string
+  ecn_item_id: string
+  change_type: "ADD" | "CHANGE" | "DELETE"
+  component_number: string
+  quantity: number | null
+  unit_of_measure: string | null
+  operation_number: number | null
+  sequence_number: number | null
+  from_date: number | null
+  to_date: number | null
+  bom_type: string
+  notes: string | null
+  old_quantity: number | null
+  old_operation_number: number | null
+  old_from_date: number | null
+  old_to_date: number | null
+  circuit_refs_old: string[] | null
+  circuit_refs_new: string[] | null
+  snapshot_id: string | null
+  movex_snapshot_at_review: Record<string, unknown> | null
+  created_at: string
+  item_number?: string | null
+}
+
+export interface BOMChangeBody {
+  change_type: string
+  component_number: string
+  quantity?: number | null
+  unit_of_measure?: string | null
+  operation_number?: number | null
+  sequence_number?: number | null
+  from_date?: number | null
+  to_date?: number | null
+  bom_type?: string
+  notes?: string | null
+  old_quantity?: number | null
+  old_operation_number?: number | null
+  old_from_date?: number | null
+  old_to_date?: number | null
+  circuit_refs_old?: string[] | null
+  circuit_refs_new?: string[] | null
+}
+
+export async function fetchBomChanges(ecnId: string, itemId: string): Promise<BOMChange[]> {
+  const { data } = await axiosInstance.get(`/api/v1/ecn/${ecnId}/items/${itemId}/bom-changes`)
+  return data
+}
+
+export async function createBomChange(
+  ecnId: string, itemId: string, body: BOMChangeBody, actorRole?: string,
+): Promise<BOMChange> {
+  const { data } = await axiosInstance.post(
+    `/api/v1/ecn/${ecnId}/items/${itemId}/bom-changes`,
+    body,
+    { params: actorRole ? { actor_role: actorRole } : undefined },
+  )
+  return data
+}
+
+export async function updateBomChange(
+  ecnId: string, itemId: string, changeId: string,
+  body: Partial<BOMChangeBody> & { actor_role?: string },
+): Promise<BOMChange> {
+  const { data } = await axiosInstance.patch(
+    `/api/v1/ecn/${ecnId}/items/${itemId}/bom-changes/${changeId}`, body,
+  )
+  return data
+}
+
+export async function deleteBomChange(
+  ecnId: string, itemId: string, changeId: string, actorRole?: string,
+): Promise<void> {
+  await axiosInstance.delete(
+    `/api/v1/ecn/${ecnId}/items/${itemId}/bom-changes/${changeId}`,
+    { params: actorRole ? { actor_role: actorRole } : undefined },
+  )
+}
+
+/**
+ * POST /api/v1/ecn/{ecnId}/items/{itemId}/bom-changes/bulk
+ * xlsx/csv bulk BOM-change upload (Stargile's UploadECNBoMs parity, S9-8
+ * pattern) — see src/routers/ecn_bom.py (Scope item 9).
+ */
+export async function bulkCreateBomChanges(
+  ecnId: string, itemId: string, file: File,
+): Promise<BOMChange[]> {
+  const form = new FormData()
+  form.append("file", file)
+  const { data } = await axiosInstance.post(
+    `/api/v1/ecn/${ecnId}/items/${itemId}/bom-changes/bulk`,
+    form,
+    { headers: { "Content-Type": "multipart/form-data" } },
+  )
+  return data
+}
+
 // ── MPN management ────────────────────────────────────────────────────────────
 
 export interface MPN {
