@@ -105,6 +105,18 @@ class ECNWorkflowMixin:
         )
         machine.set_sha256_prev(sha256_prev)
 
+        if req.trigger == "dc_approve":
+            # Concurrency gate (Slice E, ADR-012 R8) — runs BEFORE
+            # machine.trigger() so a conflict raises without mutating
+            # ecn_model.status or writing anything to the DB (the whole
+            # point of a gate: block cleanly, not partially transition then
+            # roll back). A non-conflicting warning is appended to ctx.notes
+            # here so _write_transition_history (below) picks it up in the
+            # SAME insert as the dc_approve record — no second write.
+            warning_note = await self._check_bom_concurrency(ecn_id, erp)
+            if warning_note:
+                ctx.notes = f"{ctx.notes}\n{warning_note}" if ctx.notes else warning_note
+
         try:
             await machine.trigger(req.trigger)
         except GuardFailed as exc:
@@ -610,6 +622,163 @@ class ECNWorkflowMixin:
                 "ecn.bom_snapshot.captured",
                 ecn_id=ecn_id, item_number=item_number, snapshot_id=snapshot.id,
             )
+
+    # ── BOM concurrency gate (Slice E, ADR-012 R8) ────────────────────────────
+
+    async def _check_bom_concurrency(self, ecn_id: str, erp: Any) -> str | None:
+        """Re-fetch the live BOM for every distinct parent item referenced by
+        this ECN's ecn_bom_changes rows and diff it against the submit-time
+        snapshot (Slice D's diff_boms()). Returns a warning string to append
+        to the transition's notes if the live BOM changed on a
+        NON-conflicting key (proceed), or raises ECNTransitionError with the
+        diff payload attached if it changed on a key one of THIS ECN's
+        ecn_bom_changes rows is itself trying to touch (block, 409 at the
+        router).
+
+        Degrades gracefully (returns None, does not raise) when: the ECN has
+        no ecn_bom_changes rows at all (nothing to check); a row has no
+        snapshot_id (submit-time capture never happened or failed — R8:
+        "cannot verify, proceed with warning" is exactly test_snapshot_at_
+        submit.py's erp-failure case, so a hard block here would defeat that
+        resilience choice); or the live re-fetch itself fails (same
+        ERP-outage tolerance as submit-time capture — dc_approve must not be
+        permanently un-approvable just because Movex is briefly unreachable;
+        the DC can always re-run dc_approve once it's back).
+        """
+        from src.services.bom.compare import CompareOptions, diff_boms
+        from src.services.bom.snapshots import content_hash, get_snapshot
+
+        change_rows = await self._session.execute(
+            sa.text(
+                "SELECT b.component_number, b.operation_number, b.snapshot_id, "
+                "i.item_number, i.id AS item_id "
+                "FROM ecn_bom_changes b "
+                "JOIN ecn_items i ON i.id = b.ecn_item_id "
+                "WHERE i.ecn_id = :ecn_id"
+            ),
+            {"ecn_id": ecn_id},
+        )
+        changes = change_rows.mappings().all()
+        if not changes:
+            return None
+
+        ecn_row = await self._session.execute(
+            sa.text("SELECT facility FROM ecn_instances WHERE id = :ecn_id"),
+            {"ecn_id": ecn_id},
+        )
+        facility = ecn_row.scalar_one()
+
+        # Group this ECN's own change keys (what it is trying to touch) and
+        # snapshot_id by parent item — one live re-fetch + diff per distinct
+        # parent item, same de-duplication as _capture_bom_snapshots_at_submit.
+        by_item: dict[str, dict[str, Any]] = {}
+        for c in changes:
+            entry = by_item.setdefault(
+                c["item_number"], {"item_id": str(c["item_id"]), "snapshot_id": c["snapshot_id"], "keys": set()}
+            )
+            entry["keys"].add((str(c["component_number"]).strip().upper(), c["operation_number"]))
+
+        warnings: list[str] = []
+
+        for item_number, info in by_item.items():
+            snapshot_id = info["snapshot_id"]
+            if snapshot_id is None:
+                log.warning(
+                    "ecn.bom_concurrency.no_snapshot_skipped", ecn_id=ecn_id, item_number=item_number,
+                )
+                continue
+
+            snapshot = await get_snapshot(self._session, str(snapshot_id))
+            if snapshot is None:
+                log.warning(
+                    "ecn.bom_concurrency.snapshot_missing_skipped", ecn_id=ecn_id, item_number=item_number,
+                )
+                continue
+
+            if erp is None:
+                log.warning("ecn.bom_concurrency.skipped_no_erp_adapter", ecn_id=ecn_id, item_number=item_number)
+                continue
+
+            try:
+                from src.services.bom.browse import get_single_level_bom
+                live_head = await get_single_level_bom(
+                    erp, item_number, facility, include_expired=True,
+                )
+            except Exception as exc:  # noqa: BLE001 — ERP outage tolerance, matches submit-time capture
+                log.warning(
+                    "ecn.bom_concurrency.live_fetch_failed",
+                    ecn_id=ecn_id, item_number=item_number, error=str(exc),
+                )
+                continue
+
+            live_lines = [
+                {
+                    "sequence_number": ln.sequence_number,
+                    "component_number": ln.component_number,
+                    "description": ln.description,
+                    "operation_number": ln.operation_number,
+                    "quantity": ln.quantity,
+                    "unit_of_measure": ln.unit_of_measure,
+                    "from_date": ln.from_date,
+                    "to_date": ln.to_date,
+                }
+                for ln in live_head.lines
+            ]
+
+            # Hash-equal fast path — identical content, skip the full diff.
+            if content_hash(live_lines) == snapshot.content_hash:
+                continue
+
+            diff = diff_boms(snapshot.lines, live_lines, opts=CompareOptions())
+
+            diff_keys: set[tuple[str, Any]] = set()
+            for ln in diff.added:
+                diff_keys.add((str(ln.get("component_number", "")).strip().upper(), ln.get("operation_number")))
+            for ln in diff.removed:
+                diff_keys.add((str(ln.get("component_number", "")).strip().upper(), ln.get("operation_number")))
+            for changed_line in diff.changed:
+                diff_keys.add(
+                    (str(changed_line.right.get("component_number", "")).strip().upper(),
+                     changed_line.right.get("operation_number"))
+                )
+
+            conflicting_keys = info["keys"] & diff_keys
+            if conflicting_keys:
+                payload = {
+                    "item_number": item_number,
+                    "conflicting_keys": [list(k) for k in conflicting_keys],
+                    "added": diff.added,
+                    "removed": diff.removed,
+                    "changed": [
+                        {
+                            "key": list(c.key),
+                            "left": c.left,
+                            "right": c.right,
+                            "field_changes": [
+                                {"field": fc.field, "old_value": fc.old_value, "new_value": fc.new_value}
+                                for fc in c.field_changes
+                            ],
+                        }
+                        for c in diff.changed
+                    ],
+                }
+                raise ECNTransitionError(
+                    f"Live BOM for {item_number} has changed on a key this ECN is trying "
+                    f"to modify since it was submitted for review — resolve the conflict "
+                    f"before approving.",
+                    payload=payload,
+                )
+
+            # Changed, but not on a key this ECN cares about — proceed with a
+            # warning (R8: DC gate always re-fetches live; a benign unrelated
+            # drift must not block an unrelated approval).
+            warnings.append(
+                f"BOM for {item_number} changed since submission on "
+                f"{len(diff.added) + len(diff.removed) + len(diff.changed)} line(s) "
+                f"not touched by this ECN — proceeding."
+            )
+
+        return " ".join(warnings) if warnings else None
 
     # ── Outbox queuing ────────────────────────────────────────────────────────
 
