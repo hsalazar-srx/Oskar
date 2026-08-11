@@ -128,6 +128,7 @@ class IFSAdapter(ERPAdapter):
         operation_number: int,
         from_date: int,
         *,
+        facility: str = "D",
         bom_type: str = "M",
         idempotency_key: str,
     ) -> dict[str, Any]:
@@ -140,6 +141,20 @@ class IFSAdapter(ERPAdapter):
         operation_number: int,
         from_date: int,
         *,
+        bom_type: str = "M",
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        raise NotImplementedError(_NOT_IMPLEMENTED_MSG)
+
+    async def update_bom_component(
+        self,
+        parent_item: str,
+        component_item: str,
+        operation_number: int,
+        from_date: int,
+        to_date: int,
+        *,
+        facility: str = "D",
         bom_type: str = "M",
         idempotency_key: str,
     ) -> dict[str, Any]:

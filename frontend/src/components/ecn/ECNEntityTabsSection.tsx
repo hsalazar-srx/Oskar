@@ -3,13 +3,14 @@ import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import ItemsTabContent, { type ItemRow } from "@/components/ecn/ItemsTabContent"
 import RoutingTabContent from "@/components/ecn/RoutingTabContent"
+import BOMChangesTabContent from "@/components/ecn/BOMChangesTabContent"
 import MPNsTabContent from "@/components/ecn/MPNsTabContent"
 import { ItemUploadDrawer } from "@/components/ecn/ItemUploadDrawer"
 import { RoutingUploadDrawer } from "@/components/ecn/RoutingUploadDrawer"
 import { MPNUploadDrawer } from "@/components/ecn/MPNUploadDrawer"
-import { exportItems, exportRoutingOps, exportMPNs } from "@/api/ecn"
+import { exportItems, exportRoutingOps, exportBomChanges, exportMPNs } from "@/api/ecn"
 
-type EntityTab = "items" | "routing" | "mpns"
+type EntityTab = "items" | "routing" | "bom" | "mpns"
 
 interface Props {
   ecnId: string
@@ -18,7 +19,7 @@ interface Props {
   items: ItemRow[]
   canUpload: boolean
   canExport: boolean
-  onSelectItem: (itemId: string, tab?: "details" | "routing" | "mpns") => void
+  onSelectItem: (itemId: string, tab?: "details" | "routing" | "bom" | "mpns") => void
   onAddItem: () => void
   onItemsChanged: () => void
 }
@@ -39,7 +40,7 @@ export default function ECNEntityTabsSection({
   const [routingUploadOpen, setRoutingUploadOpen] = useState(false)
   const [mpnUploadOpen, setMpnUploadOpen] = useState(false)
 
-  function manageItem(itemId: string, entityTab: "routing" | "mpns") {
+  function manageItem(itemId: string, entityTab: "routing" | "bom" | "mpns") {
     onSelectItem(itemId, entityTab)
   }
 
@@ -50,6 +51,7 @@ export default function ECNEntityTabsSection({
           <TabsList>
             <TabsTrigger value="items">Items ({items.length})</TabsTrigger>
             <TabsTrigger value="routing">Routing</TabsTrigger>
+            <TabsTrigger value="bom">BOM Changes</TabsTrigger>
             <TabsTrigger value="mpns">MPNs</TabsTrigger>
           </TabsList>
         </Tabs>
@@ -68,6 +70,17 @@ export default function ECNEntityTabsSection({
               <UploadButton canUpload={canUpload} label="↑ Upload Routing" onClick={() => setRoutingUploadOpen(true)} />
             </>
           )}
+          {tab === "bom" && (
+            <>
+              <ExportButton canExport={canExport} label="↓ Export" onExport={() => exportBomChanges(ecnId, ecnNumber)} />
+              {/* Upload button intentionally not wired yet — the backend
+                  endpoint (POST /ecn/{ecn_id}/bom-changes/bulk) and API
+                  client (bulkCreateBomChanges) are ECN-wide/multi-item,
+                  matching routing's shape, but no upload drawer/preview
+                  parser was built for BOM changes in this slice — tracked
+                  as I2-20 in sprint-backlog.md. */}
+            </>
+          )}
           {tab === "mpns" && (
             <>
               <ExportButton canExport={canExport} label="↓ Export" onExport={() => exportMPNs(ecnId, ecnNumber)} />
@@ -81,6 +94,9 @@ export default function ECNEntityTabsSection({
         {tab === "items" && <ItemsTabContent items={items} onSelectItem={(id) => onSelectItem(id)} />}
         {tab === "routing" && (
           <RoutingTabContent ecnId={ecnId} onManageItem={(id) => manageItem(id, "routing")} />
+        )}
+        {tab === "bom" && (
+          <BOMChangesTabContent ecnId={ecnId} onManageItem={(id) => manageItem(id, "bom")} />
         )}
         {tab === "mpns" && (
           <MPNsTabContent ecnId={ecnId} onManageItem={(id) => manageItem(id, "mpns")} />

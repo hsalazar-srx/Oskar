@@ -279,6 +279,7 @@ async def transition_ecn_status(
     background_tasks: BackgroundTasks,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    erp: Annotated[MovexRestAdapter, Depends(_get_erp_adapter)],
     if_unmodified_since: Annotated[str | None, Header()] = None,
 ) -> ECNDetailOut:
     """Fire a workflow trigger on an ECN.
@@ -309,7 +310,7 @@ async def transition_ecn_status(
     ts = parse_if_unmodified_since(if_unmodified_since)
     try:
         detail, outbox_ids = await svc.transition(
-            ecn_id, req, actor_username=user.username, if_unmodified_since=ts
+            ecn_id, req, actor_username=user.username, if_unmodified_since=ts, erp=erp,
         )
     except (ECNPreconditionRequired, ECNConflict) as exc:
         raise_optimistic_lock_errors(exc)
@@ -319,6 +320,18 @@ async def transition_ecn_status(
             detail=f"ECN {ecn_id!r} not found",
         )
     except ECNTransitionError as exc:
+        # Slice E's BOM concurrency gate (ADR-012, dc_approve) attaches a
+        # structured diff payload for conflicts — those are genuine 409s
+        # (a real state conflict the caller must resolve, not a guard/role
+        # failure), with the diff in the response body so the frontend can
+        # render it. Plain guard/invalid-transition failures (no payload,
+        # the pre-Slice-E behaviour) stay 422 — unchanged for every existing
+        # caller of this endpoint.
+        if exc.payload is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"message": str(exc), "diff": exc.payload},
+            )
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
     # Dispatch pending outbox rows post-commit (BackgroundTasks run after get_session commits).
@@ -396,6 +409,7 @@ async def resubmit_ecn(
     body: ResubmitBody,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    erp: Annotated[MovexRestAdapter, Depends(_get_erp_adapter)],
 ) -> ECNDetailOut:
     """Resubmit a REJECTED ECN via restart or proceed path.
 
@@ -410,6 +424,7 @@ async def resubmit_ecn(
             actor_username=user.username,
             actor_role=body.actor_role,
             notes=body.notes,
+            erp=erp,
         )
     except ECNForbidden as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))

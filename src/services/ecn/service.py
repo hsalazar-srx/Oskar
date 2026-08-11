@@ -23,6 +23,7 @@ from src.services.ecn.helpers import (
     _row_to_ecn_model,
     _write_transition_history,
 )
+from src.services.ecn.bom_changes import ECNBomChangesMixin
 from src.services.ecn.items import ECNItemsMixin
 from src.services.ecn.models import (
     ECNCreateRequest,
@@ -91,12 +92,13 @@ def _row_to_detail(
     )
 
 
-class ECNService(ECNItemsMixin, ECNWorkflowMixin):
+class ECNService(ECNItemsMixin, ECNBomChangesMixin, ECNWorkflowMixin):
     """Thin service layer between FastAPI ECN router and DB + workflow machine.
 
-    ECNItemsMixin     — create/list/get/update/delete items and MPNs
-    ECNWorkflowMixin  — transition, approve_role, resubmit, assign_role, outbox queuing
-    ECNService        — create, get, list, update_ecn (ECN header operations)
+    ECNItemsMixin       — create/list/get/update/delete items and MPNs
+    ECNBomChangesMixin  — create/list/update/delete ecn_bom_changes rows (Slice E)
+    ECNWorkflowMixin    — transition, approve_role, resubmit, assign_role, outbox queuing
+    ECNService          — create, get, list, update_ecn (ECN header operations)
     """
 
     def __init__(self, session: AsyncSession) -> None:

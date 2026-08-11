@@ -15,10 +15,12 @@ from fastapi import HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
 from src.services.ecn import (
+    VALID_BOM_CHANGE_TYPES,
     VALID_CHANGE_TYPES,
     VALID_FACILITIES,
     VALID_ROLE_IDS,
     ApprovalStep,
+    BOMChangeResponse,
     ECNConflict,
     ECNDetail,
     ECNItemDetail,
@@ -385,6 +387,93 @@ class BulkRoutingRow(BaseModel):
         return v
 
 
+class BOMChangeBody(BaseModel):
+    """One ecn_bom_changes create body. CHANGE/DELETE require old_from_date —
+    validated in the service layer (ECNBomChangesMixin), not here, so both
+    router and any future bulk-upload path share one validation rule
+    instead of duplicating it in Pydantic."""
+    change_type: str
+    component_number: str = Field(..., min_length=1, max_length=15)
+    quantity: float | None = Field(None, ge=0)
+    unit_of_measure: str | None = Field(None, max_length=3)
+    operation_number: int | None = Field(None, ge=1)
+    sequence_number: int | None = None
+    from_date: int | None = None
+    to_date: int | None = None
+    bom_type: str = Field("M", max_length=1)
+    notes: str | None = None
+    old_quantity: float | None = Field(None, ge=0)
+    old_operation_number: int | None = None
+    old_from_date: int | None = None
+    old_to_date: int | None = None
+    circuit_refs_old: list[str] | None = None
+    circuit_refs_new: list[str] | None = None
+
+    @field_validator("change_type")
+    @classmethod
+    def _validate_bom_change_type(cls, v: str) -> str:
+        if v not in VALID_BOM_CHANGE_TYPES:
+            raise ValueError(f"change_type must be one of {sorted(VALID_BOM_CHANGE_TYPES)}")
+        return v
+
+
+class BOMChangePatchBody(BaseModel):
+    change_type: str | None = None
+    component_number: str | None = Field(None, min_length=1, max_length=15)
+    quantity: float | None = Field(None, ge=0)
+    unit_of_measure: str | None = Field(None, max_length=3)
+    operation_number: int | None = Field(None, ge=1)
+    sequence_number: int | None = None
+    from_date: int | None = None
+    to_date: int | None = None
+    bom_type: str | None = Field(None, max_length=1)
+    notes: str | None = None
+    old_quantity: float | None = Field(None, ge=0)
+    old_operation_number: int | None = None
+    old_from_date: int | None = None
+    old_to_date: int | None = None
+    circuit_refs_old: list[str] | None = None
+    circuit_refs_new: list[str] | None = None
+    actor_role: str | None = None  # DC bypasses the post-DC_APPROVED edit lock
+
+    @field_validator("change_type")
+    @classmethod
+    def _validate_patch_bom_change_type(cls, v: str | None) -> str | None:
+        if v is not None and v not in VALID_BOM_CHANGE_TYPES:
+            raise ValueError(f"change_type must be one of {sorted(VALID_BOM_CHANGE_TYPES)}")
+        return v
+
+
+class BulkBomChangeRow(BaseModel):
+    """One parsed row from the bulk BOM-change upload template (Stargile's
+    UploadECNBoMs parity). ECN-wide, multi-item — item_number is a per-row
+    field (verified against the real Stargile source, 2026-08-11: prno/
+    zecnln are per-row in UploadECNBoMs.java, not a URL-level scope), same
+    shape as BulkRoutingRow. item_number resolves to an existing ecn_items
+    row on this ECN — bulk BOM-change upload does not create items.
+
+    CHANGE/DELETE rows require old_from_date — same rule as the single-row
+    create endpoint (service-layer validated, not here, so both paths share
+    one rule instead of duplicating it in Pydantic).
+    """
+    item_number: str = Field(..., min_length=1, max_length=15)
+    component_number: str = Field(..., min_length=1, max_length=15)
+    change_type: str
+    quantity: float | None = Field(None, ge=0)
+    unit_of_measure: str | None = Field(None, max_length=3)
+    operation_number: int | None = Field(None, ge=1)
+    from_date: int | None = None
+    old_from_date: int | None = None
+    old_quantity: float | None = Field(None, ge=0)
+
+    @field_validator("change_type")
+    @classmethod
+    def _validate_bulk_bom_change_type(cls, v: str) -> str:
+        if v not in VALID_BOM_CHANGE_TYPES:
+            raise ValueError(f"change_type must be one of {sorted(VALID_BOM_CHANGE_TYPES)}")
+        return v
+
+
 class BulkMPNRow(BaseModel):
     """One MPN row after CAD-BOM-row expansion (see _expand_mpn_rows in ecn_items.py).
 
@@ -549,6 +638,31 @@ class RoutingOpOut(BaseModel):
     line_number: int | None = None
 
 
+class BOMChangeOut(BaseModel):
+    id: str
+    ecn_item_id: str
+    change_type: str
+    component_number: str
+    quantity: float | None
+    unit_of_measure: str | None
+    operation_number: int | None
+    sequence_number: int | None
+    from_date: int | None
+    to_date: int | None
+    bom_type: str
+    notes: str | None
+    old_quantity: float | None
+    old_operation_number: int | None
+    old_from_date: int | None
+    old_to_date: int | None
+    circuit_refs_old: list[str] | None
+    circuit_refs_new: list[str] | None
+    snapshot_id: str | None
+    movex_snapshot_at_review: dict[str, Any] | None
+    created_at: str
+    item_number: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Serialiser helpers
 # ---------------------------------------------------------------------------
@@ -703,6 +817,33 @@ def routing_op_out(op: RoutingOperationResponse) -> RoutingOpOut:
         updated_at=op.updated_at.isoformat(),
         item_number=op.item_number,
         line_number=op.line_number,
+    )
+
+
+def bom_change_out(c: BOMChangeResponse) -> BOMChangeOut:
+    return BOMChangeOut(
+        id=c.id,
+        ecn_item_id=c.ecn_item_id,
+        change_type=c.change_type,
+        component_number=c.component_number,
+        quantity=c.quantity,
+        unit_of_measure=c.unit_of_measure,
+        operation_number=c.operation_number,
+        sequence_number=c.sequence_number,
+        from_date=c.from_date,
+        to_date=c.to_date,
+        bom_type=c.bom_type,
+        notes=c.notes,
+        old_quantity=c.old_quantity,
+        old_operation_number=c.old_operation_number,
+        old_from_date=c.old_from_date,
+        old_to_date=c.old_to_date,
+        circuit_refs_old=c.circuit_refs_old,
+        circuit_refs_new=c.circuit_refs_new,
+        snapshot_id=c.snapshot_id,
+        movex_snapshot_at_review=c.movex_snapshot_at_review,
+        created_at=c.created_at.isoformat(),
+        item_number=c.item_number,
     )
 
 

@@ -31,6 +31,7 @@ from src.services.ecn.models import (
     VALID_ROLE_IDS,
 )
 from src.services.bom.mpn_master import load_synonyms, normalize_manufacturer, upsert_item_mpn
+from src.services.bom.snapshots import insert_snapshot
 from src.workflow.machine import (
     ECNStatus,
     ECNWorkflowMachine,
@@ -60,6 +61,7 @@ class ECNWorkflowMixin:
         req: ECNStatusTransitionRequest,
         actor_username: str,
         if_unmodified_since: datetime | None = None,
+        erp: Any = None,
     ) -> ECNDetail:
         from src.services.ecn.helpers import _check_not_modified
 
@@ -103,6 +105,18 @@ class ECNWorkflowMixin:
         )
         machine.set_sha256_prev(sha256_prev)
 
+        if req.trigger == "dc_approve":
+            # Concurrency gate (Slice E, ADR-012 R8) — runs BEFORE
+            # machine.trigger() so a conflict raises without mutating
+            # ecn_model.status or writing anything to the DB (the whole
+            # point of a gate: block cleanly, not partially transition then
+            # roll back). A non-conflicting warning is appended to ctx.notes
+            # here so _write_transition_history (below) picks it up in the
+            # SAME insert as the dc_approve record — no second write.
+            warning_note = await self._check_bom_concurrency(ecn_id, erp)
+            if warning_note:
+                ctx.notes = f"{ctx.notes}\n{warning_note}" if ctx.notes else warning_note
+
         try:
             await machine.trigger(req.trigger)
         except GuardFailed as exc:
@@ -130,8 +144,12 @@ class ECNWorkflowMixin:
 
         pending_outbox_ids: list[str] = []
 
+        if req.trigger == "submit":
+            await self._capture_bom_snapshots_at_submit(ecn_id, erp)
+
         if req.trigger == "dc_approve":
             pending_outbox_ids += await self._queue_routing_operations_outbox(ecn_id)
+            pending_outbox_ids += await self._queue_bom_changes_outbox(ecn_id)
 
         if req.trigger == "movex_write_complete":
             pending_outbox_ids += await self._queue_alias_outbox(ecn_id)
@@ -399,6 +417,7 @@ class ECNWorkflowMixin:
         actor_username: str,
         actor_role: str,
         notes: str | None = None,
+        erp: Any = None,
     ) -> ECNDetail:
         if actor_role != "OR":
             raise ECNForbidden("Only the originator (OR) may resubmit a rejected ECN.")
@@ -453,6 +472,14 @@ class ECNWorkflowMixin:
                 ),
                 {"status": new_status, "rev": new_revision, "now": now, "ecn_id": ecn_id},
             )
+            # restart sends the ECN back through ENGINEERING_REVIEW as a
+            # fresh authoring round (revision_number bumped) — re-capture
+            # BOM snapshots the same way submit does (R8: "Re-capture on
+            # resubmit"). 'proceed' does not re-open authoring (only the
+            # rejecting role's step resets), so no new snapshot is taken
+            # there — the original submit-time snapshot is still the right
+            # baseline.
+            await self._capture_bom_snapshots_at_submit(ecn_id, erp)
         else:
             rejecting_role = str(rejection["role_id"])
             rejected_at_status = int(rejection["rejected_at_status"])
@@ -500,6 +527,259 @@ class ECNWorkflowMixin:
         log.info("ecn.resubmitted", ecn_id=ecn_id, resolution=resolution,
                  new_status=new_status, actor=actor_username)
         return await self.get(ecn_id)
+
+    # ── BOM snapshot capture (Slice E, ADR-012 D2/D6/R8) ──────────────────────
+
+    async def _capture_bom_snapshots_at_submit(self, ecn_id: str, erp: Any) -> None:
+        """Capture one bom_snapshots row (reason='ecn_submit') per DISTINCT
+        parent item referenced by this ECN's ecn_bom_changes rows, and stamp
+        each of those ecn_bom_changes rows with the resulting snapshot_id.
+
+        This is the audit-trail baseline the dc_approve concurrency gate
+        (test_concurrency_gate.py) diffs the live BOM against — "what did
+        the DC actually approve against" (D2's retention rationale: these
+        rows are never pruned).
+
+        Resilience (deliberate — plan's stated design, R8's "DC gate always
+        re-fetches live" already covers the up-to-date check; submit-time
+        capture is a best-effort baseline, not a hard gate): if erp is None
+        (no adapter was supplied — e.g. the zero-outbox auto-advance
+        self-call in transition() never passes one) or the ERP read fails
+        for a given item (BOMNotFound, connection error, timeout — any
+        Exception), that item's snapshot is skipped with a logged warning.
+        submit must never be blocked by an ERP outage; the concurrency gate
+        (Slice E's next piece) treats a missing snapshot as "cannot verify,
+        proceed with a warning" rather than a hard failure, so a skipped
+        capture here degrades gracefully rather than corrupting the flow.
+        """
+        if erp is None:
+            log.warning("ecn.bom_snapshot.skipped_no_erp_adapter", ecn_id=ecn_id)
+            return
+
+        rows = await self._session.execute(
+            sa.text(
+                "SELECT DISTINCT i.item_number, i.id AS item_id "
+                "FROM ecn_bom_changes b "
+                "JOIN ecn_items i ON i.id = b.ecn_item_id "
+                "WHERE i.ecn_id = :ecn_id"
+            ),
+            {"ecn_id": ecn_id},
+        )
+        parent_items = rows.mappings().all()
+        if not parent_items:
+            return
+
+        ecn_row = await self._session.execute(
+            sa.text("SELECT facility FROM ecn_instances WHERE id = :ecn_id"),
+            {"ecn_id": ecn_id},
+        )
+        facility = ecn_row.scalar_one()
+
+        from src.services.bom.browse import get_single_level_bom
+
+        for parent in parent_items:
+            item_number = parent["item_number"]
+            try:
+                bom_head = await get_single_level_bom(
+                    erp, item_number, facility, include_expired=True,
+                )
+            except Exception as exc:  # noqa: BLE001 — any ERP failure is non-blocking here
+                log.warning(
+                    "ecn.bom_snapshot.capture_failed",
+                    ecn_id=ecn_id, item_number=item_number, error=str(exc),
+                )
+                continue
+
+            lines = [
+                {
+                    "sequence_number": ln.sequence_number,
+                    "component_number": ln.component_number,
+                    "description": ln.description,
+                    "operation_number": ln.operation_number,
+                    "quantity": ln.quantity,
+                    "unit_of_measure": ln.unit_of_measure,
+                    "from_date": ln.from_date,
+                    "to_date": ln.to_date,
+                }
+                for ln in bom_head.lines
+            ]
+            snapshot = await insert_snapshot(
+                self._session,
+                item_number=item_number,
+                facility=facility,
+                lines=lines,
+                reason="ecn_submit",
+                captured_by="system:submit",
+                ecn_id=ecn_id,
+            )
+            await self._session.execute(
+                sa.text(
+                    "UPDATE ecn_bom_changes SET snapshot_id = :snapshot_id "
+                    "WHERE ecn_item_id = :item_id"
+                ),
+                {"snapshot_id": snapshot.id, "item_id": str(parent["item_id"])},
+            )
+            log.info(
+                "ecn.bom_snapshot.captured",
+                ecn_id=ecn_id, item_number=item_number, snapshot_id=snapshot.id,
+            )
+
+    # ── BOM concurrency gate (Slice E, ADR-012 R8) ────────────────────────────
+
+    async def _check_bom_concurrency(self, ecn_id: str, erp: Any) -> str | None:
+        """Re-fetch the live BOM for every distinct parent item referenced by
+        this ECN's ecn_bom_changes rows and diff it against the submit-time
+        snapshot (Slice D's diff_boms()). Returns a warning string to append
+        to the transition's notes if the live BOM changed on a
+        NON-conflicting key (proceed), or raises ECNTransitionError with the
+        diff payload attached if it changed on a key one of THIS ECN's
+        ecn_bom_changes rows is itself trying to touch (block, 409 at the
+        router).
+
+        Degrades gracefully (returns None, does not raise) when: the ECN has
+        no ecn_bom_changes rows at all (nothing to check); a row has no
+        snapshot_id (submit-time capture never happened or failed — R8:
+        "cannot verify, proceed with warning" is exactly test_snapshot_at_
+        submit.py's erp-failure case, so a hard block here would defeat that
+        resilience choice); or the live re-fetch itself fails (same
+        ERP-outage tolerance as submit-time capture — dc_approve must not be
+        permanently un-approvable just because Movex is briefly unreachable;
+        the DC can always re-run dc_approve once it's back).
+        """
+        from src.services.bom.compare import CompareOptions, diff_boms
+        from src.services.bom.snapshots import content_hash, get_snapshot
+
+        change_rows = await self._session.execute(
+            sa.text(
+                "SELECT b.component_number, b.operation_number, b.snapshot_id, "
+                "i.item_number, i.id AS item_id "
+                "FROM ecn_bom_changes b "
+                "JOIN ecn_items i ON i.id = b.ecn_item_id "
+                "WHERE i.ecn_id = :ecn_id"
+            ),
+            {"ecn_id": ecn_id},
+        )
+        changes = change_rows.mappings().all()
+        if not changes:
+            return None
+
+        ecn_row = await self._session.execute(
+            sa.text("SELECT facility FROM ecn_instances WHERE id = :ecn_id"),
+            {"ecn_id": ecn_id},
+        )
+        facility = ecn_row.scalar_one()
+
+        # Group this ECN's own change keys (what it is trying to touch) and
+        # snapshot_id by parent item — one live re-fetch + diff per distinct
+        # parent item, same de-duplication as _capture_bom_snapshots_at_submit.
+        by_item: dict[str, dict[str, Any]] = {}
+        for c in changes:
+            entry = by_item.setdefault(
+                c["item_number"], {"item_id": str(c["item_id"]), "snapshot_id": c["snapshot_id"], "keys": set()}
+            )
+            entry["keys"].add((str(c["component_number"]).strip().upper(), c["operation_number"]))
+
+        warnings: list[str] = []
+
+        for item_number, info in by_item.items():
+            snapshot_id = info["snapshot_id"]
+            if snapshot_id is None:
+                log.warning(
+                    "ecn.bom_concurrency.no_snapshot_skipped", ecn_id=ecn_id, item_number=item_number,
+                )
+                continue
+
+            snapshot = await get_snapshot(self._session, str(snapshot_id))
+            if snapshot is None:
+                log.warning(
+                    "ecn.bom_concurrency.snapshot_missing_skipped", ecn_id=ecn_id, item_number=item_number,
+                )
+                continue
+
+            if erp is None:
+                log.warning("ecn.bom_concurrency.skipped_no_erp_adapter", ecn_id=ecn_id, item_number=item_number)
+                continue
+
+            try:
+                from src.services.bom.browse import get_single_level_bom
+                live_head = await get_single_level_bom(
+                    erp, item_number, facility, include_expired=True,
+                )
+            except Exception as exc:  # noqa: BLE001 — ERP outage tolerance, matches submit-time capture
+                log.warning(
+                    "ecn.bom_concurrency.live_fetch_failed",
+                    ecn_id=ecn_id, item_number=item_number, error=str(exc),
+                )
+                continue
+
+            live_lines = [
+                {
+                    "sequence_number": ln.sequence_number,
+                    "component_number": ln.component_number,
+                    "description": ln.description,
+                    "operation_number": ln.operation_number,
+                    "quantity": ln.quantity,
+                    "unit_of_measure": ln.unit_of_measure,
+                    "from_date": ln.from_date,
+                    "to_date": ln.to_date,
+                }
+                for ln in live_head.lines
+            ]
+
+            # Hash-equal fast path — identical content, skip the full diff.
+            if content_hash(live_lines) == snapshot.content_hash:
+                continue
+
+            diff = diff_boms(snapshot.lines, live_lines, opts=CompareOptions())
+
+            diff_keys: set[tuple[str, Any]] = set()
+            for ln in diff.added:
+                diff_keys.add((str(ln.get("component_number", "")).strip().upper(), ln.get("operation_number")))
+            for ln in diff.removed:
+                diff_keys.add((str(ln.get("component_number", "")).strip().upper(), ln.get("operation_number")))
+            for changed_line in diff.changed:
+                diff_keys.add(
+                    (str(changed_line.right.get("component_number", "")).strip().upper(),
+                     changed_line.right.get("operation_number"))
+                )
+
+            conflicting_keys = info["keys"] & diff_keys
+            if conflicting_keys:
+                payload = {
+                    "item_number": item_number,
+                    "conflicting_keys": [list(k) for k in conflicting_keys],
+                    "added": diff.added,
+                    "removed": diff.removed,
+                    "changed": [
+                        {
+                            "key": list(c.key),
+                            "left": c.left,
+                            "right": c.right,
+                            "field_changes": [
+                                {"field": fc.field, "old_value": fc.old_value, "new_value": fc.new_value}
+                                for fc in c.field_changes
+                            ],
+                        }
+                        for c in diff.changed
+                    ],
+                }
+                raise ECNTransitionError(
+                    f"Live BOM for {item_number} has changed on a key this ECN is trying "
+                    f"to modify since it was submitted for review — resolve the conflict "
+                    f"before approving.",
+                    payload=payload,
+                )
+
+            # Changed, but not on a key this ECN cares about — proceed with a
+            # warning (R8: DC gate always re-fetches live; a benign unrelated
+            # drift must not block an unrelated approval).
+            warnings.append(
+                f"BOM for {item_number} changed since submission on "
+                f"{len(diff.added) + len(diff.removed) + len(diff.changed)} line(s) "
+                f"not touched by this ECN — proceeding."
+            )
+
+        return " ".join(warnings) if warnings else None
 
     # ── Outbox queuing ────────────────────────────────────────────────────────
 
@@ -634,6 +914,183 @@ class ECNWorkflowMixin:
             )
             if result.rowcount:
                 inserted.append(new_id)
+        return inserted
+
+    async def _queue_bom_changes_outbox(self, ecn_id: str) -> list[str]:
+        """Queue PDS002MI writes for every ecn_bom_changes row on this ECN,
+        following the Stargile supersession model (D6): CHANGE = close old
+        line + add new date-effective line; DELETE = close, never physical
+        delete.
+
+          ADD    -> 1 row: PDS002MI.AddComponent.
+          DELETE -> 1 row: PDS002MI.UpdateComponent "close" (TDAT = the
+                    change's old_to_date if given, else today — closes the
+                    live line without a replacement).
+          CHANGE -> 2 rows: an UpdateComponent close row (TDAT = new
+                    from_date - 1, per D6's "TDAT = new FDAT - 1" rule) and
+                    an AddComponent add row whose depends_on is the close
+                    row's id (Slice E0's dispatch-ordering mechanism) — the
+                    add is gated behind the close's completion so Movex
+                    never sees two overlapping date-effective lines for the
+                    same key.
+
+        Idempotency key format: PDS002MI.{transaction}:{ecn_id}:{bom_change_id}[:close|:add].
+        ON CONFLICT DO NOTHING — safe to call twice for the same ECN (see
+        TestIdempotencyOnReplay in tests/integration/test_queue_bom_changes_outbox.py).
+        Returns list of newly inserted outbox IDs for post-commit Celery dispatch.
+        """
+        from datetime import date
+
+        rows = await self._session.execute(
+            sa.text(
+                "SELECT b.id, b.ecn_item_id, i.item_number, e.facility, "
+                "b.change_type, b.component_number, b.quantity, b.unit_of_measure, "
+                "b.operation_number, b.from_date, b.to_date, b.bom_type, "
+                "b.old_operation_number, b.old_from_date, b.old_to_date, "
+                "b.sequence_number, b.circuit_refs_new "
+                "FROM ecn_bom_changes b "
+                "JOIN ecn_items i ON i.id = b.ecn_item_id "
+                "JOIN ecn_instances e ON e.id = i.ecn_id "
+                "WHERE i.ecn_id = :ecn_id"
+            ),
+            {"ecn_id": ecn_id},
+        )
+        inserted: list[str] = []
+
+        async def _insert(
+            item_id: str, mi_tx: str, idempotency_key: str, mi_params: dict,
+            depends_on: str | None = None,
+        ) -> str | None:
+            new_id = str(uuid.uuid4())
+            result = await self._session.execute(
+                sa.text(
+                    "INSERT INTO movex_outbox "
+                    "(id, ecn_id, ecn_item_id, mi_transaction, mi_params, idempotency_key, depends_on) "
+                    "VALUES (:id, :ecn_id, :item_id, :mi_tx, CAST(:mi_params AS jsonb), :ikey, :depends_on) "
+                    "ON CONFLICT (idempotency_key) DO NOTHING RETURNING id"
+                ),
+                {
+                    "id": new_id, "ecn_id": ecn_id, "item_id": str(item_id),
+                    "mi_tx": mi_tx, "mi_params": json.dumps(mi_params),
+                    "ikey": idempotency_key, "depends_on": depends_on,
+                },
+            )
+            return new_id if result.rowcount else None
+
+        for (
+            change_id, item_id, item_number, facility, change_type, component_number,
+            quantity, uom, opno, from_date, to_date, bom_type,
+            old_opno, old_from_date, old_to_date, seqno, circuit_refs_new,
+        ) in rows:
+            # Circuit-ref metadata (D4) travels alongside an AddComponent
+            # row's mi_params under a leading-underscore key — _dispatch_mi_
+            # call strips it before calling add_bom_component (whose
+            # signature has no circuit_refs param) but process_outbox_entry
+            # reads it back on success to upsert bom_circuit_refs, keyed by
+            # the ERP line key (facility, parent_item, structure_type,
+            # sequence_number, from_date). structure_type defaults to '001'
+            # — ecn_bom_changes has no structure_type column of its own
+            # (BOM changes are always against the default manufacturing
+            # structure in this slice's scope; a multi-structure-type ECN UI
+            # is not part of I2-6), matching every other BOM read/write path
+            # in this codebase's own '001' default.
+            _circuit_refs_meta = (
+                {
+                    "facility": facility,
+                    "parent_item": item_number,
+                    "structure_type": "001",
+                    "sequence_number": seqno,
+                    "from_date": from_date,
+                    "circuit_refs": circuit_refs_new,
+                    "source_ecn": ecn_id,
+                }
+                if circuit_refs_new
+                else None
+            )
+
+            if change_type == "ADD":
+                mi_tx = "PDS002MI.AddComponent"
+                idempotency_key = f"{mi_tx}:{ecn_id}:{change_id}"
+                mi_params = {
+                    "parent_item": item_number,
+                    "component_item": component_number,
+                    "quantity": float(quantity) if quantity is not None else None,
+                    "unit_of_measure": uom,
+                    "operation_number": opno,
+                    "from_date": from_date,
+                    "bom_type": bom_type,
+                    "facility": facility,
+                }
+                if _circuit_refs_meta:
+                    mi_params["_circuit_refs"] = _circuit_refs_meta
+                new_id = await _insert(item_id, mi_tx, idempotency_key, mi_params)
+                if new_id:
+                    inserted.append(new_id)
+
+            elif change_type == "DELETE":
+                mi_tx = "PDS002MI.UpdateComponent"
+                idempotency_key = f"{mi_tx}:{ecn_id}:{change_id}:close"
+                close_to_date = old_to_date or int(date.today().strftime("%Y%m%d"))
+                mi_params = {
+                    "parent_item": item_number,
+                    "component_item": component_number,
+                    "operation_number": old_opno if old_opno is not None else opno,
+                    "from_date": old_from_date,
+                    "to_date": close_to_date,
+                    "bom_type": bom_type,
+                    "facility": facility,
+                }
+                new_id = await _insert(item_id, mi_tx, idempotency_key, mi_params)
+                if new_id:
+                    inserted.append(new_id)
+
+            elif change_type == "CHANGE":
+                close_mi_tx = "PDS002MI.UpdateComponent"
+                close_key = f"{close_mi_tx}:{ecn_id}:{change_id}:close"
+                # D6: "CHANGE = close old line (TDAT = new FDAT - 1)".
+                close_to_date = from_date - 1 if from_date is not None else old_to_date
+                close_params = {
+                    "parent_item": item_number,
+                    "component_item": component_number,
+                    "operation_number": old_opno if old_opno is not None else opno,
+                    "from_date": old_from_date,
+                    "to_date": close_to_date,
+                    "bom_type": bom_type,
+                    "facility": facility,
+                }
+                close_id = await _insert(item_id, close_mi_tx, close_key, close_params)
+                if close_id:
+                    inserted.append(close_id)
+
+                add_mi_tx = "PDS002MI.AddComponent"
+                add_key = f"{add_mi_tx}:{ecn_id}:{change_id}:add"
+                add_params = {
+                    "parent_item": item_number,
+                    "component_item": component_number,
+                    "quantity": float(quantity) if quantity is not None else None,
+                    "unit_of_measure": uom,
+                    "operation_number": opno,
+                    "from_date": from_date,
+                    "bom_type": bom_type,
+                    "facility": facility,
+                }
+                if _circuit_refs_meta:
+                    add_params["_circuit_refs"] = _circuit_refs_meta
+                # depends_on: use the id we just inserted if this is a fresh
+                # dispatch; on a replay where the close row already existed
+                # (ON CONFLICT DO NOTHING -> close_id is None), look its id
+                # up so the add row still gets linked correctly.
+                dependency_id = close_id
+                if dependency_id is None:
+                    existing_close = await self._session.execute(
+                        sa.text("SELECT id FROM movex_outbox WHERE idempotency_key = :ikey"),
+                        {"ikey": close_key},
+                    )
+                    dependency_id = existing_close.scalar_one_or_none()
+                add_id = await _insert(item_id, add_mi_tx, add_key, add_params, depends_on=dependency_id)
+                if add_id:
+                    inserted.append(add_id)
+
         return inserted
 
     # ── Implementation checklist ──────────────────────────────────────────────

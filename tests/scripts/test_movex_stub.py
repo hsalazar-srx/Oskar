@@ -72,6 +72,54 @@ class TestCircuitRefsEndpoint:
         assert resp.status_code == 404
 
 
+class TestBomMutationOverride:
+    """e2e-only mutation endpoints (Slice E, ADR-012 R8) — not part of the
+    real movex-rest-api contract. Lets ecn-bom-changes.spec.ts simulate a
+    live Movex BOM change happening between an ECN's submit and its
+    dc_approve, to exercise the DC concurrency gate end-to-end."""
+
+    def test_mutate_then_reset_round_trip(self):
+        original = client.get("/api/bom/LF100001").json()
+
+        mutated = {
+            "data": {
+                "head": original["data"]["head"],
+                "records": [
+                    {**original["data"]["records"][0], "CNQT": 999.0},
+                    *original["data"]["records"][1:],
+                ],
+            }
+        }
+        mutate_resp = client.post("/_test-mutate/bom/LF100001", json=mutated)
+        assert mutate_resp.status_code == 200
+
+        overridden = client.get("/api/bom/LF100001").json()
+        assert overridden["data"]["records"][0]["CNQT"] == 999.0
+
+        reset_resp = client.post("/_test-mutate/bom/LF100001/reset")
+        assert reset_resp.status_code == 200
+
+        restored = client.get("/api/bom/LF100001").json()
+        assert restored == original
+
+    def test_mutate_unknown_item_still_accepted(self):
+        """The mutation endpoint doesn't require the item to already have a
+        static fixture — an e2e test can invent a wholly synthetic BOM."""
+        resp = client.post(
+            "/_test-mutate/bom/LFE2ETEST1",
+            json={"data": {"head": {"PRNO": "LFE2ETEST1"}, "records": []}},
+        )
+        assert resp.status_code == 200
+
+        get_resp = client.get("/api/bom/LFE2ETEST1")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["data"]["head"]["PRNO"] == "LFE2ETEST1"
+
+        # Cleanup — leave shared module-level client state as found for
+        # other tests in this file/session.
+        client.post("/_test-mutate/bom/LFE2ETEST1/reset")
+
+
 class TestMpmExportEndpoint:
     def test_default_page_returns_all_seven_raw_rows(self):
         resp = client.get("/api/mpm/export")

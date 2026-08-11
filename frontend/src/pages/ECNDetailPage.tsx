@@ -25,9 +25,22 @@ function transitionErrorMessage(err: unknown): string {
   const detail = (err as any)?.response?.data?.detail
   if (!detail) return "Transition failed — check your role assignment or ECN state."
   if (typeof detail === "string") return detail
-  // 409 shape: { code, message, current_updated_at }
+  // 409 shapes: optimistic-lock { code, message, current_updated_at } OR
+  // Slice E's BOM concurrency-gate conflict { message, diff }.
   if (typeof detail === "object" && detail.message) return detail.message
   return "Transition failed — check your role assignment or ECN state."
+}
+
+/** Slice E — extracts the BOM concurrency-gate's diff payload from a 409,
+ * distinguishing it from the optimistic-lock 409 shape (which has no
+ * `diff` key) so ECNItemPanel's conflict banner only ever shows for a real
+ * BOM conflict, not a stale-write race on the ECN header. */
+function transitionBomConflict(err: unknown): { message: string; diff: Record<string, unknown> } | null {
+  const detail = (err as any)?.response?.data?.detail
+  if (detail && typeof detail === "object" && detail.diff && typeof detail.diff === "object") {
+    return { message: detail.message ?? "Live BOM has changed.", diff: detail.diff }
+  }
+  return null
 }
 
 export default function ECNDetailPage() {
@@ -36,8 +49,9 @@ export default function ECNDetailPage() {
   const qc = useQueryClient()
   const user = useAuthStore((s) => s.user)
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
-  const [selectedItemTab, setSelectedItemTab] = useState<"details" | "routing" | "mpns">("details")
+  const [selectedItemTab, setSelectedItemTab] = useState<"details" | "routing" | "bom" | "mpns">("details")
   const [toast, setToast] = useState<{ from: string; to: string } | null>(null)
+  const [dismissedBomConflict, setDismissedBomConflict] = useState(false)
   const [modal, setModal] = useState<{ action: ActionDef } | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -145,16 +159,18 @@ export default function ECNDetailPage() {
   function handleAction(action: ActionDef) {
     if (action.needsModal) { setModal({ action }); return }
     if (action.needsConfirm && !window.confirm(`Confirm: ${action.label}?`)) return
+    setDismissedBomConflict(false)
     transition.mutate({ trigger: action.trigger, role: defaultRole(action) })
   }
 
   function fireModal(extra: Record<string, string>) {
     if (!modal) return
+    setDismissedBomConflict(false)
     transition.mutate({ trigger: modal.action.trigger, role: defaultRole(modal.action), extra })
     setModal(null)
   }
 
-  function selectItem(itemId: string, tab: "details" | "routing" | "mpns" = "details") {
+  function selectItem(itemId: string, tab: "details" | "routing" | "bom" | "mpns" = "details") {
     setSelectedItemTab(tab)
     setSelectedItemId(itemId)
   }
@@ -264,6 +280,8 @@ export default function ECNDetailPage() {
           onClose={() => setSelectedItemId(null)}
           canEdit={canEdit.itemsRoutingMpns}
           initialTab={selectedItemTab}
+          bomConflictDiff={!dismissedBomConflict ? transitionBomConflict(transition.error) : null}
+          onDismissBomConflict={() => setDismissedBomConflict(true)}
         />
       )}
 

@@ -15,6 +15,7 @@ import {
 } from "@/api/ecn"
 import RoutingOpsPanel from "@/components/ecn/RoutingOpsPanel"
 import MPNsPanel from "@/components/ecn/MPNsPanel"
+import BOMChangesPanel from "@/components/ecn/BOMChangesPanel"
 
 // ── Schema ────────────────────────────────────────────────────────────────────
 
@@ -49,7 +50,7 @@ type FormValues = z.infer<typeof schema>
 
 // ── Tab type ──────────────────────────────────────────────────────────────────
 
-type Tab = "details" | "routing" | "mpns"
+type Tab = "details" | "routing" | "bom" | "mpns"
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -61,10 +62,16 @@ interface Props {
   onClose: () => void
   canEdit?: boolean
   initialTab?: Tab
+  /** Slice E — dc_approve's 409 concurrency-conflict payload, threaded down
+   * from ECNDetailPage's transition mutation error. Only ever relevant on
+   * the "bom" tab; passed straight through to BOMChangesPanel. */
+  bomConflictDiff?: { message: string; diff: Record<string, unknown> } | null
+  onDismissBomConflict?: () => void
 }
 
 export default function ECNItemPanel({
   ecnId, itemId, nextLineNumber, customerNumber, onClose, canEdit = true, initialTab = "details",
+  bomConflictDiff = null, onDismissBomConflict,
 }: Props) {
   const isNew = itemId === null
   const qc = useQueryClient()
@@ -221,7 +228,7 @@ export default function ECNItemPanel({
           {/* Tab bar — only show for existing items */}
           {!isNew && (
             <div className="flex gap-0 -mb-px mt-2">
-              {(["details", "routing", "mpns"] as Tab[]).map((t) => (
+              {(["details", "routing", "bom", "mpns"] as Tab[]).map((t) => (
                 <button
                   key={t}
                   type="button"
@@ -232,7 +239,7 @@ export default function ECNItemPanel({
                       : "border-transparent text-neutral-400 hover:text-neutral-600"
                   }`}
                 >
-                  {t === "routing" ? "Routing Ops" : t === "mpns" ? "MPNs" : "Details"}
+                  {t === "routing" ? "Routing Ops" : t === "bom" ? "BOM Changes" : t === "mpns" ? "MPNs" : "Details"}
                 </button>
               ))}
             </div>
@@ -526,6 +533,20 @@ export default function ECNItemPanel({
               itemId={itemId}
               itemNumber={itemNumber}
               readOnly={!canEdit}
+            />
+          </div>
+        )}
+
+        {/* ── BOM Changes tab (Slice E, I2-6) ── */}
+        {!isNew && tab === "bom" && itemId && (
+          <div className="flex-1 overflow-y-auto px-7 py-6 bg-neutral-50/60">
+            <BOMChangesPanel
+              ecnId={ecnId}
+              itemId={itemId}
+              itemNumber={itemNumber}
+              readOnly={!canEdit}
+              conflictDiff={bomConflictDiff}
+              onDismissConflict={onDismissBomConflict}
             />
           </div>
         )}

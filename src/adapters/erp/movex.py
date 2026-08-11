@@ -456,14 +456,26 @@ class MovexRestAdapter(ERPAdapter):
         operation_number: int,
         from_date: int,
         *,
+        facility: str = "D",
         bom_type: str = "M",
         idempotency_key: str,
     ) -> dict[str, Any]:
+        """PDS002MI.AddComponent.
+
+        facility (R9, ADR-012 — confirmed still hardcoded to 'D' as of
+        2026-07-16): now parameterised from the ECN's actual facility,
+        matching how routing-op writes (add_routing_operation/
+        update_routing_operation) already take facility as a real
+        parameter. Defaults to 'D' only for backward compatibility with any
+        caller that predates this fix — _queue_routing_operations_outbox and
+        _queue_bom_changes_outbox both pass the ECN's real facility
+        explicitly, never relying on this default.
+        """
         resp = await self._post(
             "/PDS002MI/AddComponent",
             json={
                 "cono": self.cono,
-                "faci": "D",          # facility — will be parameterised Sprint 2
+                "faci": facility,
                 "prno": parent_item,
                 "mseq": str(operation_number),
                 "mtno": component_item,
@@ -495,6 +507,52 @@ class MovexRestAdapter(ERPAdapter):
                 "mtno": component_item,
                 "opno": operation_number,
                 "fdat": from_date,    # YYYYMMDD integer
+                "boms": bom_type,
+            },
+            headers={"Idempotency-Key": idempotency_key},
+        )
+        return resp.json()
+
+    async def update_bom_component(
+        self,
+        parent_item: str,
+        component_item: str,
+        operation_number: int,
+        from_date: int,
+        to_date: int,
+        *,
+        facility: str = "D",
+        bom_type: str = "M",
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """PDS002MI.UpdateComponent (W-1 — confirmed NOT YET BUILT on
+        movex-rest-api, docs/movex-rest-api-bom-contract.md; mock-verified
+        only, tracked as I2-19 for live-OQ verification once W-1 ships).
+
+        Mirrors add_bom_component's shape (same BOM-write transaction
+        family/file, PDS002MI, hence the same lowercase POST payload key
+        convention — NOT the uppercase convention used by the routing-write
+        family (update_routing_operation/add_routing_operation)), but closes
+        an existing date-effective line by setting TDAT instead of creating
+        a new one. Used by _queue_bom_changes_outbox for both DELETE (close,
+        never physical delete — D6) and the close-half of CHANGE (D6:
+        "CHANGE = close old line + add new date-effective line").
+
+        from_date identifies which existing MPDMAT line to close (part of
+        its key: CONO+FACI+PRNO+STRT+MSEQ+OPNO+FDAT, per
+        analysis/PDS002MI-routing-analysis.md) — to_date is the new TDAT
+        value being written.
+        """
+        resp = await self._post(
+            "/PDS002MI/UpdateComponent",
+            json={
+                "cono": self.cono,
+                "faci": facility,
+                "prno": parent_item,
+                "mtno": component_item,
+                "opno": operation_number,
+                "fdat": from_date,    # YYYYMMDD integer — identifies the line being closed
+                "tdat": to_date,      # YYYYMMDD integer — new close date being written
                 "boms": bom_type,
             },
             headers={"Idempotency-Key": idempotency_key},
