@@ -444,6 +444,36 @@ class BOMChangePatchBody(BaseModel):
         return v
 
 
+class BulkBomChangeRow(BaseModel):
+    """One parsed row from the bulk BOM-change upload template (Stargile's
+    UploadECNBoMs parity). ECN-wide, multi-item — item_number is a per-row
+    field (verified against the real Stargile source, 2026-08-11: prno/
+    zecnln are per-row in UploadECNBoMs.java, not a URL-level scope), same
+    shape as BulkRoutingRow. item_number resolves to an existing ecn_items
+    row on this ECN — bulk BOM-change upload does not create items.
+
+    CHANGE/DELETE rows require old_from_date — same rule as the single-row
+    create endpoint (service-layer validated, not here, so both paths share
+    one rule instead of duplicating it in Pydantic).
+    """
+    item_number: str = Field(..., min_length=1, max_length=15)
+    component_number: str = Field(..., min_length=1, max_length=15)
+    change_type: str
+    quantity: float | None = Field(None, ge=0)
+    unit_of_measure: str | None = Field(None, max_length=3)
+    operation_number: int | None = Field(None, ge=1)
+    from_date: int | None = None
+    old_from_date: int | None = None
+    old_quantity: float | None = Field(None, ge=0)
+
+    @field_validator("change_type")
+    @classmethod
+    def _validate_bulk_bom_change_type(cls, v: str) -> str:
+        if v not in VALID_BOM_CHANGE_TYPES:
+            raise ValueError(f"change_type must be one of {sorted(VALID_BOM_CHANGE_TYPES)}")
+        return v
+
+
 class BulkMPNRow(BaseModel):
     """One MPN row after CAD-BOM-row expansion (see _expand_mpn_rows in ecn_items.py).
 

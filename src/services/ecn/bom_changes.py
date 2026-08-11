@@ -212,6 +212,37 @@ class ECNBomChangesMixin:
         )
         return [self._row_to_bom_change(r) for r in rows]
 
+    async def list_all_bom_changes(self, ecn_id: str) -> list[BOMChangeResponse]:
+        """BOM changes across every item on this ECN, for the aggregate
+        ECN-detail view's BOM Changes tab and export (Slice E, I2-6) —
+        mirrors list_all_routing_operations/list_all_mpns (items.py). Each
+        row carries item_number so the tab can group/label rows without a
+        second per-item fetch.
+        """
+        ecn_row = await self._session.execute(
+            sa.text("SELECT id FROM ecn_instances WHERE id = :ecn_id"),
+            {"ecn_id": ecn_id},
+        )
+        if not ecn_row.first():
+            raise ECNNotFound(ecn_id)
+
+        rows = await self._session.execute(
+            sa.text(
+                f"SELECT {self._SELECT_COLUMNS}, i.item_number "
+                "FROM ecn_bom_changes b "
+                "JOIN ecn_items i ON i.id = b.ecn_item_id "
+                "WHERE i.ecn_id = :ecn_id "
+                "ORDER BY i.line_number, b.created_at"
+            ),
+            {"ecn_id": ecn_id},
+        )
+        result: list[BOMChangeResponse] = []
+        for r in rows:
+            change = self._row_to_bom_change(r)
+            change.item_number = r[21]
+            result.append(change)
+        return result
+
     async def update_bom_change(
         self,
         ecn_id: str,
@@ -270,3 +301,112 @@ class ECNBomChangesMixin:
             sa.text("DELETE FROM ecn_bom_changes WHERE id = :change_id"),
             {"change_id": change_id},
         )
+
+    async def bulk_create_bom_changes(
+        self,
+        ecn_id: str,
+        rows: list[dict],
+        *,
+        actor_role: str | None = None,
+    ) -> list[BOMChangeResponse]:
+        """Insert BOM changes for one or many items on one ECN in one atomic
+        transaction (Stargile's UploadECNBoMs parity). ECN-wide, multi-item —
+        mirrors bulk_create_routing_operations (items.py) exactly: rows are
+        not required to share an item_number, each row resolves its own
+        item_number -> item_id. Verified against the real Stargile source
+        (2026-08-11): UploadECNBoMs.java reads prno/zecnln per row, not from
+        a fixed per-request scope, so an upload can span many items — an
+        earlier draft of this method assumed single-item scope and was
+        corrected before landing.
+
+        Each dict must match BulkBomChangeRow fields (item_number,
+        component_number, change_type, quantity, unit_of_measure,
+        operation_number, from_date, old_from_date, old_quantity).
+
+        Raises:
+            ECNNotFound: ECN does not exist.
+            ECNValidationError: edit-lock violated (post-DC_APPROVED without
+                DC role — same rule as create_bom_change), a row references
+                an item_number not on this ECN, a row's change_type is
+                invalid or CHANGE/DELETE is missing old_from_date, or a
+                duplicate (item_number, component_number, operation_number)
+                triple is found in the batch.
+        """
+        # -- Batch-level duplicate check (within the submitted rows) ----------
+        # Key includes item_number — the same (component_number,
+        # operation_number) pair on two DIFFERENT items is not a duplicate.
+        seen: set[tuple[str, str, Any]] = set()
+        for idx, row in enumerate(rows, start=1):
+            key = (row.get("item_number", ""), row.get("component_number", ""), row.get("operation_number"))
+            if key in seen:
+                raise ECNValidationError(
+                    f"Row {idx}: operation_number '{key[2]}' for component "
+                    f"'{key[1]}' on item '{key[0]}' appears more than once in the upload"
+                )
+            seen.add(key)
+
+        # -- Edit-lock guard ----------------------------------------------------
+        await self._require_bom_change_editable(ecn_id, actor_role)
+
+        # -- Resolve item_number -> item_id for every item already on this ECN
+        item_rows = await self._session.execute(
+            sa.text("SELECT id, item_number FROM ecn_items WHERE ecn_id = :ecn_id"),
+            {"ecn_id": ecn_id},
+        )
+        item_by_number = {r[1]: r[0] for r in item_rows}
+        if not item_by_number:
+            # No items at all on this ECN -> confirm the ECN itself exists
+            # before reporting a row-level "item not found" (matches
+            # create_bom_change's ECNNotFound(ecn_id)-vs-item distinction).
+            ecn_row = await self._session.execute(
+                sa.text("SELECT id FROM ecn_instances WHERE id = :ecn_id"),
+                {"ecn_id": ecn_id},
+            )
+            if not ecn_row.first():
+                raise ECNNotFound(ecn_id)
+
+        # -- Per-row validation + insert ----------------------------------------
+        created: list[tuple[str, str]] = []  # (item_id, change_id)
+        for idx, row in enumerate(rows, start=1):
+            item_number = row["item_number"]
+            item_id = item_by_number.get(item_number)
+            if item_id is None:
+                raise ECNValidationError(
+                    f"Row {idx}: item_number '{item_number}' was not found on this "
+                    "ECN — add it via item upload first"
+                )
+
+            change_type = row["change_type"]
+            old_from_date = row.get("old_from_date")
+            try:
+                self._validate_change_type_fields(change_type, old_from_date)
+            except ECNValidationError as exc:
+                raise ECNValidationError(f"Row {idx}: {exc}") from exc
+
+            change_id = str(uuid.uuid4())
+            await self._session.execute(
+                sa.text(
+                    "INSERT INTO ecn_bom_changes "
+                    "(id, ecn_item_id, change_type, component_number, quantity, unit_of_measure, "
+                    "operation_number, from_date, old_from_date, old_quantity) "
+                    "VALUES (:id, :item_id, :change_type, :component_number, :quantity, :uom, "
+                    ":opno, :from_date, :old_from_date, :old_quantity)"
+                ),
+                {
+                    "id": change_id, "item_id": str(item_id), "change_type": change_type,
+                    "component_number": row["component_number"], "quantity": row.get("quantity"),
+                    "uom": row.get("unit_of_measure"), "opno": row.get("operation_number"),
+                    "from_date": row.get("from_date"), "old_from_date": old_from_date,
+                    "old_quantity": row.get("old_quantity"),
+                },
+            )
+            created.append((str(item_id), change_id))
+
+        result: list[BOMChangeResponse] = []
+        for item_id, change_id in created:
+            change = await self._get_bom_change(ecn_id, item_id, change_id)
+            change.item_number = next(
+                (num for num, iid in item_by_number.items() if str(iid) == item_id), None
+            )
+            result.append(change)
+        return result

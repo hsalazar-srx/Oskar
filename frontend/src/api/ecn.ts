@@ -322,6 +322,13 @@ export async function fetchBomChanges(ecnId: string, itemId: string): Promise<BO
   return data
 }
 
+/** GET /api/v1/ecn/{ecnId}/bom-changes — across every item on the ECN, for
+ * the aggregate BOM Changes tab (ECN detail/print output, Slice E). */
+export async function fetchAllBomChanges(ecnId: string): Promise<BOMChange[]> {
+  const { data } = await axiosInstance.get(`/api/v1/ecn/${ecnId}/bom-changes`)
+  return data
+}
+
 export async function createBomChange(
   ecnId: string, itemId: string, body: BOMChangeBody, actorRole?: string,
 ): Promise<BOMChange> {
@@ -353,17 +360,19 @@ export async function deleteBomChange(
 }
 
 /**
- * POST /api/v1/ecn/{ecnId}/items/{itemId}/bom-changes/bulk
+ * POST /api/v1/ecn/{ecnId}/bom-changes/bulk
  * xlsx/csv bulk BOM-change upload (Stargile's UploadECNBoMs parity, S9-8
- * pattern) — see src/routers/ecn_bom.py (Scope item 9).
+ * pattern). Multi-item, ECN-wide — like bulkCreateRoutingOps, NOT scoped to
+ * a single item_id. Verified against the real Stargile UploadECNBoMs.java
+ * source (2026-08-11): item_number (prno) is a per-row field, so one upload
+ * can spread across many items — see src/routers/ecn_bom.py's bulk endpoint
+ * docstring for the full correction note.
  */
-export async function bulkCreateBomChanges(
-  ecnId: string, itemId: string, file: File,
-): Promise<BOMChange[]> {
+export async function bulkCreateBomChanges(ecnId: string, file: File): Promise<BOMChange[]> {
   const form = new FormData()
   form.append("file", file)
   const { data } = await axiosInstance.post(
-    `/api/v1/ecn/${ecnId}/items/${itemId}/bom-changes/bulk`,
+    `/api/v1/ecn/${ecnId}/bom-changes/bulk`,
     form,
     { headers: { "Content-Type": "multipart/form-data" } },
   )
@@ -591,4 +600,8 @@ export async function exportRoutingOps(ecnId: string, ecnNumber: string): Promis
 
 export async function exportMPNs(ecnId: string, ecnNumber: string): Promise<void> {
   await downloadFile(`/api/v1/ecn/${ecnId}/mpns/export`, `${ecnNumber}-mpns.xlsx`)
+}
+
+export async function exportBomChanges(ecnId: string, ecnNumber: string): Promise<void> {
+  await downloadFile(`/api/v1/ecn/${ecnId}/bom-changes/export`, `${ecnNumber}-bom-changes.xlsx`)
 }
