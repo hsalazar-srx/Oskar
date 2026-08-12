@@ -207,6 +207,40 @@ Management vault and personal `CLAUDE.md` as a cross-project rule — see refere
 
 ---
 
+## Follow-up: full-repo audit (2026-08-12)
+
+Per the process changes above (audit claim-lists as a set), every ADR in the repo (ADR-001
+through ADR-012, plus all 12 PRE-decisions) was audited for the same pattern: an uncited claim
+that OSKAR's behavior "matches/follows" Stargile's or PLM's. Findings:
+
+- **ADR-009** ("DC Single Gate") had the closest structural match to D6 — a full Stargile
+  status-code mapping table asserted as fact with no citation, sitting in the same ADR as a
+  claim that *did* cite its source (`IECNStatus.java`/`RequestECN.awf`, status 35). Verified
+  directly against `IECNStatus.java` (13 status constants) and cross-checked against
+  `RequestECN.awf`'s diagram state names (which match 1:1 in sequence) — **unlike D6, this claim
+  was substantively correct**: 11 of 13 status codes/names matched exactly. The one imprecision
+  (status 25, `DC_CHECK_PENDING`, was folded into an undifferentiated "review pending statuses"
+  row rather than being called out by name) was a summary-table labeling gap, not a wrong
+  design — the ADR's own prose already correctly described status 25 as an automated queue state
+  with no DC action attached. Citation and the precise label added 2026-08-12; **no design or
+  code change required** (`src/workflow/machine.py`, migration 0006 both already correct).
+- ADR-002 through ADR-005 each had one uncited Stargile mechanism claim (`AsynchControl`/LUoW
+  behavior, `FileRoleManagement`/rolemap.xml, `AuditTrailService` plain-text, UI-only write
+  gate) — all flagged low priority, since each is background motivation for a decision already
+  justified on its own merits, not a claim OSKAR's own behavior depends on being correct.
+  Left uncited for now; revisit only if a future change makes one of them load-bearing.
+- ADR-001, 006, 007, 008, 010, 011, and all 12 PRE-decisions (except PRE-9, which is already
+  correctly hedged as "needs verification" rather than asserted as fact): no Stargile/PLM
+  mechanism claims found.
+
+Conclusion: D6 was the one claim in the repo that was both uncited *and* wrong. The audit found
+one other structurally-similar uncited claim (ADR-009) but it held up under verification — the
+pattern (uncited claim) is more common than the failure mode (uncited *and* wrong), which is
+useful calibration: citing sources isn't about assuming every claim is wrong, it's about making
+each one checkable so a wrong one doesn't get five weeks head start before anyone looks.
+
+---
+
 ## References
 
 - I2-19 (`ai/tasks/sprint-backlog.md`) — the concrete fix

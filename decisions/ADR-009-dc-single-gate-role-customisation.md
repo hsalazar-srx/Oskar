@@ -114,17 +114,31 @@ same pattern as APPROVED → IMPLEMENTED). No manual DC action required post-imp
 
 **Self-approval prohibition unchanged**: originator cannot approve any stage of their own ECN.
 
-**Stargile alignment:**
+**Stargile alignment (verified 2026-08-12, LL-003 follow-up audit — against
+`com/startronics/ecn/process/services/IECNStatus.java` directly; cross-checked against
+`Processes/RequestECN.awf`'s state names, which match `IECNStatus.java` 1:1 in sequence):**
 
 | Stargile status | Stargile name | OSKAR equivalent |
 |----------------|--------------|-----------------|
 | 5, 10 | PRELIMINARY / INITIATION | DRAFT (0) |
-| 15, 20, 25 | Review pending statuses | (removed — folded into ENGINEERING_REVIEW entry) |
-| 30, 55, 65 | APPROVAL_PENDING, COST_REVIEW, FINAL_APPROVAL | MANAGEMENT_REVIEW (40) |
-| **35** | **DC_APPROVAL_PENDING** | **DC_APPROVED (25)** — direct alignment |
+| 15, 20 | PRELIMINARY_REVIEW_PENDING, PRE_APPROVAL_PENDING | (removed — folded into ENGINEERING_REVIEW entry) |
+| 25 | DC_CHECK_PENDING — an internal queue state (see Context above), not a separate DC decision point | (removed — folded into ENGINEERING_REVIEW entry, same as 15/20; not a source of lost DC functionality since no DC action occurred there) |
+| 30, 55, 65 | APPROVAL_PENDING, COST_REVIEW_PENDING, FINAL_APPROVAL_PENDING | MANAGEMENT_REVIEW (40) |
+| **35** | **DC_APPROVAL_PENDING** | **DC_APPROVED (25)** — direct alignment, DC's single approval action |
 | **50** | **MOVEX_UPDATED_PENDING** | **APPROVED (50)** |
 | 60 | ACTION_NOTIFICATION_PENDING | (notifications fire on transition — not a status) |
 | 90, 99 | ECN_COMPLETE / ECN_CANCELLED | CLOSED (70) / CANCELLED (80) |
+
+All 13 status constants in `IECNStatus.java` are accounted for above. Prior to 2026-08-12 this
+table folded status 25 into the generic "15, 20, 25 = review pending statuses" row, which
+obscured that 25 is specifically `DC_CHECK_PENDING` (a DC-associated queue state) rather than an
+undifferentiated review status — corrected here for precision. **This does not change the
+design**: DC still approves exactly once, at DC_APPROVED (25 in OSKAR / 35 in Stargile) — the
+same single-gate decision this ADR establishes. DC_CHECK_PENDING was, and remains, correctly
+characterised as an automated queue state with no human decision attached (see Context,
+"Stargile status 25... was an internal queue state, not a separate user action"), so OSKAR's
+collapse of it into the ENGINEERING_REVIEW entry loses no DC functionality. No change to
+`src/workflow/machine.py` or migration 0006 required.
 
 **Notification changes:**
 
