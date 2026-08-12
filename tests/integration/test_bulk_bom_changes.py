@@ -53,6 +53,27 @@ class TestBulkCreateBomChanges:
         assert {c.item_number for c in changes} == {"LFBULK0001", "LFBULK0002"}
         assert {c.component_number for c in changes} == {"LF200010", "LF200020"}
 
+    async def test_sequence_number_notes_and_circuit_refs_are_persisted(
+        self, db_session: AsyncSession
+    ):
+        """Regression: the bulk INSERT used to omit sequence_number, notes,
+        and circuit_refs_new entirely, silently dropping them even when a
+        caller supplied them — the single-row create_bom_change endpoint and
+        BOMChangesPanel.tsx's manual form always supported all three."""
+        svc = ECNService(db_session)
+        ecn_id, _item1_id, _item2_id = await _make_ecn_with_items(db_session)
+        rows = [
+            {"item_number": "LFBULK0001", "component_number": "LF200010", "change_type": "ADD",
+             "quantity": 4.0, "operation_number": 10, "sequence_number": 100,
+             "from_date": 20260901, "notes": "Added per SI review",
+             "circuit_refs_new": ["R1", "R7", "R12"]},
+        ]
+        changes = await svc.bulk_create_bom_changes(ecn_id, rows)
+        assert len(changes) == 1
+        assert changes[0].sequence_number == 100
+        assert changes[0].notes == "Added per SI review"
+        assert changes[0].circuit_refs_new == ["R1", "R7", "R12"]
+
     async def test_single_item_multi_row_insert(self, db_session: AsyncSession):
         svc = ECNService(db_session)
         ecn_id, _item1_id, _item2_id = await _make_ecn_with_items(db_session)

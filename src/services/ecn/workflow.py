@@ -917,30 +917,46 @@ class ECNWorkflowMixin:
         return inserted
 
     async def _queue_bom_changes_outbox(self, ecn_id: str) -> list[str]:
-        """Queue PDS002MI writes for every ecn_bom_changes row on this ECN,
-        following the Stargile supersession model (D6): CHANGE = close old
-        line + add new date-effective line; DELETE = close, never physical
-        delete.
+        """Queue PDS002MI writes for every ecn_bom_changes row on this ECN.
+
+        I2-19 UPDATE (2026-08-11): D6's original model called this "close old
+        line (TDAT) + add new date-effective line", closing via
+        PDS002MI.UpdateComponent. That transaction is deployed on
+        movex-rest-api but its TDAT field is confirmed broken there (reports
+        success, never persists — see MovexRestAdapter.update_bom_component's
+        docstring and docs/movex-rest-api-bom-contract.md's "W-1 live-test
+        findings" section). Per the movex-rest-api team's own suggestion,
+        confirmed against Stargile's real source
+        (ProcessBOMLineRule.java, com.startronics.ecn.process.rules) as the
+        model to follow: Stargile's live BOM-apply engine never used
+        UpdateComponent/TDAT for BOM component lines either — CHANGE there is
+        a plain add at the ECN's effective date, and DELETE is an add-then-
+        delete trick. Oskar now closes lines via PDS002MI.Delete (physical
+        delete of the M3 record) instead of UpdateComponent, which is already
+        live-verified working (add_bom_component and delete_bom_component
+        both confirmed against real CONO=300 data). "Close" here means
+        "remove the M3 line", not "physical delete the ecn_bom_changes
+        history row" — Oskar's own audit trail (ecn_bom_changes,
+        ecn_transition_history) is untouched by this; only the M3-side BOM
+        line is deleted.
 
           ADD    -> 1 row: PDS002MI.AddComponent.
-          DELETE -> 1 row: PDS002MI.UpdateComponent "close" (TDAT = the
-                    change's old_to_date if given, else today — closes the
-                    live line without a replacement).
-          CHANGE -> 2 rows: an UpdateComponent close row (TDAT = new
-                    from_date - 1, per D6's "TDAT = new FDAT - 1" rule) and
-                    an AddComponent add row whose depends_on is the close
-                    row's id (Slice E0's dispatch-ordering mechanism) — the
-                    add is gated behind the close's completion so Movex
-                    never sees two overlapping date-effective lines for the
-                    same key.
+          DELETE -> 1 row: PDS002MI.Delete of the existing line (identified
+                    by old_from_date, part of MPDMAT's key) — no replacement.
+          CHANGE -> 2 rows: a Delete row removing the old line, and an
+                    AddComponent row (FDAT = the change's own from_date, the
+                    value already captured from the user — matches Stargile's
+                    EHFDAT-sourced effective date) whose depends_on is the
+                    delete row's id (Slice E0's dispatch-ordering mechanism)
+                    — the add is gated behind the delete's completion so
+                    Movex never sees two overlapping lines for the same key
+                    for even a moment.
 
         Idempotency key format: PDS002MI.{transaction}:{ecn_id}:{bom_change_id}[:close|:add].
         ON CONFLICT DO NOTHING — safe to call twice for the same ECN (see
         TestIdempotencyOnReplay in tests/integration/test_queue_bom_changes_outbox.py).
         Returns list of newly inserted outbox IDs for post-commit Celery dispatch.
         """
-        from datetime import date
-
         rows = await self._session.execute(
             sa.text(
                 "SELECT b.id, b.ecn_item_id, i.item_number, e.facility, "
@@ -1020,6 +1036,7 @@ class ECNWorkflowMixin:
                     "from_date": from_date,
                     "bom_type": bom_type,
                     "facility": facility,
+                    "sequence_number": seqno,
                 }
                 if _circuit_refs_meta:
                     mi_params["_circuit_refs"] = _circuit_refs_meta
@@ -1028,35 +1045,35 @@ class ECNWorkflowMixin:
                     inserted.append(new_id)
 
             elif change_type == "DELETE":
-                mi_tx = "PDS002MI.UpdateComponent"
+                mi_tx = "PDS002MI.Delete"
                 idempotency_key = f"{mi_tx}:{ecn_id}:{change_id}:close"
-                close_to_date = old_to_date or int(date.today().strftime("%Y%m%d"))
                 mi_params = {
                     "parent_item": item_number,
                     "component_item": component_number,
                     "operation_number": old_opno if old_opno is not None else opno,
                     "from_date": old_from_date,
-                    "to_date": close_to_date,
                     "bom_type": bom_type,
                     "facility": facility,
+                    "sequence_number": seqno,
                 }
                 new_id = await _insert(item_id, mi_tx, idempotency_key, mi_params)
                 if new_id:
                     inserted.append(new_id)
 
             elif change_type == "CHANGE":
-                close_mi_tx = "PDS002MI.UpdateComponent"
+                close_mi_tx = "PDS002MI.Delete"
                 close_key = f"{close_mi_tx}:{ecn_id}:{change_id}:close"
-                # D6: "CHANGE = close old line (TDAT = new FDAT - 1)".
-                close_to_date = from_date - 1 if from_date is not None else old_to_date
+                # I2-19: delete the old line outright (TDAT/UpdateComponent
+                # is broken on movex-rest-api) instead of closing it via
+                # to-date. Matches Stargile's own add-then-delete pattern.
                 close_params = {
                     "parent_item": item_number,
                     "component_item": component_number,
                     "operation_number": old_opno if old_opno is not None else opno,
                     "from_date": old_from_date,
-                    "to_date": close_to_date,
                     "bom_type": bom_type,
                     "facility": facility,
+                    "sequence_number": seqno,
                 }
                 close_id = await _insert(item_id, close_mi_tx, close_key, close_params)
                 if close_id:
@@ -1073,6 +1090,7 @@ class ECNWorkflowMixin:
                     "from_date": from_date,
                     "bom_type": bom_type,
                     "facility": facility,
+                    "sequence_number": seqno,
                 }
                 if _circuit_refs_meta:
                     add_params["_circuit_refs"] = _circuit_refs_meta

@@ -18,12 +18,47 @@ What it creates
 5. APPROVED           — "BOM rationalisation — Q2 2026"          (hsalazar, DC approved)
 6. REJECTED           — "Add conformal coating step"             (eng_user, rejected by SE)
 7. CLOSED             — "Phase 1 EOL component swap"             (hsalazar, archived)
+8. DRAFT (BOM)        — "BOM changes — Widget Assembly A rev"    (hsalazar, ADD/CHANGE/DELETE lines)
+9. DC_APPROVED (BOM)  — "BOM supersession — connector swap"      (hsalazar, full write-back chain)
+10. DC_APPROVED (blocked) — "BOM change blocked by live conflict"    (hsalazar, dc_approve fails — see below)
+
+ECNs 8-10 exercise the BOM module (Slice E) against item LF100001, the item
+tests/fixtures/bom/single_level.json and scripts/movex_stub.py both key off.
+They need a reachable ERP endpoint (MOVEX_API_URL) to show their full
+behaviour — the script probes it once at startup (see "BOM demo notes" below)
+and degrades gracefully (matching production's own resilience design) if
+nothing answers: the ECNs still get created and still carry their BOM change
+rows, they just won't have gone through a real snapshot/concurrency check.
 
 Each ECN has:
   - 1–3 line items with realistic part numbers and descriptions
   - MPNs with manufacturer references where relevant
   - Routing operations (where routing_changes=True)
   - Full audit chain (real transitions via ECNService — not raw SQL)
+
+BOM demo notes (ECNs 8-10)
+---------------------------
+The script probes MOVEX_API_URL once at startup (a real GET /bom/LF100001,
+not health_check() — movex_stub.py has no /health route):
+  - Reachable   -> ECN 9 goes through a real submit-time snapshot + dc_approve
+                   concurrency re-fetch; ECN 10 is set up by actually POSTing
+                   to the stub's /_test-mutate/bom/LF100001 endpoint between
+                   submit and dc_approve so the conflict is real, not staged.
+                   Point MOVEX_API_URL at scripts/movex_stub.py for this —
+                   the real movex-rest-api doesn't expose /_test-mutate and
+                   W-1 (UpdComponent) isn't built there yet (I2-19), so the
+                   real API is NOT a safe target for ECN 9/10's dc_approve.
+  - Unreachable -> both ECNs still get created with the same bom_changes
+                   rows; the snapshot/concurrency-gate calls skip themselves
+                   with a logged warning (production's own degrade-gracefully
+                   behaviour — see ecn.bom_snapshot.capture_failed /
+                   ecn.bom_concurrency.skipped_no_erp_adapter in workflow.py),
+                   so ECN 9 simply reaches DC_APPROVED without ever having
+                   compared against a live BOM, and ECN 10 is skipped
+                   entirely (there's nothing to conflict against).
+Run the stub first if you want the full story:
+    uvicorn scripts.movex_stub:app --port 8100
+    MOVEX_API_URL=http://localhost:8100 python scripts/seed_demo.py
 
 Idempotent: deletes existing demo ECNs by title prefix "[DEMO]" before re-creating.
 Safe to run against dev DB. Never touches the test DB (port 5433).
@@ -63,10 +98,13 @@ import sys
 # Allow running from project root inside Docker (/app) or Windows host
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import httpx
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from src.adapters.erp.movex import MovexRestAdapter
 from src.services.ecn.models import (
+    BOMChangeRequest,
     ECNCreateRequest,
     ECNStatusTransitionRequest,
     RoutingOperationRequest,
@@ -114,7 +152,7 @@ async def _wipe_demo_ecns(session: AsyncSession) -> int:
     if not ids:
         return 0
     for ecn_id in ids:
-        # routing_operations and mpns hang off ecn_items, not ecn_id directly
+        # routing_operations, mpns, and bom_changes hang off ecn_items, not ecn_id directly
         await session.execute(
             sa.text(
                 "DELETE FROM ecn_routing_operations WHERE ecn_item_id IN "
@@ -129,13 +167,23 @@ async def _wipe_demo_ecns(session: AsyncSession) -> int:
             ),
             {"id": ecn_id},
         )
+        await session.execute(
+            sa.text(
+                "DELETE FROM ecn_bom_changes WHERE ecn_item_id IN "
+                "(SELECT id FROM ecn_items WHERE ecn_id = :id)"
+            ),
+            {"id": ecn_id},
+        )
         for tbl in (
             "ecn_transition_history",
             "ecn_rejections",
             "ecn_approval_steps",
             "ecn_role_assignments",
-            "ecn_items",
+            # movex_outbox before ecn_items: fk_outbox_item (0001_initial_schema.py)
+            # references ecn_items.id — rows left pending (no Celery worker
+            # running against this seed) still hold that FK on re-run.
             "movex_outbox",
+            "ecn_items",
         ):
             await session.execute(
                 sa.text(f"DELETE FROM {tbl} WHERE ecn_id = :id"), {"id": ecn_id}
@@ -270,9 +318,9 @@ async def _approve_all_steps(svc: ECNService, ecn_id: str) -> None:
 
 
 async def _advance(svc: ECNService, ecn_id: str, trigger: str,
-                   actor: str, role: str, **kw) -> None:
+                   actor: str, role: str, erp: MovexRestAdapter | None = None, **kw) -> None:
     req = ECNStatusTransitionRequest(trigger=trigger, actor_role=role, **kw)
-    await svc.transition(ecn_id, req, actor_username=actor)
+    await svc.transition(ecn_id, req, actor_username=actor, erp=erp)
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +346,17 @@ async def _ecn_draft(svc: ECNService) -> str:
                          mpn="GRM155R61A104KA01D", manufacturer="Murata", is_default=True)
     await svc.create_item(ecn.id, line_number=20, item_number="LF-CAP-0101",
                           item_name="Cap 47nF 0402 X7R 16V", is_new_item=False)
+    # Real Movex items for the bulk routing/MPN upload demo (2026-07-21 weekly
+    # meeting) — same LFAM050001 used in last week's live Movex write demo
+    # (ECN-2026-D-0010) and same LM741CN/NOPB MPN used in last week's Autofill
+    # demo. Existing items (is_new_item=False) so bulk upload can target them
+    # without creating anything — see ai/tasks/demo-files/*.csv.
+    await svc.create_item(ecn.id, line_number=30, item_number="LFAM050001",
+                          item_name="SOLSHARE 35A PACKAGED UNIT", is_new_item=False)
+    await svc.create_item(ecn.id, line_number=40, item_number="LFDR410018",
+                          item_name="IC OPAMP GP 1 CIRCUIT 8SOIC", is_new_item=False)
+    await svc.create_item(ecn.id, line_number=50, item_number="LFDR120001",
+                          item_name="RES 1K OHM 1% 1/10W 0603", is_new_item=False)
     return ecn.id
 
 
@@ -462,8 +521,188 @@ async def _ecn_closed(svc: ECNService) -> str:
     await _advance(svc, ecn.id, "approve_engineering", SE, "SE")
     await _approve_all_steps(svc, ecn.id)
     await _advance(svc, ecn.id, "dc_approve", DC, "DC")
-    await _advance(svc, ecn.id, "movex_write_complete", OR, "OR")
+    # dc_approve auto-advances straight to IMPLEMENTED when nothing gets
+    # queued to movex_outbox (no routing/BOM changes here) — workflow.py's
+    # transition() fires movex_write_complete itself in that case, so calling
+    # it again here would be an invalid transition. Only call it explicitly
+    # if dc_approve didn't already do so.
+    current = await svc.get(ecn.id)
+    if current.status_name == "DC_APPROVED":
+        await _advance(svc, ecn.id, "movex_write_complete", OR, "OR")
     await _advance(svc, ecn.id, "auto_close", OR, "OR")
+    return ecn.id
+
+
+# ---------------------------------------------------------------------------
+# BOM module builders (Slice E, I2-6) — all target LF100001, the item
+# tests/fixtures/bom/single_level.json and scripts/movex_stub.py both serve
+# (12 lines: LF200010..LF200020, see the fixture for the full live shape).
+# ---------------------------------------------------------------------------
+
+_BOM_ITEM = "LF100001"
+
+
+async def _ecn_bom_draft(svc: ECNService) -> str:
+    """DRAFT with one ADD, one CHANGE, and one DELETE bom_changes row — shows
+    BOMChangesPanel populated with all three change types before any workflow
+    transition, no ERP call needed (create_bom_change is pure DB CRUD)."""
+    ecn = await svc.create(
+        _req(
+            title="[DEMO] BOM changes — Widget Assembly A rev",
+            description=(
+                "Rev change on Widget Assembly A (LF100001): add a new bypass "
+                "capacitor at op 10, swap the MCU for a pin-compatible variant "
+                "with higher flash, and remove the now-redundant status LED."
+            ),
+            new_parts=True,
+        ),
+        OR,
+    )
+    item = await svc.create_item(ecn.id, line_number=10, item_number=_BOM_ITEM,
+                                 item_name="Widget Assembly A", is_new_item=False)
+    await svc.create_bom_change(
+        ecn.id, item.id,
+        BOMChangeRequest(
+            change_type="ADD", component_number="LF200021",
+            quantity=1.0, unit_of_measure="EA", operation_number=10,
+            from_date=20260901,
+            notes="New bypass cap — added per SI review, see attached sim results.",
+        ),
+    )
+    await svc.create_bom_change(
+        ecn.id, item.id,
+        BOMChangeRequest(
+            change_type="CHANGE", component_number="LF200012",
+            quantity=1.0, unit_of_measure="EA", operation_number=10,
+            from_date=20260901, old_from_date=20240101, old_quantity=1.0,
+            notes="STM32F103 -> STM32F103 (256K flash variant), pin-compatible.",
+        ),
+    )
+    await svc.create_bom_change(
+        ecn.id, item.id,
+        BOMChangeRequest(
+            change_type="DELETE", component_number="LF200015",
+            operation_number=20, old_from_date=20240101,
+            notes="Status LED removed — superseded by host-side status reporting.",
+        ),
+    )
+    return ecn.id
+
+
+async def _ecn_bom_dc_approved(svc: ECNService, erp: MovexRestAdapter | None) -> str:
+    """Carries one ADD + one CHANGE through submit -> dc_approve so, when erp
+    is reachable, this ECN has gone through a real submit-time snapshot
+    capture and dc_approve concurrency re-fetch, and _queue_bom_changes_outbox
+    has queued real movex_outbox rows (AddComponent for the ADD; an
+    UpdateComponent close row + a depends_on-linked AddComponent add row for
+    the CHANGE, per D6's supersession model)."""
+    ecn = await svc.create(
+        _req(
+            title="[DEMO] BOM supersession — connector swap",
+            description=(
+                "Widget Assembly A (LF100001): add a new fixed-mount connector "
+                "and supersede the existing 4-pin JST with a locking variant "
+                "to prevent field disconnection. Approved by DC 2026-08-11."
+            ),
+        ),
+        OR,
+    )
+    item = await svc.create_item(ecn.id, line_number=10, item_number=_BOM_ITEM,
+                                 item_name="Widget Assembly A", is_new_item=False)
+    await svc.create_bom_change(
+        ecn.id, item.id,
+        BOMChangeRequest(
+            change_type="ADD", component_number="LF200022",
+            quantity=1.0, unit_of_measure="EA", operation_number=20,
+            from_date=20260901,
+            notes="Fixed-mount bracket connector — new requirement from field team.",
+        ),
+    )
+    await svc.create_bom_change(
+        ecn.id, item.id,
+        BOMChangeRequest(
+            change_type="CHANGE", component_number="LF200013",
+            quantity=2.0, unit_of_measure="EA", operation_number=20,
+            from_date=20260901, old_from_date=20240101, old_quantity=2.0,
+            notes="4-pin JST -> 4-pin JST locking variant (field disconnect fix).",
+        ),
+    )
+    await _advance(svc, ecn.id, "submit", OR, "OR", erp=erp)
+    await _advance(svc, ecn.id, "approve_engineering", SE, "SE")
+    await _approve_all_steps(svc, ecn.id)
+    await _advance(svc, ecn.id, "dc_approve", DC, "DC", erp=erp)
+    return ecn.id
+
+
+async def _ecn_bom_conflict(svc: ECNService, stub_client: httpx.AsyncClient | None) -> str | None:
+    """Submits with a CHANGE on LF200011, mutates the stub's live BOM on that
+    exact key between submit and dc_approve (via /_test-mutate), then attempts
+    dc_approve — the concurrency gate must catch the conflict and raise, so
+    the ECN stays at MANAGEMENT_REVIEW rather than advancing. Requires the
+    stub specifically (real movex-rest-api has no /_test-mutate endpoint) —
+    returns None (skipped) if stub_client is None."""
+    if stub_client is None:
+        return None
+
+    ecn = await svc.create(
+        _req(
+            title="[DEMO] BOM change blocked by live conflict",
+            description=(
+                "Widget Assembly A (LF100001): change the 100nF bypass "
+                "capacitor's value. Demonstrates the dc_approve concurrency "
+                "gate — the live BOM was edited by someone else after this "
+                "ECN was submitted, on the exact line this ECN is changing, "
+                "so dc_approve is blocked until the conflict is resolved."
+            ),
+        ),
+        OR,
+    )
+    item = await svc.create_item(ecn.id, line_number=10, item_number=_BOM_ITEM,
+                                 item_name="Widget Assembly A", is_new_item=False)
+    await svc.create_bom_change(
+        ecn.id, item.id,
+        BOMChangeRequest(
+            change_type="CHANGE", component_number="LF200011",
+            quantity=10.0, unit_of_measure="EA", operation_number=10,
+            from_date=20260901, old_from_date=20240101, old_quantity=8.0,
+            notes="100nF -> 100nF x10 array, per updated decoupling analysis.",
+        ),
+    )
+    erp = MovexRestAdapter()
+    await erp.open()
+    try:
+        await _advance(svc, ecn.id, "submit", OR, "OR", erp=erp)
+        await _advance(svc, ecn.id, "approve_engineering", SE, "SE")
+        await _approve_all_steps(svc, ecn.id)
+
+        # Simulate someone else editing the live BOM on the same key
+        # (LF200011 @ op 10) after this ECN's submit-time snapshot was taken.
+        # Payload shape matches ecn-bom-changes.spec.ts: fetch the current
+        # BOM, mutate the matching line, POST the full {data:{head,records}}
+        # body back — /_test-mutate replaces the whole GET response, it does
+        # not accept a field-level patch.
+        current = (await stub_client.get(f"/api/bom/{_BOM_ITEM}")).json()
+        mutated = {
+            "data": {
+                "head": current["data"]["head"],
+                "records": [
+                    {**r, "CNQT": 10.0}
+                    if r["MTNO"] == "LF200011" and r["OPNO"] == 10
+                    else r
+                    for r in current["data"]["records"]
+                ],
+            },
+        }
+        await stub_client.post(f"/_test-mutate/bom/{_BOM_ITEM}", json=mutated)
+
+        try:
+            await _advance(svc, ecn.id, "dc_approve", DC, "DC", erp=erp)
+        except Exception:
+            pass  # expected — concurrency gate should block this
+        finally:
+            await stub_client.post(f"/_test-mutate/bom/{_BOM_ITEM}/reset")
+    finally:
+        await erp.close()
     return ecn.id
 
 
@@ -507,6 +746,93 @@ async def main() -> None:
                     print(f"  ✗  {label:<22} FAILED: {exc}")
                     raise
 
+    # ── BOM module demo ECNs (Slice E) ──────────────────────────────────────
+    # Probe MOVEX_API_URL once — reachable means we can exercise a real
+    # snapshot/concurrency-gate cycle; unreachable means those ECNs still get
+    # created (with their bom_changes rows) but skip the ERP-touching steps,
+    # same as production's own degrade-gracefully behaviour. Only the stub
+    # exposes /_test-mutate, so the conflict ECN additionally checks that
+    # MOVEX_API_URL actually points at a stub instance (not the real API)
+    # before attempting it.
+    erp = MovexRestAdapter()
+    await erp.open()
+
+    # health_check() hits /health, which scripts/movex_stub.py doesn't
+    # implement (it's a fixture-serving stub, not a full API surface) — so it
+    # would always report the stub as unreachable even when it's up and
+    # serving BOM data fine. Probe the actual B-1 route both adapters serve
+    # instead: it exists on the real API and the stub alike, so a 200 here
+    # means "can fetch LF100001's BOM," which is genuinely what these demo
+    # ECNs need, regardless of whether /health exists.
+    try:
+        # erp._http's base_url already includes the /api suffix from
+        # MOVEX_API_URL — same convention every real adapter method uses
+        # (e.g. get_bom's self._get(f"/bom/{item_number}", ...)).
+        probe = await erp._http.get(f"/bom/{_BOM_ITEM}")
+        erp_reachable = probe.status_code == 200
+    except Exception:
+        erp_reachable = False
+
+    # _test-mutate lives OUTSIDE /api (see scripts/movex_stub.py's route
+    # decorators) — needs the bare host root, not erp.base_url.
+    _stub_root = erp.base_url.removesuffix("/api")
+
+    # Probe for /_test-mutate directly rather than guessing stub-vs-real from
+    # the URL/port — the real movex-rest-api returns 404/405 here since the
+    # route doesn't exist at all; the stub always returns 200.
+    is_stub = False
+    if erp_reachable:
+        try:
+            async with httpx.AsyncClient(base_url=_stub_root, timeout=5.0) as probe_client:
+                probe = await probe_client.post(f"/_test-mutate/bom/{_BOM_ITEM}/reset")
+                is_stub = probe.status_code == 200
+        except Exception:
+            is_stub = False
+
+    if not erp_reachable:
+        print(f"\n  MOVEX_API_URL ({erp.base_url}) unreachable — BOM ECNs 9-10 will "
+              f"skip snapshot/concurrency-gate steps (see 'BOM demo notes' in this "
+              f"script's docstring to run scripts/movex_stub.py first).")
+
+    async with factory() as session:
+        async with session.begin():
+            svc = ECNService(session)
+            try:
+                ecn_id = await _ecn_bom_draft(svc)
+                ecn = await svc.get(ecn_id)
+                print(f"  ✓  {'DRAFT (BOM)':<22} {ecn.ecn_number}  —  {ecn.title[7:42]}...")
+            except Exception as exc:
+                print(f"  ✗  {'DRAFT (BOM)':<22} FAILED: {exc}")
+                raise
+
+    async with factory() as session:
+        async with session.begin():
+            svc = ECNService(session)
+            try:
+                ecn_id = await _ecn_bom_dc_approved(svc, erp if erp_reachable else None)
+                ecn = await svc.get(ecn_id)
+                print(f"  ✓  {'DC_APPROVED (BOM)':<22} {ecn.ecn_number}  —  {ecn.title[7:42]}...")
+            except Exception as exc:
+                print(f"  ✗  {'DC_APPROVED (BOM)':<22} FAILED: {exc}")
+                raise
+
+    if is_stub:
+        async with httpx.AsyncClient(base_url=_stub_root, timeout=10.0) as stub_client:
+            async with factory() as session:
+                async with session.begin():
+                    svc = ECNService(session)
+                    try:
+                        ecn_id = await _ecn_bom_conflict(svc, stub_client)
+                        ecn = await svc.get(ecn_id)
+                        print(f"  ✓  {'DC_APPROVED (blocked)':<22} {ecn.ecn_number}  —  {ecn.title[7:42]}...")
+                    except Exception as exc:
+                        print(f"  ✗  {'DC_APPROVED (blocked)':<22} FAILED: {exc}")
+                        raise
+    else:
+        print(f"  ⊘  {'DC_APPROVED (blocked)':<22} skipped — needs scripts/movex_stub.py "
+              f"specifically (real movex-rest-api has no /_test-mutate endpoint)")
+
+    await erp.close()
     await engine.dispose()
     print("\nDone. Open http://localhost:5173 and log in as hsalazar / eng_user / dc_user.")
 

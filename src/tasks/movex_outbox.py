@@ -410,22 +410,29 @@ async def _dispatch_mi_call(
     """Instantiate MovexRestAdapter and call the appropriate write method.
 
     mi_transaction values map to ERPAdapter write methods:
-        PDS001MI.AddProduct       → create_product
-        PDS002MI.AddComponent     → add_bom_component
-        PDS002MI.DeleteComponent  → delete_bom_component
-        PDS002MI.UpdateComponent  → update_bom_component   (Slice E, W-1 — see docstring below)
-        PDS002MI.UpdateOperation  → update_routing_operation
-        PDS002MI.AddOperation     → add_routing_operation
-        MMS025MI.AddAlias         → add_item_alias
-    Returns the MI response dict.  Caller must check MSID.
+        PDS001MI.AddProduct       -> create_product
+        PDS002MI.AddComponent     -> add_bom_component
+        PDS002MI.Delete           -> delete_bom_component
+        PDS002MI.UpdateOperation  -> update_routing_operation
+        PDS002MI.AddOperation     -> add_routing_operation
+        MMS025MI.AddAlias         -> add_item_alias
+    Returns the MI response dict. Caller must check the response envelope's
+    "success" field (see process_outbox_entry's success check).
 
-    PDS002MI.UpdateComponent (Slice E's DELETE/CHANGE-close BOM writes) is
-    confirmed NOT YET BUILT on movex-rest-api as of this writing — dispatch
-    is wired so Oskar-side code is ready the moment it lands, but any real
-    call against a live movex-rest-api instance will fail until then. Tracked
-    as I2-19 (ai/tasks/sprint-backlog.md) for live-OQ verification once W-1
-    ships; until then this fails at dispatch (standard outbox retry/DC-alert
-    schedule applies), not silently.
+    I2-19 (2026-08-11): PDS002MI.UpdateComponent was originally used to close
+    a BOM line by setting TDAT (D6's "CHANGE = close old line + add new
+    date-effective line" model). That transaction's TDAT field is confirmed
+    broken on movex-rest-api -- reports success, never persists. Per the
+    movex-rest-api team's own suggestion, and confirmed against Stargile's
+    real source (Stargile's live BOM-apply engine never used
+    UpdateComponent/TDAT for BOM lines either -- see workflow.py's
+    _queue_bom_changes_outbox docstring), Oskar now closes lines via
+    PDS002MI.Delete instead, which is live-verified working.
+    UpdateComponent is no longer on the dispatch table below --
+    _queue_bom_changes_outbox never queues it -- and
+    MovexRestAdapter.update_bom_component is kept only as dead code with its
+    own "do not use" docstring, in case a future movex-rest-api fix makes
+    TDAT worth revisiting.
     """
     from src.adapters.erp.movex import MovexRestAdapter
 
@@ -435,8 +442,7 @@ async def _dispatch_mi_call(
     dispatch: dict[str, Any] = {
         "PDS001MI.AddProduct": adapter.create_product,
         "PDS002MI.AddComponent": adapter.add_bom_component,
-        "PDS002MI.DeleteComponent": adapter.delete_bom_component,
-        "PDS002MI.UpdateComponent": adapter.update_bom_component,
+        "PDS002MI.Delete": adapter.delete_bom_component,
         "PDS002MI.UpdateOperation": adapter.update_routing_operation,
         "PDS002MI.AddOperation": adapter.add_routing_operation,
         "MMS025MI.AddAlias": adapter.add_item_alias,
@@ -577,11 +583,47 @@ def process_outbox_entry(self: Any, outbox_id: str) -> str:
 
         try:
             response = _run_mi_call(mi_transaction, mi_params, idempotency_key)
-            # Movex returns HTTP 200 even for errors — check MSID (ai/memory/09 §4)
-            msid = response.get("MSID") or response.get("msid") or ""
-            if msid:
-                error_code = msid
-                mi_error = f"Movex MI error: MSID={msid}"
+            # Movex returns HTTP 200 even for errors — check the envelope.
+            #
+            # Live-verified 2026-08-11 against real movex-rest-api (CONO=300):
+            # MSID lives under response["data"]["MSID"], never at the top
+            # level — response.get("MSID") always returned None (silently
+            # falling through to "" via the `or` chain) regardless of what
+            # M3 actually returned, so this check has never actually
+            # detected a real M3 write failure since it was written; every
+            # dispatched MI write (routing ops included — this is the one
+            # shared dispatch point for all of them) has been unconditionally
+            # marked completed. Confirmed live: AddComponent returns
+            # {"success": true, "data": {"MSID": "000", "MSDT": ""}, ...}
+            # for a genuine success — "000" is M3's own success sentinel
+            # (movex-rest-api's own TransactionController.EvaluateParsedResponse
+            # treats "000" or empty as success, matching M3 convention) — the
+            # old code's bare `if msid:` truthy check would have treated
+            # "000" as an error code had it ever actually reached that
+            # branch. A genuine failure has NO "data" key at all and sets
+            # response["error"] instead (confirmed live: Delete with a
+            # not-found key returned {"success": false, "error": "..."}).
+            #
+            # Trust the server's own "success" field first — it's already
+            # done this MSID/empty-response evaluation server-side — and
+            # fall back to inspecting data.MSID directly only if "success"
+            # is absent (defensive, in case some transaction/response shape
+            # doesn't set it).
+            if "success" in response:
+                ok = bool(response["success"])
+            else:
+                data = response.get("data") or {}
+                msid = (data.get("MSID") or data.get("msid") or "").strip()
+                ok = msid == "" or msid == "000"
+
+            if not ok:
+                data = response.get("data") or {}
+                msid = data.get("MSID") or data.get("msid") or ""
+                error_code = msid or response.get("error") or "UNKNOWN"
+                mi_error = (
+                    f"Movex MI error: MSID={msid}" if msid
+                    else f"Movex MI error: {response.get('error', 'unknown failure')}"
+                )
                 response_body = str(response)
         except Exception as exc:
             mi_error = str(exc)

@@ -7,6 +7,7 @@ import BOMChangesTabContent from "@/components/ecn/BOMChangesTabContent"
 import MPNsTabContent from "@/components/ecn/MPNsTabContent"
 import { ItemUploadDrawer } from "@/components/ecn/ItemUploadDrawer"
 import { RoutingUploadDrawer } from "@/components/ecn/RoutingUploadDrawer"
+import { BOMChangesUploadDrawer } from "@/components/ecn/BOMChangesUploadDrawer"
 import { MPNUploadDrawer } from "@/components/ecn/MPNUploadDrawer"
 import { exportItems, exportRoutingOps, exportBomChanges, exportMPNs } from "@/api/ecn"
 
@@ -38,6 +39,7 @@ export default function ECNEntityTabsSection({
   const [tab, setTab] = useState<EntityTab>("items")
   const [itemUploadOpen, setItemUploadOpen] = useState(false)
   const [routingUploadOpen, setRoutingUploadOpen] = useState(false)
+  const [bomUploadOpen, setBomUploadOpen] = useState(false)
   const [mpnUploadOpen, setMpnUploadOpen] = useState(false)
 
   function manageItem(itemId: string, entityTab: "routing" | "bom" | "mpns") {
@@ -73,12 +75,7 @@ export default function ECNEntityTabsSection({
           {tab === "bom" && (
             <>
               <ExportButton canExport={canExport} label="↓ Export" onExport={() => exportBomChanges(ecnId, ecnNumber)} />
-              {/* Upload button intentionally not wired yet — the backend
-                  endpoint (POST /ecn/{ecn_id}/bom-changes/bulk) and API
-                  client (bulkCreateBomChanges) are ECN-wide/multi-item,
-                  matching routing's shape, but no upload drawer/preview
-                  parser was built for BOM changes in this slice — tracked
-                  as I2-20 in sprint-backlog.md. */}
+              <UploadButton canUpload={canUpload} label="↑ Upload BOM Changes" onClick={() => setBomUploadOpen(true)} />
             </>
           )}
           {tab === "mpns" && (
@@ -115,6 +112,13 @@ export default function ECNEntityTabsSection({
         ecnId={ecnId}
         open={routingUploadOpen}
         onClose={() => setRoutingUploadOpen(false)}
+        onSuccess={onItemsChanged}
+      />
+
+      <BOMChangesUploadDrawer
+        ecnId={ecnId}
+        open={bomUploadOpen}
+        onClose={() => setBomUploadOpen(false)}
         onSuccess={onItemsChanged}
       />
 

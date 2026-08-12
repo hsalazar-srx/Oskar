@@ -445,16 +445,28 @@ class BOMChangePatchBody(BaseModel):
 
 
 class BulkBomChangeRow(BaseModel):
-    """One parsed row from the bulk BOM-change upload template (Stargile's
-    UploadECNBoMs parity). ECN-wide, multi-item — item_number is a per-row
-    field (verified against the real Stargile source, 2026-08-11: prno/
-    zecnln are per-row in UploadECNBoMs.java, not a URL-level scope), same
-    shape as BulkRoutingRow. item_number resolves to an existing ecn_items
-    row on this ECN — bulk BOM-change upload does not create items.
+    """One parsed row from the bulk BOM-change upload template (Oskar's own
+    column vocabulary — see _BOM_CHANGE_UPLOAD_SPEC's docstring, ecn_bom.py).
+    ECN-wide, multi-item — item_number is a per-row field (verified against
+    the real Stargile source, 2026-08-11: prno/zecnln are per-row in
+    UploadECNBoMs.java, not a URL-level scope), same shape as BulkRoutingRow.
+    item_number resolves to an existing ecn_items row on this ECN — bulk
+    BOM-change upload does not create items.
 
     CHANGE/DELETE rows require old_from_date — same rule as the single-row
     create endpoint (service-layer validated, not here, so both paths share
     one rule instead of duplicating it in Pydantic).
+
+    sequence_number, notes, and circuit_refs_new are optional pass-through
+    fields already supported by the single-row create/update endpoints and
+    BOMChangesPanel.tsx's manual form — the bulk INSERT previously dropped
+    all three silently even when a caller supplied them (they were parsed
+    off the row dict but never reached the SQL); fixed here so the three
+    entry points (manual form, single-row API, bulk upload) support the
+    same field set instead of bulk being a strict subset. None of these
+    three carries CHANGE/DELETE-identity significance in the bulk path —
+    only old_from_date does that; sequence_number is a plain data field, not
+    an alternate key.
     """
     item_number: str = Field(..., min_length=1, max_length=15)
     component_number: str = Field(..., min_length=1, max_length=15)
@@ -462,15 +474,31 @@ class BulkBomChangeRow(BaseModel):
     quantity: float | None = Field(None, ge=0)
     unit_of_measure: str | None = Field(None, max_length=3)
     operation_number: int | None = Field(None, ge=1)
+    sequence_number: int | None = None
     from_date: int | None = None
     old_from_date: int | None = None
     old_quantity: float | None = Field(None, ge=0)
+    notes: str | None = None
+    circuit_refs_new: list[str] | None = None
 
     @field_validator("change_type")
     @classmethod
     def _validate_bulk_bom_change_type(cls, v: str) -> str:
         if v not in VALID_BOM_CHANGE_TYPES:
             raise ValueError(f"change_type must be one of {sorted(VALID_BOM_CHANGE_TYPES)}")
+        return v
+
+    @field_validator("circuit_refs_new", mode="before")
+    @classmethod
+    def _split_circuit_refs(cls, v: object) -> object:
+        """The upload template's "Circuit Reference" cell is a raw comma-
+        separated string (e.g. "R2, R141, R153") — parse_bulk_upload yields
+        cell text as-is, not a list. Already a list -> pass through
+        unchanged (the single-row create endpoint's JSON body sends a real
+        list)."""
+        if isinstance(v, str):
+            parts = [p.strip() for p in v.split(",")]
+            return [p for p in parts if p]
         return v
 
 

@@ -1,10 +1,11 @@
 """
-Integration tests — _queue_bom_changes_outbox (Slice E, ADR-012 D6).
+Integration tests — _queue_bom_changes_outbox (Slice E, I2-19).
 
-D6 supersession rule: ADD -> 1 AddComponent outbox row. DELETE -> 1
-UpdateComponent "close" row. CHANGE -> 2 rows (close + add), with the add
-row's depends_on set to the close row's id (Slice E0's dispatch-ordering
-mechanism) so the add is gated behind the close's completion.
+I2-19 rule (2026-08-11, superseding D6's original UpdateComponent/TDAT
+close): ADD -> 1 AddComponent outbox row. DELETE -> 1 PDS002MI.Delete
+"close" row. CHANGE -> 2 rows (close + add), with the add row's depends_on
+set to the close row's id (Slice E0's dispatch-ordering mechanism) so the
+add is gated behind the close's completion.
 
 Wired into transition()'s dc_approve branch, beside
 _queue_routing_operations_outbox — verified end-to-end via the full
@@ -135,7 +136,7 @@ class TestAddChangeType:
 
 
 class TestDeleteChangeType:
-    async def test_delete_queues_one_update_component_close_row(self, db_session: AsyncSession):
+    async def test_delete_queues_one_delete_close_row(self, db_session: AsyncSession):
         erp = _StubERPAdapter()
         req = BOMChangeRequest(
             change_type="DELETE", component_number="LF200010", operation_number=10,
@@ -154,8 +155,8 @@ class TestDeleteChangeType:
         )
         outbox_rows = rows.mappings().all()
         assert len(outbox_rows) == 1
-        assert outbox_rows[0]["mi_transaction"] == "PDS002MI.UpdateComponent"
-        assert outbox_rows[0]["idempotency_key"] == f"PDS002MI.UpdateComponent:{ecn_id}:{change_id}:close"
+        assert outbox_rows[0]["mi_transaction"] == "PDS002MI.Delete"
+        assert outbox_rows[0]["idempotency_key"] == f"PDS002MI.Delete:{ecn_id}:{change_id}:close"
         assert outbox_rows[0]["depends_on"] is None
 
 
@@ -181,14 +182,14 @@ class TestChangeChangeType:
         assert len(outbox_rows) == 2
 
         by_key = {r["idempotency_key"]: r for r in outbox_rows}
-        close_key = f"PDS002MI.UpdateComponent:{ecn_id}:{change_id}:close"
+        close_key = f"PDS002MI.Delete:{ecn_id}:{change_id}:close"
         add_key = f"PDS002MI.AddComponent:{ecn_id}:{change_id}:add"
         assert close_key in by_key
         assert add_key in by_key
 
         close_row = by_key[close_key]
         add_row = by_key[add_key]
-        assert close_row["mi_transaction"] == "PDS002MI.UpdateComponent"
+        assert close_row["mi_transaction"] == "PDS002MI.Delete"
         assert add_row["mi_transaction"] == "PDS002MI.AddComponent"
         assert close_row["depends_on"] is None
         assert str(add_row["depends_on"]) == str(close_row["id"])

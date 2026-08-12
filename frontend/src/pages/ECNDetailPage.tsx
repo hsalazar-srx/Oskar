@@ -253,9 +253,11 @@ export default function ECNDetailPage() {
             qc.invalidateQueries({ queryKey: ["ecn-items", id] })
             qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === "routing-ops" })
             qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === "mpns" })
+            qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === "bom-changes" })
             qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === "ecn-item" })
             qc.invalidateQueries({ queryKey: ["ecn-routing-all", id] })
             qc.invalidateQueries({ queryKey: ["ecn-mpns-all", id] })
+            qc.invalidateQueries({ queryKey: ["ecn-bom-changes-all", id] })
           }}
         />
         <ECNCommentsPanel ecnId={id!} canEdit={canEdit.notes} />

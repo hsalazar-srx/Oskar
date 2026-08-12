@@ -129,6 +129,8 @@ class IFSAdapter(ERPAdapter):
         from_date: int,
         *,
         facility: str = "D",
+        structure_type: str = "001",
+        sequence_number: int | None = None,
         bom_type: str = "M",
         idempotency_key: str,
     ) -> dict[str, Any]:
@@ -141,6 +143,9 @@ class IFSAdapter(ERPAdapter):
         operation_number: int,
         from_date: int,
         *,
+        facility: str = "D",
+        structure_type: str = "001",
+        sequence_number: int | None = None,
         bom_type: str = "M",
         idempotency_key: str,
     ) -> dict[str, Any]:
@@ -155,6 +160,8 @@ class IFSAdapter(ERPAdapter):
         to_date: int,
         *,
         facility: str = "D",
+        structure_type: str = "001",
+        sequence_number: int | None = None,
         bom_type: str = "M",
         idempotency_key: str,
     ) -> dict[str, Any]:

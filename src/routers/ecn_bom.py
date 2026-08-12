@@ -147,10 +147,18 @@ async def export_bom_changes(
     return _xlsx_response(xlsx, f"{ecn_number}-bom-changes.xlsx")
 
 # ---------------------------------------------------------------------------
-# Bulk BOM-change upload spec (Stargile's UploadECNBoMs parity, S9-8 pattern)
-# — multi-item, ECN-wide, same shape as _ROUTING_UPLOAD_SPEC. A row is
-# treated as real data if item_number is present (same convention as bulk
-# routing/bulk items).
+# Bulk BOM-change upload spec — Oskar's own template. Stargile's
+# UploadECNBoMs.java (the legacy ECN/BOM upload tool this module succeeds)
+# used a raw positional CSV keyed on Sequence No/Action Flag codes with live
+# per-row Movex validation during upload; Oskar takes the same underlying
+# capability — bulk-author ADD/CHANGE/DELETE BOM lines against an ECN — and
+# gives it a clearer, self-describing header row (Item No/Change Type/Old
+# From Date) plus a deferred, single, cheaper conflict check at dc_approve
+# (the concurrency gate diffs a submit-time snapshot against the live BOM
+# once per ECN, rather than hitting Movex on every uploaded row). A file
+# exported from the legacy tool needs its header row reworded to this
+# template — a one-off manual step during the transition, not an ongoing
+# maintenance burden of supporting two column vocabularies long-term.
 # ---------------------------------------------------------------------------
 
 _BOM_CHANGE_UPLOAD_SPEC = BulkUploadSpec(
@@ -167,9 +175,12 @@ _BOM_CHANGE_UPLOAD_SPEC = BulkUploadSpec(
         "quantity": "quantity",
         "unit of measure": "unit_of_measure",
         "operation number": "operation_number",
+        "sequence number": "sequence_number",
         "from date": "from_date",
         "old from date": "old_from_date",
         "old quantity": "old_quantity",
+        "circuit reference": "circuit_refs_new",
+        "notes": "notes",
     },
     row_key_field="item_number",
 )

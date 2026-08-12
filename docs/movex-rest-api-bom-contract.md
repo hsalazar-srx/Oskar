@@ -22,15 +22,108 @@ in `src/adapters/erp/base.py`.
 
 | Item | Due | Status |
 |---|---|---|
-| B-1 | End of Slice 0 | Not started |
-| B-2 | End of Slice A (+ perf gate, see below) | Not started |
-| B-3 | End of Slice A | Not started |
-| M-1 | Start of Slice C | Not started |
-| W-1 | Start of Slice E0 | Not started (name-corrected — see Prior art) |
+| B-1 | End of Slice 0 | ✅ Done — live-verified against real CONO=300 data throughout Slices A-E |
+| B-2 | End of Slice A (+ perf gate, see below) | ✅ Done |
+| B-3 | End of Slice A | ✅ Done |
+| M-1 | Start of Slice C | ✅ Done |
+| W-1 | Start of Slice E0 | ⚠️ Deployed 2026-08-11, **TDAT confirmed does not persist** — see "W-1 live-test findings" below. Not a blocker for Oskar any more: Oskar switched to a Delete+AddComponent close/reopen pattern (I2-19 resolution, see below) instead of waiting on a movex-rest-api-side fix. `UpdateComponent` itself is still broken and worth fixing on movex-rest-api's side if convenient, but nothing in Oskar depends on it any more. |
 | W-0 | — | ✅ Done — `develop@e913522`, 2026-07-15, confirmed merged into current `develop` |
 
 Escalate immediately to the Lead Engineer if a checkpoint is missed — the Lead Engineer directly controls the
 movex-rest-api team, so these are actionable, not aspirational.
+
+---
+
+## W-1 live-test findings (2026-08-11) — TDAT does not persist
+
+`PDS002MI.UpdateComponent` is deployed and mostly working, live-tested directly against real CONO=300 data
+(item `LFAM050001`). **The field this transaction exists for Oskar to use it — `TDAT`, closing a BOM line by
+setting its end-effective date — does not actually update, despite the call reporting success.**
+
+**Reproduction:**
+1. `AddComponent` a throwaway line (`MSEQ=990`, `FDAT=20260901`, confirmed present via `GET /api/bom/{itno}`).
+2. `UpdateComponent` with `{CONO, FACI, PRNO, STRT, MSEQ, OPNO, FDAT, TDAT: 20260930}` →
+   `{"success": true, "data": {"MSID": "000", "MSDT": ""}}`. `?raw=true` shows the raw M3 buffer starts `OK`.
+3. Re-read via `GET /api/bom/{itno}?includeExpired=true` and directly via `GetComponent` (`raw=true`) — `TDAT`
+   is still `99999999`, unchanged.
+4. Reproduced 3× with different payload shapes, all with the identical wrong result:
+   - Minimal payload (only `CONO/FACI/PRNO/STRT/MSEQ/FDAT/TDAT`, no `OPNO`/`MTPL`/`CNQT`).
+   - `TDAT` sent as a JSON string (`"20260930"`) instead of a bare integer.
+   - `TDAT` sent under the position-number key (`"11"`) instead of the field name (`"TDAT"`), to rule out a
+     name-vs-position lookup bug in `ResolveFieldValue`.
+5. **Isolation control:** an identical `UpdateComponent` call updating `CNQT` instead (`1.0 → 5.0`, no `TDAT`
+   in the payload) succeeded and was confirmed via read-back on the same line — so the transaction's general
+   update mechanism, key resolution, and response handling are all correct. This is `TDAT`-specific.
+
+**What was traced from this side (Oskar has no write access to fix this):**
+- RPG source (`analysis/PDS002MI.txt`, `RCOM14` — the `Update Component` subroutine) shows `Q2TDAT` is moved
+  to `DCTDAT` unconditionally alongside every other field (line ~2052: `MOVE Q2TDAT    DCTDAT`), same pattern
+  as every other field that does work (e.g. `CNQT`). No special-casing, no conditional skip visible there.
+- The C# payload builder (`Infrastructure/TransactionBuilding/TransactionStringBuilder.cs`, `PadField`) pads a
+  supplied numeric value with leading zeros to the configured length — looks correct for `TDAT`'s configured
+  `startIndex`/`length` (contiguous right after `MTPL`, no apparent overlap).
+- That leaves the bug most likely inside **`PDS002BE`** (the underlying M3 API program `PDS002MI`'s `RCOM14`
+  calls, per `CALL 'PDS002BE'` in the source) — not visible in the RPG source available in this repo. Possible
+  causes worth checking there: `DCOPT2='UPD'` update-mask/selective-field semantics that `TDAT` isn't
+  registered for, a business rule that silently rejects `TDAT` changes under some condition (e.g. requires a
+  separate "close" option code rather than a plain field update), or a field-length/offset mismatch specific
+  to `PDS002BE`'s own internal structure (independent of the MI wrapper's own config, which otherwise checks
+  out).
+
+**Status (superseded 2026-08-11, see resolution below):** Oskar's dispatch layer originally hard-blocked this
+transaction with a `RuntimeError` so it could never reach movex-rest-api and silently fail to close a BOM line
+while reporting the write as completed. That guard has since been removed — see "I2-19 resolution" below —
+because Oskar no longer calls `UpdateComponent` at all, not because `TDAT` was fixed. All test data from the
+above reproduction was cleaned up (`Delete`d) after each attempt — the live BOM was back to its original
+11-line state before this doc was updated.
+
+---
+
+## I2-19 resolution (2026-08-11) — Delete+AddComponent instead of UpdateComponent/TDAT
+
+Rather than wait on a `PDS002BE`-side fix for the `TDAT` bug above, the movex-rest-api team suggested Oskar
+sidestep it entirely: **delete the old BOM line and add a new one with a different `FDAT`**, instead of
+closing the old line's `TDAT` in place. This is a well-known M3 pattern for date-effectivity changes precisely
+because `UpdateComponent`'s `TDAT` is locked/unreliable in some M3 versions — confirmed here as exactly that.
+
+This was cross-checked against Stargile's real source (`ProcessBOMLineRule.java`,
+`com.startronics.ecn.process.rules`, in the Stargile source tree) before adopting it, since Oskar's design
+principle is to match or improve on Stargile's proven behaviour, not invent new BOM semantics. The result:
+**Stargile's live BOM-apply engine never called `UpdateComponent`/`TDAT` for BOM component lines at all** —
+`BOMService.updateComponent()` is defined but has zero real call sites in the ECN-processing rule classes.
+Stargile's actual CHANGE handling is a plain `addComponent` at the ECN's own effective date
+(`ZECNHEAD.EHFDAT`, applied uniformly to every line touched by that ECN); its DELETE handling is itself an
+add-then-delete trick ("perform an add with a new from date to update the original line with a new to date
+and then delete the newly added line", per that file's own comment). So Delete+AddComponent isn't just a
+workaround for this bug — it's *closer* to Stargile's real design than the original `UpdateComponent`-based
+plan was.
+
+**Oskar's new model** (`_queue_bom_changes_outbox` in `src/services/ecn/workflow.py`):
+- **DELETE** → 1 `PDS002MI.Delete` row removing the existing line outright (no replacement).
+- **CHANGE** → 2 rows: a `PDS002MI.Delete` row removing the old line, then a `PDS002MI.AddComponent` row
+  (`FDAT` = the `ecn_bom_changes` row's own `from_date` — already captured from the user today, no new field
+  needed, matches Stargile's `EHFDAT`-sourced effective date) whose `depends_on` is the delete row's id
+  (Slice E0's dispatch-ordering mechanism), so the add never dispatches until the delete has completed.
+
+**Live-verified 2026-08-11** against real CONO=300 data (item `LFAM050001`, `MSEQ 150`, originally
+`FDAT=20240118`/`CNQT=1.0`):
+1. `PDS002MI.Delete` with `{CONO, FACI, PRNO, STRT, MSEQ:150, FDAT:20240118}` → `{"success": true, "data":
+   {"MSID": "000"}}`. Read-back confirmed `MSEQ 150` absent.
+2. `PDS002MI.AddComponent` with `{..., MSEQ:150, OPNO:190, FDAT:20260901, MTPL:"LFAM700006", CNQT:2.0,
+   PEUN:"EA"}` → `{"success": true, "data": {"MSID": "000"}}`. Read-back confirmed `MSEQ 150` now present with
+   `FDAT=20260901` and `CNQT=2.0` — both values actually changed, proving the pattern achieves what
+   `UpdateComponent`/`TDAT` could not. Total record count stayed at 11 throughout — no duplicate/orphan lines.
+3. Test line deleted and re-added with its exact original values (`FDAT=20240118`, `CNQT=1.0`) to restore the
+   real BOM; confirmed via a final read-back.
+
+`update_bom_component` (the `UpdateComponent`-calling adapter method) is retired — no longer on
+`_dispatch_mi_call`'s dispatch table, no longer queued by `_queue_bom_changes_outbox` — and kept only as
+reference-only dead code in case a future `PDS002BE` fix makes `TDAT` worth revisiting.
+
+**For the movex-rest-api owner:** fixing the underlying `TDAT` bug (see diagnosis above) is no longer a
+blocker for Oskar, so there's no urgency on Oskar's account — but it may still be worth fixing independently,
+since other M3 customers/integrations calling `UpdateComponent` directly would hit the same silent-failure
+behavior.
 
 ---
 
@@ -51,15 +144,12 @@ doc for exactly this area. Key facts from it that should shape B-1/B-2/W-1:
   confirmed-transactions table explicitly flags `LstComponent` as sharing "the same TDAT=0 bug as
   LstOperation" — **whoever builds B-1/B-2 must apply the same fix (omit FDAT/OPNO on the list call, filter
   effectivity in the response) rather than rediscovering this the hard way.**
-- **MI transactions already catalogued for PDS002MI** (some implemented, some not):
-  `AddComponent`/`DeleteComponent`/`CpyComponent`/`GetComponent`/`LstComponent`/`UpdateComponent` (BOM side,
-  writes to `MPDMAT`) and `AddOperation`/`UpdateOperation`/`CpyOperation`/`GetOperation`/`LstOperation`
-  (routing side, writes to `MPDOPE`). `AddComponent`/`DeleteComponent`/`AddOperation`/`UpdateOperation` are
-  confirmed implemented in `transactions/PDS002MI.json` (commit `74b66f5`, 2026-04-22, explicitly flagged in
-  that commit's message as required for the Oskar ECN workflow). `LstComponent`/`GetComponent`/
-  `UpdateComponent` are **not yet implemented** — worth checking whether B-1/B-2's custom DB2 read + W-1's
-  write can reuse `LstComponent`/`UpdateComponent` as native MI transactions (like `LstOperation` already
-  does for routing) instead of new bespoke DB2 SQL, before committing to the custom-endpoint approach below.
+- **MI transactions catalogued for PDS002MI** — all now implemented as of 2026-08-11
+  (`transactions/PDS002MI.json`): `AddComponent`/`Delete`/`CopyComponent`/`GetComponent`/`LstComponent`/
+  `UpdateComponent` (BOM side, writes to `MPDMAT`) and `AddOperation`/`UpdateOperation`/`CopyOperation`/
+  `GetOperation`/`LstOperation` (routing side, writes to `MPDOPE`). Note the real delete transaction is named
+  `Delete` (not `DeleteComponent`) and handles both component and operation delete via `MSEQ` vs `OPNO`. See
+  "W-1 live-test findings" above for `UpdateComponent`'s current known issue (`TDAT` doesn't persist).
 - **Name correction:** ADR-012 and the Iteration 2 plan both call W-1 `PDS002MI.UpdComponent`. The verified
   MI transaction name is **`UpdateComponent`** (matching the existing `UpdateOperation` naming pattern) — the
   ADR's shorthand was imprecise. Use `UpdateComponent` when scoping W-1's implementation and its field-offset

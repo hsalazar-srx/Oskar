@@ -287,6 +287,8 @@ class ERPAdapter(ABC):
         from_date: int,
         *,
         facility: str = "D",
+        structure_type: str = "001",
+        sequence_number: int | None = None,
         bom_type: str = "M",
         idempotency_key: str,
     ) -> dict[str, Any]:
@@ -294,12 +296,18 @@ class ERPAdapter(ABC):
 
         from_date is an YYYYMMDD integer (Movex DB2 numeric date format).
         Pre-validate from_date against ecn_bom_changes.movex_snapshot_at_review before calling.
-        Returns MI response. Caller must check MSID.
+        Returns MI response. Caller must check success/MSID.
 
         facility (R9, ADR-012, fixed in Slice E — MovexRestAdapter previously
         hardcoded 'faci': 'D'): parameterised from the ECN's actual facility,
         matching add_routing_operation/update_routing_operation. Defaults to
         'D' only for backward compatibility with pre-fix callers.
+
+        sequence_number (MSEQ) is a real, required field on the transaction
+        — distinct from operation_number (OPNO) — live-verified 2026-08-11
+        against real movex-rest-api; defaults to operation_number only for
+        backward compatibility with callers that predate this field being
+        wired up (ecn_bom_changes.sequence_number).
         """
         ...
 
@@ -311,13 +319,22 @@ class ERPAdapter(ABC):
         operation_number: int,
         from_date: int,
         *,
+        facility: str = "D",
+        structure_type: str = "001",
+        sequence_number: int | None = None,
         bom_type: str = "M",
         idempotency_key: str,
     ) -> dict[str, Any]:
-        """Remove a component line from a BOM (PDS002MI.DeleteComponent).
+        """Remove a component line from a BOM (PDS002MI.Delete — the real
+        transaction is named "Delete", not "DeleteComponent"; confirmed
+        directly against movex-rest-api's transactions/PDS002MI.json,
+        2026-08-11).
 
-        from_date is an YYYYMMDD integer (Movex DB2 numeric date format).
-        Returns MI response. Caller must check MSID.
+        from_date is an YYYYMMDD integer (Movex DB2 numeric date format) and
+        is required in practice even though the real transaction's field
+        config marks it optional — live-verified: without it, Delete fails
+        to find a real, confirmed-existing MSEQ. Returns MI response. Caller
+        must check success/MSID.
         """
         ...
 
@@ -331,13 +348,19 @@ class ERPAdapter(ABC):
         to_date: int,
         *,
         facility: str = "D",
+        structure_type: str = "001",
+        sequence_number: int | None = None,
         bom_type: str = "M",
         idempotency_key: str,
     ) -> dict[str, Any]:
         """Close an existing date-effective BOM line by setting TDAT
         (PDS002MI.UpdateComponent, Slice E W-1 — confirmed NOT YET BUILT on
-        movex-rest-api as of this writing; mock-verified only, tracked as
-        I2-19 for live-OQ verification once W-1 ships).
+        movex-rest-api as of 2026-08-11: checked transactions/PDS002MI.json
+        directly, only AddComponent/Delete/AddOperation/LstOperation/
+        UpdateOperation are configured. Mock-verified only, tracked as
+        I2-19 for live-OQ verification once W-1 ships — field names/casing
+        here are a best-effort match to AddComponent's real fields, not
+        independently confirmed).
 
         Used by the BOM supersession model (D6): DELETE = close, never
         physical delete; CHANGE = close old line (TDAT = new FDAT - 1) then
@@ -345,7 +368,7 @@ class ERPAdapter(ABC):
 
         from_date identifies which existing line to close (part of its
         MPDMAT key). to_date is the new TDAT value being written.
-        Returns MI response. Caller must check MSID.
+        Returns MI response. Caller must check success/MSID.
         """
         ...
 

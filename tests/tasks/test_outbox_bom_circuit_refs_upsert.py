@@ -80,13 +80,13 @@ class TestBomCircuitRefsUpsertOnSuccess:
         assert called_meta == meta
 
     def test_delete_component_close_row_does_not_upsert(self) -> None:
-        """UpdateComponent close rows never carry _circuit_refs — no-op."""
+        """PDS002MI.Delete close rows (I2-19) never carry _circuit_refs — no-op."""
         entry = _entry(
-            mi_transaction="PDS002MI.UpdateComponent",
-            idempotency_key="PDS002MI.UpdateComponent:ecn-1:bc-1:close",
+            mi_transaction="PDS002MI.Delete",
+            idempotency_key="PDS002MI.Delete:ecn-1:bc-1:close",
             mi_params={
                 "parent_item": "LF100001", "component_item": "LF200010",
-                "operation_number": 10, "from_date": 20240101, "to_date": 20260831,
+                "operation_number": 10, "from_date": 20240101,
                 "bom_type": "M", "facility": "L",
             },
         )
@@ -100,7 +100,7 @@ class TestBomCircuitRefsUpsertOnSuccess:
 
         with (
             patch("src.tasks.movex_outbox._get_conn", return_value=conn),
-            patch("src.tasks.movex_outbox._run_mi_call", return_value={"MSID": ""}),
+            patch("src.tasks.movex_outbox._run_mi_call", return_value={"success": True, "data": {"MSID": "000"}}),
             patch("src.tasks.movex_outbox._upsert_bom_circuit_refs") as mock_upsert,
             patch.object(process_outbox_entry, "apply_async"),
             patch("src.tasks.movex_outbox.advance_ecn_to_implemented"),

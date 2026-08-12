@@ -457,33 +457,69 @@ class MovexRestAdapter(ERPAdapter):
         from_date: int,
         *,
         facility: str = "D",
+        structure_type: str = "001",
+        sequence_number: int | None = None,
         bom_type: str = "M",
         idempotency_key: str,
     ) -> dict[str, Any]:
         """PDS002MI.AddComponent.
 
-        facility (R9, ADR-012 — confirmed still hardcoded to 'D' as of
-        2026-07-16): now parameterised from the ECN's actual facility,
-        matching how routing-op writes (add_routing_operation/
-        update_routing_operation) already take facility as a real
-        parameter. Defaults to 'D' only for backward compatibility with any
-        caller that predates this fix — _queue_routing_operations_outbox and
-        _queue_bom_changes_outbox both pass the ECN's real facility
-        explicitly, never relying on this default.
+        Field names and casing verified against the real transaction config
+        (movex-rest-api transactions/PDS002MI.json, 2026-08-11) — this
+        method was never live-tested before (AddComponent didn't exist on
+        movex-rest-api until recently) and had three real bugs, all fixed
+        here:
+
+          1. Payload keys were lowercase (cono/prno/mtno/...). The generic MI
+             passthrough (Controllers/TransactionController.cs's
+             ExecuteTransaction -> TransactionStringBuilder.ResolveFieldValue)
+             does a case-SENSITIVE Dictionary.ContainsKey(field.Name) lookup
+             against the real field names, which are uppercase (CONO, PRNO,
+             MTPL, ...) — confirmed by add_routing_operation's own payload,
+             the one BOM/routing write method already live-verified. A
+             docstring on this method previously claimed BOM writes use "the
+             same lowercase convention" as the custom DB2 read endpoints
+             (B-1/B-2/B-3) — that conflated genuinely-lowercase READ
+             response JSON with M3 MI transaction WRITE field names, which
+             are always uppercase regardless of program. Every key below is
+             now the real field name.
+          2. Component item number's real field is MTPL, not MTNO (MTNO is
+             only the field's *description*, "Component Item Number
+             (MTNO)") — was sent as "mtno", matching neither.
+          3. unms/boms didn't correspond to any real AddComponent field at
+             all (the real U/M field is PEUN; there is no BOM-type field on
+             this transaction). structure_type (STRT, required) and a real
+             sequence_number (MSEQ, required — distinct from OPNO, the
+             operation number) were both missing entirely; MSEQ was
+             previously set to str(operation_number), silently conflating
+             two unrelated fields. sequence_number now comes from
+             ecn_bom_changes.sequence_number (via _queue_bom_changes_outbox)
+             — falls back to operation_number only if the caller has none,
+             matching the previous (imperfect but non-crashing) behaviour
+             for existing rows authored before this field was wired up.
+             bom_type is kept as a parameter for interface symmetry with the
+             rest of Oskar's BOM code (compare engine, DB columns) but is
+             not sent — Movex has no equivalent field on this transaction.
+
+        facility (R9, ADR-012): parameterised from the ECN's actual
+        facility, matching add_routing_operation/update_routing_operation.
+        Defaults to 'D' only for backward compatibility with any caller
+        that predates this fix — _queue_bom_changes_outbox always passes
+        the ECN's real facility explicitly.
         """
         resp = await self._post(
             "/PDS002MI/AddComponent",
             json={
-                "cono": self.cono,
-                "faci": facility,
-                "prno": parent_item,
-                "mseq": str(operation_number),
-                "mtno": component_item,
-                "opno": operation_number,
-                "fdat": from_date,    # YYYYMMDD integer
-                "cnqt": quantity,
-                "unms": unit_of_measure,
-                "boms": bom_type,
+                "CONO": self.cono,
+                "FACI": facility,
+                "PRNO": parent_item,
+                "STRT": structure_type,
+                "MSEQ": sequence_number if sequence_number is not None else operation_number,
+                "OPNO": operation_number,
+                "FDAT": from_date,    # YYYYMMDD integer
+                "MTPL": component_item,
+                "CNQT": quantity,
+                "PEUN": unit_of_measure,
             },
             headers={"Idempotency-Key": idempotency_key},
         )
@@ -496,18 +532,50 @@ class MovexRestAdapter(ERPAdapter):
         operation_number: int,
         from_date: int,
         *,
+        facility: str = "D",
+        structure_type: str = "001",
+        sequence_number: int | None = None,
         bom_type: str = "M",
         idempotency_key: str,
     ) -> dict[str, Any]:
+        """PDS002MI.Delete (component variant — this one program's Delete
+        transaction handles both BOM-component and routing-operation delete
+        via MSEQ vs OPNO, per its real field descriptions: "MSEQ: Sequence
+        Number (use for component delete)").
+
+        Not on _queue_bom_changes_outbox's dispatch path today — D6 always
+        closes via UpdateComponent rather than physically deleting — so this
+        method had never actually been exercised. Live-verified 2026-08-11
+        against real movex-rest-api (CONO=300, item LFAM050001) while
+        confirming add_bom_component's fix, turning up three real bugs here
+        too, all fixed:
+
+          1. There is no "DeleteComponent" transaction on movex-rest-api —
+             checked transactions/PDS002MI.json directly; the real, only
+             delete transaction is named "Delete". The old path would 404.
+          2. Payload keys were lowercase, matching the same wrong assumption
+             fixed in add_bom_component (see that method's docstring for the
+             full explanation) — the real MI field-name match is
+             case-sensitive and uppercase.
+          3. FDAT is required in practice even though the transaction config
+             marks it optional. Live-tested directly: a real Delete call
+             with MSEQ but no FDAT returned {"success": false, "error":
+             "Sequence number ... does not exist"} for an MSEQ confirmed to
+             exist via a direct B-1 read moments earlier; adding FDAT (part
+             of MPDMAT's real 7-field key, CONO+FACI+PRNO+STRT+MSEQ+OPNO+
+             FDAT, per analysis/PDS002MI-routing-analysis.md) made the
+             identical call succeed, and the line's removal was confirmed
+             via a second B-1 read.
+        """
         resp = await self._post(
-            "/PDS002MI/DeleteComponent",
+            "/PDS002MI/Delete",
             json={
-                "cono": self.cono,
-                "prno": parent_item,
-                "mtno": component_item,
-                "opno": operation_number,
-                "fdat": from_date,    # YYYYMMDD integer
-                "boms": bom_type,
+                "CONO": self.cono,
+                "FACI": facility,
+                "PRNO": parent_item,
+                "STRT": structure_type,
+                "MSEQ": sequence_number if sequence_number is not None else operation_number,
+                "FDAT": from_date,    # YYYYMMDD integer — required in practice, see docstring
             },
             headers={"Idempotency-Key": idempotency_key},
         )
@@ -522,38 +590,72 @@ class MovexRestAdapter(ERPAdapter):
         to_date: int,
         *,
         facility: str = "D",
+        structure_type: str = "001",
+        sequence_number: int | None = None,
         bom_type: str = "M",
         idempotency_key: str,
     ) -> dict[str, Any]:
-        """PDS002MI.UpdateComponent (W-1 — confirmed NOT YET BUILT on
-        movex-rest-api, docs/movex-rest-api-bom-contract.md; mock-verified
-        only, tracked as I2-19 for live-OQ verification once W-1 ships).
+        """PDS002MI.UpdateComponent (W-1) — DEAD CODE, not called anywhere.
 
-        Mirrors add_bom_component's shape (same BOM-write transaction
-        family/file, PDS002MI, hence the same lowercase POST payload key
-        convention — NOT the uppercase convention used by the routing-write
-        family (update_routing_operation/add_routing_operation)), but closes
-        an existing date-effective line by setting TDAT instead of creating
-        a new one. Used by _queue_bom_changes_outbox for both DELETE (close,
-        never physical delete — D6) and the close-half of CHANGE (D6:
-        "CHANGE = close old line + add new date-effective line").
+        NOT ON THE DISPATCH TABLE (see _dispatch_mi_call, movex_outbox.py)
+        and never queued by _queue_bom_changes_outbox (workflow.py) as of
+        I2-19 (2026-08-11). Kept only for reference and in case a future
+        movex-rest-api fix makes TDAT worth revisiting — do not wire this
+        back into the dispatch path without a fresh live-OQ pass confirming
+        TDAT actually persists.
+
+        Why it was retired: W-1 is deployed on movex-rest-api and its key/
+        lookup/general-update mechanism was confirmed working via live
+        testing against CONO=300 — but the ONE field this method exists to
+        write, TDAT, was confirmed BROKEN: the call returned success
+        ({"success": true}, raw M3 response "OK"), yet TDAT was unchanged on
+        read-back (via both B-1 and a direct GetComponent call), reproduced
+        3 times across 2 separate test lines, including with a minimal
+        payload (only the key fields + TDAT, nothing else). Isolated as
+        TDAT-specific, not a general UpdateComponent problem: an identical
+        call updating CNQT instead (1.0 -> 5.0) succeeded and was confirmed
+        via read-back on the same line. Also ruled out: field-name vs.
+        position-number key lookup (both gave the same wrong result), JSON
+        type of the TDAT value (numeric vs. string, same result), and
+        interference from neighbouring optional fields (OPNO/MTPL/CNQT
+        present or absent, same result). RPG source (analysis/PDS002MI.txt,
+        RCOM14) shows Q2TDAT is moved to DCTDAT unconditionally alongside
+        every other field — the C# payload-building layer also looked
+        correct for TDAT's configured position/length. The bug is most
+        likely inside PDS002BE (the underlying M3 API program the MI
+        transaction calls), not visible in the RPG source available here —
+        needs the movex-rest-api owner's own investigation.
+
+        Instead, per the movex-rest-api team's own suggestion (confirmed
+        against Stargile's real source, which never used UpdateComponent/
+        TDAT for BOM lines either), Oskar now closes lines via
+        delete_bom_component (PDS002MI.Delete, live-verified working) —
+        see workflow.py's _queue_bom_changes_outbox docstring for the
+        current CHANGE/DELETE model.
+
+        Field names/casing (CONO/FACI/PRNO/STRT/MSEQ/OPNO/FDAT/MTPL/TDAT)
+        are confirmed correct against the real, configured transaction
+        (transactions/PDS002MI.json, "Field positions MiTest-verified
+        2026-08-11") — MSEQ is the required key field (not OPNO/FDAT, which
+        are optional per the config but were needed in practice to resolve
+        a specific line during testing, same as Delete's FDAT requirement).
 
         from_date identifies which existing MPDMAT line to close (part of
         its key: CONO+FACI+PRNO+STRT+MSEQ+OPNO+FDAT, per
-        analysis/PDS002MI-routing-analysis.md) — to_date is the new TDAT
-        value being written.
+        analysis/PDS002MI-routing-analysis.md) — to_date is the TDAT
+        value that would be written, if this method were ever reactivated.
         """
         resp = await self._post(
             "/PDS002MI/UpdateComponent",
             json={
-                "cono": self.cono,
-                "faci": facility,
-                "prno": parent_item,
-                "mtno": component_item,
-                "opno": operation_number,
-                "fdat": from_date,    # YYYYMMDD integer — identifies the line being closed
-                "tdat": to_date,      # YYYYMMDD integer — new close date being written
-                "boms": bom_type,
+                "CONO": self.cono,
+                "FACI": facility,
+                "PRNO": parent_item,
+                "STRT": structure_type,
+                "MSEQ": sequence_number if sequence_number is not None else operation_number,
+                "OPNO": operation_number,
+                "FDAT": from_date,    # YYYYMMDD integer — identifies the line being closed
+                "TDAT": to_date,      # YYYYMMDD integer — BROKEN on movex-rest-api as of 2026-08-11, see docstring
             },
             headers={"Idempotency-Key": idempotency_key},
         )

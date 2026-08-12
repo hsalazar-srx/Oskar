@@ -159,7 +159,7 @@ class TestProcessOutboxEntry:
     def test_happy_path_returns_completed(self) -> None:
         result, mock_advance, _, _ = self._run(
             _entry(state="pending"),
-            mi_response={"MSID": ""},
+            mi_response={"success": True, "data": {"MSID": "000", "MSDT": ""}},
             remaining_outbox=0,
         )
         assert result == "completed"
@@ -167,7 +167,7 @@ class TestProcessOutboxEntry:
     def test_happy_path_all_complete_fires_advance(self) -> None:
         _, mock_advance, _, _ = self._run(
             _entry(state="pending"),
-            mi_response={"MSID": ""},
+            mi_response={"success": True, "data": {"MSID": "000", "MSDT": ""}},
             remaining_outbox=0,
         )
         mock_advance.apply_async.assert_called_once_with(args=["ecn-0001"])
@@ -175,15 +175,28 @@ class TestProcessOutboxEntry:
     def test_remaining_outbox_does_not_advance(self) -> None:
         _, mock_advance, _, _ = self._run(
             _entry(state="pending"),
-            mi_response={"MSID": ""},
+            mi_response={"success": True, "data": {"MSID": "000", "MSDT": ""}},
             remaining_outbox=2,
         )
         mock_advance.apply_async.assert_not_called()
 
     def test_msid_error_marks_failed(self) -> None:
+        """Real failure shape, live-verified 2026-08-11 against movex-rest-api
+        (PDS002MI.Delete with a not-found key): {"success": false, "error": "..."},
+        no "data" key at all — distinct from a genuine success's
+        {"success": true, "data": {"MSID": "000", ...}}."""
         result, _, _, _ = self._run(
             _entry(state="pending", attempt_count=0),
-            mi_response={"MSID": "XYZ001", "ErrorMessage": "Date conflict"},
+            mi_response={"success": False, "error": "Date conflict"},
+        )
+        assert result.startswith("failed:retry_at=")
+
+    def test_msid_error_in_data_marks_failed(self) -> None:
+        """Failure signalled via a non-"000" MSID inside data (the shape
+        used when the fallback "success" key isn't present)."""
+        result, _, _, _ = self._run(
+            _entry(state="pending", attempt_count=0),
+            mi_response={"data": {"MSID": "XYZ001", "MSDT": "Date conflict"}},
         )
         assert result.startswith("failed:retry_at=")
 

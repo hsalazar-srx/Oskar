@@ -321,7 +321,8 @@ class ECNBomChangesMixin:
 
         Each dict must match BulkBomChangeRow fields (item_number,
         component_number, change_type, quantity, unit_of_measure,
-        operation_number, from_date, old_from_date, old_quantity).
+        operation_number, sequence_number, from_date, old_from_date,
+        old_quantity, notes, circuit_refs_new).
 
         Raises:
             ECNNotFound: ECN does not exist.
@@ -383,21 +384,30 @@ class ECNBomChangesMixin:
             except ECNValidationError as exc:
                 raise ECNValidationError(f"Row {idx}: {exc}") from exc
 
+            import json
+
+            circuit_refs_new = row.get("circuit_refs_new")
+
             change_id = str(uuid.uuid4())
             await self._session.execute(
                 sa.text(
                     "INSERT INTO ecn_bom_changes "
                     "(id, ecn_item_id, change_type, component_number, quantity, unit_of_measure, "
-                    "operation_number, from_date, old_from_date, old_quantity) "
+                    "operation_number, sequence_number, from_date, old_from_date, old_quantity, "
+                    "notes, circuit_refs_new) "
                     "VALUES (:id, :item_id, :change_type, :component_number, :quantity, :uom, "
-                    ":opno, :from_date, :old_from_date, :old_quantity)"
+                    ":opno, :seqno, :from_date, :old_from_date, :old_quantity, :notes, "
+                    "CAST(:circuit_refs_new AS jsonb))"
                 ),
                 {
                     "id": change_id, "item_id": str(item_id), "change_type": change_type,
                     "component_number": row["component_number"], "quantity": row.get("quantity"),
                     "uom": row.get("unit_of_measure"), "opno": row.get("operation_number"),
+                    "seqno": row.get("sequence_number"),
                     "from_date": row.get("from_date"), "old_from_date": old_from_date,
                     "old_quantity": row.get("old_quantity"),
+                    "notes": row.get("notes"),
+                    "circuit_refs_new": json.dumps(circuit_refs_new) if circuit_refs_new is not None else None,
                 },
             )
             created.append((str(item_id), change_id))
