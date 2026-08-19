@@ -256,6 +256,35 @@ class DigiKeyAdapter(SupplierAdapter):
 
         return await _call_with_breaker(_circuit_breaker, _do_request)
 
+    @_retry_dec()
+    async def _post(self, path: str, json_body: dict[str, Any]) -> httpx.Response:
+        """POST helper — mirrors _get (quota check, token, rate-limit capture,
+        retry, circuit breaker).
+
+        Needed because DigiKey's v4 keyword search is POST-with-JSON-body, not
+        GET-with-query-params. Live-verified 2026-08-19:
+            GET  /products/v4/search/keyword?keywords=... -> HTTP 404
+            POST /products/v4/search/keyword {"Keywords": ...} -> HTTP 200
+        """
+        self._check_quota()
+
+        async def _do_request() -> httpx.Response:
+            token = await self._ensure_token()
+            resp = await self._client.post(
+                f"{self._base_url}{path}",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "X-DIGIKEY-Client-Id": self._client_id,
+                    "Content-Type": "application/json",
+                },
+                json=json_body,
+            )
+            self._record_rate_limit(resp)
+            resp.raise_for_status()
+            return resp
+
+        return await _call_with_breaker(_circuit_breaker, _do_request)
+
     # ------------------------------------------------------------------
     # SupplierAdapter interface
     # ------------------------------------------------------------------
@@ -304,9 +333,22 @@ class DigiKeyAdapter(SupplierAdapter):
         }
 
     async def search(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
-        resp = await self._get(
+        """Keyword search against DigiKey's catalogue.
+
+        Uses POST with a JSON body — v4's keyword endpoint does not accept the
+        GET/query-param form this method previously used, which returned HTTP
+        404 for every call (live-verified 2026-08-19; the 404 is the ROUTE not
+        matching, indistinguishable at a glance from "no results"). The bug
+        went unnoticed because `search()` has no production callers yet — it
+        exists for SupplierAdapter interface completeness — so the first caller
+        would have hit a guaranteed failure.
+
+        Note the JSON keys are PascalCase (Keywords/Limit/Offset), unlike the
+        lowercase query params the old GET form used.
+        """
+        resp = await self._post(
             "/products/v4/search/keyword",
-            params={"keywords": query, "limit": limit, "offset": 0},
+            {"Keywords": query, "Limit": limit, "Offset": 0},
         )
         return resp.json().get("Products", [])
 
