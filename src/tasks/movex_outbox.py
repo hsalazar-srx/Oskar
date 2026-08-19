@@ -55,6 +55,19 @@ log = structlog.get_logger(__name__)
 # avoid a tight busy-loop if the dependency is genuinely stuck retrying.
 _DEPENDENCY_POLL_DELAY = timedelta(seconds=5)
 
+# How long an entry may sit in 'processing' before the sweeper treats it as
+# stranded by a dead worker rather than a live in-flight MI call.
+#
+# The trade-off is asymmetric, so this is deliberately generous. Sweeping too
+# late costs a delayed recovery (bounded by this value plus the sweep
+# interval). Sweeping too EARLY costs a duplicate MI write to M3 — a second
+# worker dispatching a BOM write the original worker is still executing —
+# which is unrecoverable without manual intervention. 30 minutes is orders of
+# magnitude beyond any real MI call (one HTTP request to movex-rest-api,
+# normally sub-second) while still recovering well inside a working day.
+_STALE_PROCESSING_THRESHOLD = timedelta(minutes=30)
+
+
 # ---------------------------------------------------------------------------
 # Retry schedule (attempt_count after the failing attempt)
 # ---------------------------------------------------------------------------
@@ -853,3 +866,115 @@ def _get_last_hash_sync(session: Any, ecn_id: str) -> str | None:
     )
     row = result.first()
     return row[0] if row else None
+
+
+# ---------------------------------------------------------------------------
+# Crash recovery — reclaim entries stranded in 'processing'
+# ---------------------------------------------------------------------------
+
+@celery_app.task(
+    name="oskar.tasks.sweep_stale_processing_entries",
+    bind=False,
+    acks_late=True,
+    ignore_result=True,
+)
+def sweep_stale_processing_entries() -> int:
+    """Return entries stranded in 'processing' to 'failed' so they retry.
+
+    Why this exists
+    ---------------
+    process_outbox_entry commits state='processing' BEFORE running the MI
+    call (deliberately — the call is slow and must not hold a transaction
+    open), then relies on its own failure branch to schedule the next retry
+    via apply_async(eta=...). If the worker dies in between — deploy, OOM,
+    worker_max_tasks_per_child recycle landing mid-task, VM reboot — the row
+    is left in 'processing' and nothing ever looks at it again:
+
+      * idx_outbox_state_retry is a partial index over ('pending','failed')
+        only, so 'processing' rows are invisible to any retry-oriented query.
+      * Both alert paths (DC at attempt 3, EM at attempt 10) are driven by
+        attempt_count incrementing, which requires the task to actually run.
+
+    The net effect is an approved ECN whose Movex write silently stops
+    existing: no retry, no alert, no abandonment, and — because
+    advance_ecn_to_implemented's `remaining > 0` guard correctly refuses to
+    advance it — an ECN parked at status 50 forever with nobody told.
+
+    acks_late/reject_on_worker_lost mitigate but do not close this: they
+    redeliver the Celery message, which only covers worker death the parent
+    process observes. A lost broker message or a hard VM kill leaves no
+    message to redeliver.
+
+    Recovery target is 'failed', not 'pending'
+    -----------------------------------------
+    'failed' is the state the existing retry machinery already understands,
+    it carries next_retry_at, and it keeps the entry visible in the DC
+    Recovery UI. It also satisfies chk_outbox_not_requeued, which forbids
+    'pending' once attempt_count >= max_attempts.
+
+    attempt_count is deliberately NOT incremented: _mark_processing already
+    counted this attempt before the crash. Incrementing again would burn the
+    10-attempt budget at double rate and could abandon a healthy write after
+    5 real attempts.
+
+    Returns the number of entries reclaimed (0 on the happy path).
+    """
+    conn = _get_conn()
+    conn.cursor_factory = psycopg2.extras.RealDictCursor
+    try:
+        with conn:
+            cur = conn.cursor()
+            # FOR UPDATE SKIP LOCKED keeps concurrent sweeps (or a sweep
+            # racing a real worker) from acting on the same row twice.
+            # The cutoff is computed in SQL against now() so it uses the
+            # database clock, not the worker's — a worker with a skewed
+            # clock must not be able to sweep live entries early.
+            cur.execute(
+                """
+                WITH stale AS (
+                    SELECT id
+                    FROM movex_outbox
+                    WHERE state = 'processing'
+                      AND updated_at < now() - %s::interval
+                    FOR UPDATE SKIP LOCKED
+                )
+                UPDATE movex_outbox o
+                SET state = 'failed',
+                    next_retry_at = now(),
+                    last_error = COALESCE(
+                        'Reclaimed by sweeper: entry was stranded in processing '
+                        'for over ' || %s || ' (worker likely died mid-dispatch). '
+                        'Previous error: ' || COALESCE(o.last_error, 'none'),
+                        'Reclaimed by sweeper'
+                    )
+                FROM stale
+                WHERE o.id = stale.id
+                RETURNING o.id, o.ecn_id, o.mi_transaction, o.attempt_count
+                """,
+                (
+                    f"{int(_STALE_PROCESSING_THRESHOLD.total_seconds())} seconds",
+                    str(_STALE_PROCESSING_THRESHOLD),
+                ),
+            )
+            rows = cur.fetchall()
+
+        for row in rows:
+            log.warning(
+                "outbox.reclaimed_stale_processing",
+                outbox_id=str(row["id"]),
+                ecn_id=str(row["ecn_id"]),
+                mi_transaction=row["mi_transaction"],
+                attempt_count=row["attempt_count"],
+            )
+            # Re-dispatch immediately: the entry has already waited at least
+            # the staleness threshold, so there is no reason to add more
+            # delay on top. attempt_count is unchanged, so this consumes no
+            # extra retry budget.
+            process_outbox_entry.apply_async(args=[str(row["id"])])
+
+        if rows:
+            log.warning("outbox.sweep_reclaimed", count=len(rows))
+
+        return len(rows)
+    finally:
+        conn.close()

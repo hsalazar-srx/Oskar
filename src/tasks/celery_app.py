@@ -73,6 +73,20 @@ celery_app.conf.update(
 
     # Beat schedule — periodic tasks
     beat_schedule={
+        # Crash recovery for the Movex outbox. process_outbox_entry commits
+        # state='processing' before its (slow) MI call and then relies on its
+        # own failure branch to schedule the next retry — so a worker that
+        # dies mid-dispatch strands the row forever: no retry, no DC/EM
+        # alert, and an ECN parked at status 50 with nobody told. This sweep
+        # is the ONLY thing that recovers those rows.
+        #
+        # 5 min cadence against a 30 min staleness threshold: recovery lands
+        # within ~35 min of a crash, while the threshold (not the interval)
+        # remains what protects live in-flight entries from being swept.
+        "outbox-sweep-stale-processing": {
+            "task": "oskar.tasks.sweep_stale_processing_entries",
+            "schedule": 300.0,
+        },
         "audit-chain-checkpoint-daily": {
             "task": "src.tasks.audit_checkpoint.checkpoint_audit_chain",
             "schedule": 86400.0,  # every 24 hours
