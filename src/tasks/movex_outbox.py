@@ -321,7 +321,16 @@ def send_dc_movex_alert(
 
     smtp_host = os.environ.get("SMTP_HOST", "10.10.0.155")
     smtp_port = int(os.environ.get("SMTP_PORT", "25"))
-    from_addr = os.environ.get("SMTP_FROM", "oskar-noreply@scanfil.com")
+    # Default aligned with ecn_notifications.py (2026-08-17). These two paths
+    # previously defaulted to different domains (scanfil.com here vs
+    # srxglobal.com there), so Oskar sent from a different sender depending on
+    # which code path fired — and since SMTP_FROM was never actually set in any
+    # environment, those defaults were what production really used. srxglobal.com
+    # matches the AD/LDAP domain and real user addresses; a sender on an
+    # unaligned domain is a prime candidate for SPF failure and silent
+    # quarantining, which for the DC/EM alerts means losing the only signal
+    # that a Movex write is failing.
+    from_addr = os.environ.get("SMTP_FROM", "oskar-noreply@srxglobal.com")
 
     subject = f"[OSKAR] Movex write failed — {ecn_number} ({mi_transaction})"
     body = (
@@ -376,7 +385,16 @@ def send_em_abandoned_alert(
 
     smtp_host = os.environ.get("SMTP_HOST", "10.10.0.155")
     smtp_port = int(os.environ.get("SMTP_PORT", "25"))
-    from_addr = os.environ.get("SMTP_FROM", "oskar-noreply@scanfil.com")
+    # Default aligned with ecn_notifications.py (2026-08-17). These two paths
+    # previously defaulted to different domains (scanfil.com here vs
+    # srxglobal.com there), so Oskar sent from a different sender depending on
+    # which code path fired — and since SMTP_FROM was never actually set in any
+    # environment, those defaults were what production really used. srxglobal.com
+    # matches the AD/LDAP domain and real user addresses; a sender on an
+    # unaligned domain is a prime candidate for SPF failure and silent
+    # quarantining, which for the DC/EM alerts means losing the only signal
+    # that a Movex write is failing.
+    from_addr = os.environ.get("SMTP_FROM", "oskar-noreply@srxglobal.com")
 
     subject = f"[OSKAR] URGENT — Movex write ABANDONED — {ecn_number} ({mi_transaction})"
     body = (

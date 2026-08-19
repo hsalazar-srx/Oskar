@@ -27,7 +27,7 @@ Environment variables:
   AUDIT_CHECKPOINT_RECIPIENT  Email address for the weekly report (required)
   SMTP_HOST                   Default: 10.10.0.155
   SMTP_PORT                   Default: 25
-  SMTP_FROM                   Default: oskar-noreply@scanfil.com
+  SMTP_FROM                   Default: oskar-noreply@srxglobal.com
 """
 from __future__ import annotations
 
@@ -175,7 +175,9 @@ def report_audit_checkpoint(self: Any) -> None:
 
     smtp_host = os.environ.get("SMTP_HOST", "10.10.0.155")
     smtp_port = int(os.environ.get("SMTP_PORT", "25"))
-    from_addr = os.environ.get("SMTP_FROM", "oskar-noreply@scanfil.com")
+    # See movex_outbox.py's note — all three SMTP paths now agree on this
+    # default (2026-08-17); they previously disagreed on the domain.
+    from_addr = os.environ.get("SMTP_FROM", "oskar-noreply@srxglobal.com")
     subject = f"[OSKAR] Weekly Audit Chain Report — {report_at.strftime('%Y-%m-%d')}"
 
     msg = MIMEText(body)

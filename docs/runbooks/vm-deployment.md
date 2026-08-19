@@ -159,7 +159,9 @@ DIGIKEY_BASE_URL=https://api.digikey.com
 
 SMTP_HOST=10.10.0.155
 SMTP_PORT=25
-SMTP_SENDER=oskar@srxglobal.com
+# NOTE: this was SMTP_SENDER until 2026-08-19. No code ever read that name —
+# all three SMTP paths read SMTP_FROM. Setting SMTP_SENDER has no effect.
+SMTP_FROM=oskar@srxglobal.com
 
 LDAP_SERVER=
 LDAP_BASE_DN=

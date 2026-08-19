@@ -50,7 +50,7 @@ services:
       # Email notifications (PRE-9)
       - SMTP_HOST=${SMTP_HOST:-10.10.0.155}
       - SMTP_PORT=${SMTP_PORT:-25}
-      - SMTP_SENDER=${SMTP_SENDER}
+      - SMTP_FROM=${SMTP_FROM}
     depends_on:
       oskar-db:
         condition: service_healthy
@@ -80,7 +80,7 @@ services:
       - CELERY_SECURITY_KEY=${CELERY_SECURITY_KEY}
       - SMTP_HOST=${SMTP_HOST:-10.10.0.155}
       - SMTP_PORT=${SMTP_PORT:-25}
-      - SMTP_SENDER=${SMTP_SENDER}
+      - SMTP_FROM=${SMTP_FROM}
     depends_on:
       oskar-db:
         condition: service_healthy
@@ -101,7 +101,7 @@ services:
       - DATABASE_URL=postgresql+psycopg2://oskar:${POSTGRES_PASSWORD}@oskar-db:5432/oskar
       - SMTP_HOST=${SMTP_HOST:-10.10.0.155}
       - SMTP_PORT=${SMTP_PORT:-25}
-      - SMTP_SENDER=${SMTP_SENDER}
+      - SMTP_FROM=${SMTP_FROM}
     depends_on:
       oskar-db:
         condition: service_healthy
