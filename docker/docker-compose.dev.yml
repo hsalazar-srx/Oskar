@@ -41,7 +41,7 @@ services:
       - JWT_REFRESH_TOKEN_EXPIRE_HOURS=8
       - SMTP_HOST=
       - SMTP_PORT=25
-      - SMTP_SENDER=oskar-noreply@srxglobal.local
+      - SMTP_FROM=oskar-noreply@srxglobal.local
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
       - ENVIRONMENT=development
       - DIGIKEY_CLIENT_ID=${DIGIKEY_CLIENT_ID:-}
@@ -65,6 +65,110 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
+
+  # Real Celery worker — opt-in via the "worker" profile so the default
+  # `up -d` stays as light as it was:
+  #     docker compose --env-file .env -f docker/docker-compose.dev.yml \
+  #         --profile worker up -d
+  #
+  # Exists because every Celery test to date calls task functions directly
+  # in-process with the broker mocked, which structurally cannot catch
+  # "the worker isn't running", "the broker URL is wrong", or "the task was
+  # never registered/imported" — the failure classes that leave an approved
+  # ECN's Movex write silently unprocessed.
+  #
+  # Points at oskar-test-db (not oskar-db-dev) so worker tests enqueue and
+  # consume against the same throwaway database the test suite uses, and
+  # never touch dev data.
+  oskar-worker:
+    # Same image as oskar-app (identical dependency set — the worker just runs
+    # a different command), so `--profile worker up` reuses the already-built
+    # app image instead of triggering a second build.
+    image: docker-oskar-app:latest
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: oskar-worker-dev
+    profiles: ["worker"]
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql+psycopg2://oskar:oskar_dev@oskar-test-db:5432/oskar_test
+      - MOVEX_API_URL=${MOVEX_API_URL:-http://localhost:9999}
+      - MOVEX_API_KEY=${MOVEX_API_KEY:-dev-not-used}
+      - MOVEX_CONO=${MOVEX_CONO:-300}
+      # Deliberately unset so a stray notification task cannot reach the real
+      # relay (10.10.0.155) from a test worker.
+      - SMTP_HOST=
+      - SMTP_PORT=25
+      - ENVIRONMENT=development
+    volumes:
+      - ../src:/app/src:ro
+      - ../alembic:/app/alembic:ro
+      - ../alembic.ini:/app/alembic.ini:ro
+      - ../scripts:/app/scripts:ro
+    depends_on:
+      oskar-test-db:
+        condition: service_healthy
+    # --concurrency=2 matches the documented production launch line in
+    # celery_app.py, so worker-level concurrency behaviour under test is the
+    # same shape as production.
+    command: >
+      celery -A src.tasks.celery_app worker
+      --loglevel=info --concurrency=2
+    # Liveness is checked by verifying the worker process is running, NOT with
+    # `celery inspect ping`.
+    #
+    # Verified 2026-08-17: ping/inspect ride Celery's broadcast mailbox, which
+    # Kombu's SQLAlchemy transport does not implement. Against the Postgres
+    # broker (ADR-007) they always fail with "No nodes replied within time
+    # constraint" — this container reported `unhealthy` for 3 days straight
+    # while demonstrably consuming and completing tasks the whole time.
+    #
+    # A healthcheck that is always red is worse than none: it trains everyone
+    # to ignore it, and masks a real outage when one happens. Anything built
+    # for §7 monitoring must avoid `celery inspect` for the same reason.
+    healthcheck:
+      # Scans /proc for a live celery worker process. The slim image has no
+      # pgrep and no ps, and `pidof celery` does not match because the process
+      # is `python3.12 /usr/local/bin/celery ...` — pidof compares the binary
+      # name only. Verified in-container 2026-08-17: this matches the main
+      # process plus both pool children.
+      test: ["CMD-SHELL", "grep -l celery /proc/[0-9]*/cmdline >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # SMTP catcher for email-deliverability tests (robustness plan §4).
+  # Opt-in via the "mail" profile:
+  #     docker compose --env-file .env -f docker/docker-compose.dev.yml \
+  #         --profile mail up -d
+  #
+  # Exists because the 18 existing notification tests all mock
+  # `aiosmtplib.send` — they prove the right arguments were passed, never
+  # that a message is actually accepted by an SMTP server with correct
+  # headers and recipients. Mailpit accepts real SMTP on 1025 and exposes an
+  # HTTP API on 8025 that tests assert against.
+  #
+  # NEVER point tests at the real relay (10.10.0.155) — real DC/EM inboxes
+  # must not receive test traffic.
+  oskar-mailpit:
+    image: axllent/mailpit:latest
+    container_name: oskar-mailpit-dev
+    profiles: ["mail"]
+    restart: unless-stopped
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # HTTP API + web UI
+    environment:
+      - MP_SMTP_AUTH_ACCEPT_ANY=1
+      - MP_SMTP_AUTH_ALLOW_INSECURE=1
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
   oskar-db-dev:
     image: postgres:16-alpine
