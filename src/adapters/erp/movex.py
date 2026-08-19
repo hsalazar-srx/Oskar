@@ -705,15 +705,37 @@ class MovexRestAdapter(ERPAdapter):
         work_centre: str,
         run_time: float,
         *,
+        operation_description: str | None = None,
         structure_type: str = "001",
         idempotency_key: str,
     ) -> dict[str, Any]:
-        """PDS002MI.AddOperation. Note: this transaction has no description
-        field (PLGR/PITI only) — operation_description is not sent to Movex.
+        """PDS002MI.AddOperation.
+
+        OPDS (operation description) is REQUIRED by M3, despite
+        transactions/PDS002MI.json marking it `required: false`. Live-verified
+        2026-08-18 against CONO=300: the previous payload (CONO/FACI/PRNO/STRT/
+        OPNO/PLGR/PITI, no OPDS) failed with
+            {"success": false, "error": "Operation description must be entered"}
+        and the identical call with OPDS added succeeded (MSID "000"). This is
+        the same config-vs-reality mismatch already documented for FDAT on
+        Delete — the transaction config's `required` flags cannot be trusted
+        as the source of truth for what M3 actually enforces.
+
+        This method's docstring previously asserted "this transaction has no
+        description field (PLGR/PITI only)", which is why
+        _queue_routing_operations_outbox dropped operation_description on the
+        floor. That claim was wrong: every AddOperation Oskar dispatched would
+        have failed, retried 10x, abandoned, and paged the EM.
 
         PITI must be an all-numeric-character string with no decimal point —
         M3 stores run time as minutes * 100 (confirmed via live write:
-        PITI="545" -> stored/returned as 54500 by LstOperation)."""
+        PITI="545" -> stored/returned as 54500 by LstOperation). Sending a
+        float (e.g. 1.0) is rejected with "Field 'PITI' must contain only
+        numeric characters (0-9)".
+
+        Note the created row has FDAT=0 unless one is supplied — relevant when
+        deleting it again, since Delete matches on the full key including FDAT.
+        """
         resp = await self._post(
             "/PDS002MI/AddOperation",
             json={
@@ -724,6 +746,11 @@ class MovexRestAdapter(ERPAdapter):
                 "OPNO": operation_number,
                 "PLGR": work_centre,
                 "PITI": str(round(run_time * 100)),
+                # Fall back to a non-empty placeholder rather than omitting the
+                # field: M3 rejects a blank OPDS outright, so an ECN whose
+                # routing row has no description must still produce a valid
+                # write instead of a guaranteed 10-retry failure.
+                "OPDS": (operation_description or f"Operation {operation_number}")[:30],
             },
             headers={"Idempotency-Key": idempotency_key},
         )

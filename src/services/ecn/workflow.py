@@ -148,8 +148,15 @@ class ECNWorkflowMixin:
             await self._capture_bom_snapshots_at_submit(ecn_id, erp)
 
         if req.trigger == "dc_approve":
-            pending_outbox_ids += await self._queue_routing_operations_outbox(ecn_id)
-            pending_outbox_ids += await self._queue_bom_changes_outbox(ecn_id)
+            # Routing first: its return value maps each NEW operation number to
+            # the outbox row that creates it, so _queue_bom_changes_outbox can
+            # gate any BOM line referencing one of those operations behind it
+            # (S-3 — M3 rejects a component whose OPNO does not yet exist).
+            routing_ids, new_operation_rows = await self._queue_routing_operations_outbox(ecn_id)
+            pending_outbox_ids += routing_ids
+            pending_outbox_ids += await self._queue_bom_changes_outbox(
+                ecn_id, new_operation_rows=new_operation_rows,
+            )
 
         if req.trigger == "movex_write_complete":
             pending_outbox_ids += await self._queue_alias_outbox(ecn_id)
@@ -863,21 +870,42 @@ class ECNWorkflowMixin:
                 source_ecn=ecn_id,
             )
 
-    async def _queue_routing_operations_outbox(self, ecn_id: str) -> list[str]:
+    async def _queue_routing_operations_outbox(
+        self, ecn_id: str,
+    ) -> tuple[list[str], dict[int, str]]:
         """Queue PDS002MI.AddOperation or UpdateOperation for every routing op on this ECN.
 
         One outbox row per ecn_routing_operations row. Idempotency key prevents
         duplicates on retry: PDS002MI.{ADD|UPDATE}Operation:{ecn_id}:{op_id}.
-        Returns list of newly inserted outbox IDs for post-commit Celery dispatch.
 
-        Note: PDS002MI.AddOperation/UpdateOperation have no description field
-        (PLGR/PITI only per the real M3 transaction schema) — operation_description
-        and setup_time are not sent to Movex, only stored locally in ecn_routing_operations.
+        Returns (new_outbox_ids, new_operation_rows) where:
+          * new_outbox_ids  — newly inserted outbox IDs for post-commit dispatch
+          * new_operation_rows — {operation_number: outbox_row_id} for operations
+            this ECN CREATES (change_type 'ADD' only).
+
+        The second element exists for S-3: M3 rejects a BOM component whose OPNO
+        has no routing operation yet ("Operation number NNN does not exist",
+        live-verified 2026-08-17 against CONO=300 — see
+        docs/workflow-scenario-matrix.md). _queue_bom_changes_outbox uses this
+        map to set depends_on on any BOM row referencing a newly-created
+        operation, so the component write is gated behind it.
+
+        Only 'ADD' operations are included. An 'UPDATE' targets an operation
+        that already exists in M3, so a BOM line referencing it has nothing to
+        wait for — gating on those would serialise the common case for no gain.
+
+        Note: OPDS (operation_description) IS sent — M3 requires it, despite
+        the transaction config marking it optional (live-verified 2026-08-18:
+        AddOperation without OPDS fails with "Operation description must be
+        entered"). This docstring previously claimed the transaction had no
+        description field, which is why the value was dropped. setup_time
+        genuinely has no AddOperation field and remains local-only.
         """
         rows = await self._session.execute(
             sa.text(
                 "SELECT r.id, r.ecn_item_id, i.item_number, e.facility, "
-                "r.operation_number, r.work_centre, r.run_time, r.change_type "
+                "r.operation_number, r.work_centre, r.run_time, r.change_type, "
+                "r.operation_description "
                 "FROM ecn_routing_operations r "
                 "JOIN ecn_items i ON i.id = r.ecn_item_id "
                 "JOIN ecn_instances e ON e.id = i.ecn_id "
@@ -887,7 +915,9 @@ class ECNWorkflowMixin:
         )
         _mi_verb = {"ADD": "Add", "UPDATE": "Update"}
         inserted: list[str] = []
-        for op_id, item_id, item_number, facility, opno, plgr, piti, change_type in rows:
+        new_operation_rows: dict[int, str] = {}
+        for (op_id, item_id, item_number, facility, opno, plgr, piti,
+             change_type, opds) in rows:
             mi_tx = f"PDS002MI.{_mi_verb[change_type]}Operation"
             idempotency_key = f"{mi_tx}:{ecn_id}:{op_id}"
             mi_params: dict = {
@@ -896,6 +926,9 @@ class ECNWorkflowMixin:
                 "operation_number": opno,
                 "work_centre": plgr,
                 "run_time": float(piti),
+                # Required by M3 (see this method's docstring) — must reach
+                # the adapter or the write fails and burns all 10 retries.
+                "operation_description": opds,
             }
             new_id = str(uuid.uuid4())
             result = await self._session.execute(
@@ -914,10 +947,35 @@ class ECNWorkflowMixin:
             )
             if result.rowcount:
                 inserted.append(new_id)
-        return inserted
+                row_id: str | None = new_id
+            else:
+                # ON CONFLICT DO NOTHING — this row was queued by an earlier
+                # attempt at this transition. Its id must still be resolved,
+                # otherwise a re-run would lose the S-3 dependency and queue
+                # the BOM row ungated.
+                existing = await self._session.execute(
+                    sa.text("SELECT id FROM movex_outbox WHERE idempotency_key = :ikey"),
+                    {"ikey": idempotency_key},
+                )
+                found = existing.scalar_one_or_none()
+                row_id = str(found) if found is not None else None
 
-    async def _queue_bom_changes_outbox(self, ecn_id: str) -> list[str]:
+            if change_type == "ADD" and row_id is not None:
+                new_operation_rows[int(opno)] = row_id
+
+        return inserted, new_operation_rows
+
+    async def _queue_bom_changes_outbox(
+        self, ecn_id: str, *, new_operation_rows: dict[int, str] | None = None,
+    ) -> list[str]:
         """Queue PDS002MI writes for every ecn_bom_changes row on this ECN.
+
+        new_operation_rows maps {operation_number: outbox_row_id} for routing
+        operations this same ECN creates (see _queue_routing_operations_outbox).
+        Any BOM row whose operation_number appears there is gated behind that
+        routing row via depends_on — M3 rejects a component whose OPNO does not
+        exist yet (S-3, live-verified 2026-08-17). Defaults to None so existing
+        callers and tests that queue BOM changes alone keep working unchanged.
 
         I2-19 UPDATE (2026-08-11): D6's original model called this "close old
         line (TDAT) + add new date-effective line", closing via
@@ -1040,7 +1098,15 @@ class ECNWorkflowMixin:
                 }
                 if _circuit_refs_meta:
                     mi_params["_circuit_refs"] = _circuit_refs_meta
-                new_id = await _insert(item_id, mi_tx, idempotency_key, mi_params)
+                # S-3 gate: if this ECN also creates the routing operation this
+                # component references, the component write must wait for it.
+                op_dependency = (new_operation_rows or {}).get(
+                    int(opno) if opno is not None else None
+                )
+                new_id = await _insert(
+                    item_id, mi_tx, idempotency_key, mi_params,
+                    depends_on=op_dependency,
+                )
                 if new_id:
                     inserted.append(new_id)
 
@@ -1105,6 +1171,31 @@ class ECNWorkflowMixin:
                         {"ikey": close_key},
                     )
                     dependency_id = existing_close.scalar_one_or_none()
+
+                # S-3 + CHANGE interaction: the add-half already depends on its
+                # own close row, and depends_on holds exactly ONE id — so a
+                # CHANGE whose new operation_number is also created by this ECN
+                # has two prerequisites but only one slot.
+                #
+                # Resolved by chaining rather than widening the schema: gate the
+                # CLOSE row on the routing operation instead. Since add depends
+                # on close, and close depends on the routing op, the add
+                # transitively waits for both. The close itself is unaffected by
+                # the routing op's existence (it deletes a pre-existing line by
+                # its OLD operation number), so the extra wait costs one dispatch
+                # hop and changes no semantics.
+                op_dependency = (new_operation_rows or {}).get(
+                    int(opno) if opno is not None else None
+                )
+                if op_dependency is not None and dependency_id is not None:
+                    await self._session.execute(
+                        sa.text(
+                            "UPDATE movex_outbox SET depends_on = :dep "
+                            "WHERE id = :id AND depends_on IS NULL"
+                        ),
+                        {"dep": op_dependency, "id": str(dependency_id)},
+                    )
+
                 add_id = await _insert(item_id, add_mi_tx, add_key, add_params, depends_on=dependency_id)
                 if add_id:
                     inserted.append(add_id)

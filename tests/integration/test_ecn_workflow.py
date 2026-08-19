@@ -292,7 +292,14 @@ class TestDcApproveQueuesRoutingOperationOutbox:
         assert params["operation_number"] == 50
         assert params["work_centre"] == "SMT01"
         assert params["run_time"] == pytest.approx(5.453)
-        assert "operation_description" not in params
+        # OPDS is REQUIRED by M3: AddOperation without it is rejected with
+        # "Operation description must be entered" (live-verified against
+        # CONO=300, 2026-08-18). This previously asserted the opposite,
+        # pinning a defect that would have failed every AddOperation Oskar
+        # dispatched. PDS002MI.json's `required: false` was wrong and has
+        # been corrected; treat that file as a field catalogue, not a
+        # validation spec.
+        assert params["operation_description"] == "Surface Mount Top Side"
         assert "setup_time" not in params
 
     async def test_ecn_stays_at_approved_pending_movex_write(self, db_session: AsyncSession):

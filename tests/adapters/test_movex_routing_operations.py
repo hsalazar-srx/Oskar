@@ -6,10 +6,16 @@ write flow with a routing operation: every write method in MovexRestAdapter
 used a "/mi/" URL path prefix that does not exist on movex-rest-api's real
 route ([Route("api")] + [HttpPost("{program}/{transaction}")] means the
 correct path is "/PDS002MI/AddOperation", not "/mi/PDS002MI/AddOperation").
-add_routing_operation/update_routing_operation also sent an "opds" field and
-were missing the required FACI and STRT fields per the real PDS002MI
-transaction config (transactions/PDS002MI.json in movex-rest-api) — the
-transaction has no description field at all (PLGR/PITI only).
+add_routing_operation/update_routing_operation were also missing the required
+FACI and STRT fields per the real PDS002MI transaction config
+(transactions/PDS002MI.json in movex-rest-api).
+
+CORRECTION (2026-08-18): this docstring previously also claimed "the
+transaction has no description field at all (PLGR/PITI only)", and a test
+below enforced that OPDS must NOT be sent. That was wrong and never verified
+against M3. AddOperation without OPDS is rejected with "Operation description
+must be entered" — live-verified against CONO=300. OPDS is now sent, and the
+tests assert its presence rather than its absence.
 """
 from __future__ import annotations
 
@@ -79,9 +85,49 @@ class TestAddRoutingOperation:
         assert payload["PITI"] == "500"
 
     @pytest.mark.asyncio
-    async def test_payload_does_not_include_invalid_opds_field(self, adapter: MovexRestAdapter):
-        """AddOperation's real M3 transaction has no description field —
-        sending OPDS/opds would be silently ignored at best, or rejected."""
+    async def test_payload_includes_required_opds_field(self, adapter: MovexRestAdapter):
+        """OPDS is REQUIRED by M3 and must be sent.
+
+        This test previously asserted the opposite — that OPDS must NOT be
+        sent, on the stated grounds that "AddOperation's real M3 transaction
+        has no description field". That belief was never verified against M3
+        and is false. Live-verified 2026-08-18 against CONO=300: the payload
+        without OPDS fails with
+            {"success": false, "error": "Operation description must be entered"}
+        and the identical payload WITH OPDS succeeds (MSID "000").
+
+        transactions/PDS002MI.json marks OPDS `required: false`, which is
+        where the wrong belief most likely came from — the config's flags do
+        not reflect what M3 actually enforces (the same trap already
+        documented for FDAT on Delete).
+
+        The consequence of the old behaviour was total: every AddOperation
+        Oskar dispatched would fail, retry 10x, abandon, and page the EM.
+        """
+        mock_post = AsyncMock(return_value=_mock_response())
+        adapter._post = mock_post
+
+        await adapter.add_routing_operation(
+            item_number="LF-CON-0044",
+            facility="D",
+            operation_number=50,
+            work_centre="SMT01",
+            run_time=5.0,
+            operation_description="SMT placement",
+            idempotency_key="test-key",
+        )
+
+        payload = mock_post.call_args.kwargs["json"]
+        assert payload["OPDS"] == "SMT placement"
+
+    @pytest.mark.asyncio
+    async def test_opds_falls_back_when_description_missing(self, adapter: MovexRestAdapter):
+        """A routing row with no description must still produce a valid write.
+
+        M3 rejects a blank OPDS, so omitting the field for a description-less
+        row would guarantee a 10-retry failure. The adapter substitutes a
+        non-empty placeholder instead.
+        """
         mock_post = AsyncMock(return_value=_mock_response())
         adapter._post = mock_post
 
@@ -95,8 +141,8 @@ class TestAddRoutingOperation:
         )
 
         payload = mock_post.call_args.kwargs["json"]
-        assert "opds" not in payload
-        assert "OPDS" not in payload
+        assert payload["OPDS"], "OPDS must never be empty — M3 rejects a blank description"
+        assert "50" in payload["OPDS"]
 
     @pytest.mark.asyncio
     async def test_custom_structure_type_honoured(self, adapter: MovexRestAdapter):
