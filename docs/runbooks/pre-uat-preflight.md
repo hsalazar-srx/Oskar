@@ -32,11 +32,27 @@ Running from inside the dev container (how it was validated):
 
 ```bash
 docker exec -e PYTHONPATH=/app \
-  -e DATABASE_URL=postgresql://oskar:oskar_dev@oskar-test-db:5432/oskar_test \
+  -e DATABASE_URL=postgresql+asyncpg://oskar:oskar_dev@oskar-test-db:5432/oskar_test \
   -e MAILPIT_API=http://host.docker.internal:8025 \
   -e MAILPIT_SMTP_HOST=host.docker.internal \
   oskar-app-dev python /app/scripts/preflight_check.py
 ```
+
+> **`DATABASE_URL` must point at the same database as the worker, and must use
+> the `+asyncpg` driver.** Two traps, both hit during development:
+>
+> * `celery_app` builds `broker_url` from `DATABASE_URL` **at import time**. If
+>   the test process points at `oskar-db-dev` while the worker consumes from
+>   `oskar-test-db`, tasks are published to a queue nothing reads — the worker
+>   looks dead while being perfectly healthy.
+> * A bare `postgresql://` URL resolves to psycopg2, and the app's async engine
+>   rejects it (`the loaded 'psycopg2' is not async`). Use
+>   `postgresql+asyncpg://`; the committing test fixtures normalise it back to
+>   psycopg2 where they need a sync connection.
+>
+> Run the full test suite the same way. With `DATABASE_URL` unset or pointing
+> elsewhere, ~246 integration tests **silently skip** rather than fail — a
+> green-looking run that verified far less than it appears to.
 
 Typical runtime: **~20 seconds** for all 6 checks.
 
@@ -111,6 +127,13 @@ python scripts/movex_smoke_test.py --read-only
   when the worker is healthy — the container reported `unhealthy` for 3 days
   while processing tasks normally. Both the healthcheck and this preflight prove
   liveness by *enqueueing a real task*, never by ping.
+- **A process check is not a liveness check.** The healthcheck that replaced
+  ping scanned `/proc` for a celery process — and reported `Up 28 minutes
+  (healthy)` while the worker consumed nothing for 28 minutes. A wedged worker
+  keeps its processes alive, so the check was green for exactly the outage it
+  existed to catch. It now asserts a task *completed* recently
+  (`scripts/worker_healthcheck.py`, fed by a `task_postrun` signal). If the
+  worker stops consuming, the container goes `unhealthy` within ~10 minutes.
 - **`LstOperation` returns unstable results.** Three identical calls seconds
   apart returned 29, 29, then 40 records with a spurious `OPNO=0`. Never assert
   presence/absence from a list call — use `GetOperation` with the **exact**
