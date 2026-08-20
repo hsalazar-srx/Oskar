@@ -60,49 +60,119 @@ def _broker_url() -> str:
 def _worker_is_up() -> bool:
     """True if a real worker is consuming from this broker.
 
-    Deliberately NOT `control.ping()`. Celery's remote-control commands
-    (ping/inspect) ride a broadcast mailbox that Kombu's SQLAlchemy transport
-    does not implement — against the Postgres broker (ADR-007) a ping returns
-    `[]` even when a healthy worker is consuming tasks normally. Verified
-    2026-08-14 against a live oskar-worker-dev: ping returned `[]` while the
-    same worker picked up and executed an enqueued task in ~1.5s.
+    Liveness on this transport can only be established by giving a worker
+    something to do and observing the result. Three probes that look
+    reasonable are all WRONG here — each was tried and measured:
 
-    So liveness is probed the only way that is meaningful on this transport:
-    enqueue a real task and see whether anything consumes it. `kombu_message`
-    is the queue table — an unacked, undelivered row means nothing is
-    listening.
+      * `control.ping()` / `inspect` — these ride a broadcast mailbox that
+        Kombu's SQLAlchemy transport does not implement, so a ping returns
+        `[]` against the Postgres broker (ADR-007) even when a worker is
+        consuming normally. Verified 2026-08-14: ping returned `[]` while the
+        same worker executed an enqueued task in ~1.5s. (This is also why the
+        container healthcheck scans /proc instead.)
+
+      * queue depth — `kombu_message WHERE visible` reads 0 continuously
+        whether or not a worker exists, because a live worker consumes faster
+        than any poll can sample. Measured 2026-08-19: 0 at every 0.25s sample
+        across 3s with the worker running. Every count-based variant is blind
+        in one direction or the other.
+
+      * `pg_stat_activity.application_name` — the SQLAlchemy transport leaves
+        it empty on every worker connection (verified 2026-08-19: all 4
+        connections had ''), so this reports "no worker" while one is healthy.
+
+    Getting this wrong is not cosmetic. A probe that wrongly says "up" makes
+    the skipif never fire, and the worker tests FAIL when the worker is simply
+    absent — a missing prerequisite misreported as a code regression, which is
+    the same conflation of "not checked" with a verdict that this file exists
+    to catch.
+
+    Nor can the task's RESULT be used: result_backend points at oskar-db-dev
+    while the worker runs against oskar-test-db, so `result.get()` times out
+    even though the worker logs the task as succeeded (verified 2026-08-19 —
+    "sweep_stale_processing_entries[...] succeeded in 0.013s: 0" in the worker
+    log while get(timeout=15) raised).
+
+    So: plant a stale 'processing' row, fire the sweeper, and check whether the
+    row was reclaimed. The side effect lands in the shared test database, which
+    both sides can see. Self-cleaning — the planted row IS the thing the
+    sweeper consumes.
     """
+    import time
+    import uuid
+
     try:
         import psycopg2
+
+        from src.tasks.celery_app import celery_app
         from tests.tasks.conftest import _dsn
 
+        probe_key = f"_worker_probe_{uuid.uuid4()}"
         conn = psycopg2.connect(_dsn(), connect_timeout=3)
         conn.autocommit = True
         try:
             with conn.cursor() as cur:
-                # A worker connected to this broker holds an open connection
-                # to the queue table. No kombu_message table at all means the
-                # broker has never been used — certainly no worker.
-                cur.execute("SELECT to_regclass('public.kombu_message')")
+                cur.execute("SELECT to_regclass('public.movex_outbox')")
                 if cur.fetchone()[0] is None:
                     return False
+
+                # movex_outbox.ecn_id is FK-constrained to ecn_instances, so
+                # the probe row must hang off a real ECN. Borrow any existing
+                # one — the probe never reads it, it only needs referential
+                # validity. No ECNs at all means a virgin database and hence
+                # no meaningful worker check.
+                cur.execute("SELECT id FROM ecn_instances LIMIT 1")
+                host = cur.fetchone()
+                if host is None:
+                    return False
+
+                # A stale 'processing' row is exactly what the sweeper reclaims.
+                # updated_at is backdated well past the staleness threshold; the
+                # trigger that would stamp it to now() is bypassed by setting it
+                # explicitly after insert.
                 cur.execute(
-                    "SELECT count(*) FROM pg_stat_activity "
-                    "WHERE datname = current_database() "
-                    "  AND application_name ILIKE %s",
-                    ("%celery%",),
+                    "INSERT INTO movex_outbox "
+                    "  (ecn_id, mi_transaction, mi_params, idempotency_key, state) "
+                    "VALUES (%s, 'PDS002MI.Probe', '{}'::jsonb, %s, 'processing') "
+                    "RETURNING id",
+                    (host[0], probe_key),
                 )
-                if cur.fetchone()[0] > 0:
-                    return True
-                # application_name isn't always set by the SQLAlchemy
-                # transport; fall back to checking for a recently-drained
-                # queue, which only happens when something is consuming.
+                probe_id = cur.fetchone()[0]
                 cur.execute(
-                    "SELECT count(*) FROM kombu_message WHERE visible = true"
+                    "ALTER TABLE movex_outbox DISABLE TRIGGER trg_movex_outbox_updated_at"
                 )
-                backlog = cur.fetchone()[0]
-                return backlog == 0
+                try:
+                    cur.execute(
+                        "UPDATE movex_outbox SET updated_at = now() - interval '48 hours' "
+                        "WHERE id = %s",
+                        (probe_id,),
+                    )
+                finally:
+                    cur.execute(
+                        "ALTER TABLE movex_outbox ENABLE TRIGGER trg_movex_outbox_updated_at"
+                    )
+
+                celery_app.send_task("oskar.tasks.sweep_stale_processing_entries")
+
+                deadline = time.monotonic() + 15.0
+                while time.monotonic() < deadline:
+                    time.sleep(0.25)
+                    cur.execute(
+                        "SELECT state FROM movex_outbox WHERE id = %s", (probe_id,)
+                    )
+                    row = cur.fetchone()
+                    if row and row[0] != "processing":
+                        return True  # a live worker ran the sweeper
+                return False  # never reclaimed -> nothing listening
         finally:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM movex_outbox WHERE idempotency_key = %s",
+                        (probe_key,),
+                    )
+            except Exception:
+                pass
             conn.close()
     except Exception:
         return False

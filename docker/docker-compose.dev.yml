@@ -128,12 +128,21 @@ services:
     # to ignore it, and masks a real outage when one happens. Anything built
     # for §7 monitoring must avoid `celery inspect` for the same reason.
     healthcheck:
-      # Scans /proc for a live celery worker process. The slim image has no
-      # pgrep and no ps, and `pidof celery` does not match because the process
-      # is `python3.12 /usr/local/bin/celery ...` — pidof compares the binary
-      # name only. Verified in-container 2026-08-17: this matches the main
-      # process plus both pool children.
-      test: ["CMD-SHELL", "grep -l celery /proc/[0-9]*/cmdline >/dev/null 2>&1 || exit 1"]
+      # Proves the worker is CONSUMING, not merely running.
+      #
+      # The previous version scanned /proc for a celery process. That is not
+      # enough: verified 2026-08-19, this container sat at "Up 28 minutes
+      # (healthy)" while consuming nothing at all — its last log line was 28
+      # minutes old despite beat enqueueing the sweeper every 5 minutes. A
+      # wedged worker keeps its processes alive, so a process check is green
+      # for exactly the outage it is supposed to catch.
+      #
+      # Instead: assert the beat-scheduled sweeper (every 300s) has been
+      # serviced within the last 10 minutes. Two consecutive misses means the
+      # worker has stopped consuming, whatever its processes are doing.
+      # Deliberately not `celery inspect ping` — see the note above; on this
+      # transport ping is always empty and would be always-red.
+      test: ["CMD", "python", "/app/scripts/worker_healthcheck.py"]
       interval: 30s
       timeout: 10s
       retries: 3

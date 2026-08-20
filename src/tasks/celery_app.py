@@ -21,8 +21,10 @@ discovers them without needing autodiscover_tasks.
 from __future__ import annotations
 
 import os
+import time
 
 from celery import Celery
+from celery.signals import task_postrun
 
 # Database URL is the single source of truth for both broker and result backend.
 # The celery[sqlalchemy] transport prefixes with "sqla+" to select Kombu's
@@ -109,3 +111,29 @@ celery_app.conf.update(
         },
     },
 )
+
+
+# ---------------------------------------------------------------------------
+# Liveness signal for the container healthcheck.
+#
+# Touches a file every time a task finishes, so "is this worker still
+# consuming?" can be answered by the file's age. A process check cannot answer
+# it: verified 2026-08-19, oskar-worker-dev reported "Up 28 minutes (healthy)"
+# on a /proc scan while consuming nothing for 28 minutes — its processes were
+# alive and its queue untouched. Celery's own ping is unusable here because
+# Kombu's SQLAlchemy transport has no broadcast mailbox (ADR-007).
+#
+# Paired with the beat-scheduled sweeper (every 300s), a file older than 600s
+# means two consecutive misses — the worker has stopped consuming.
+# ---------------------------------------------------------------------------
+_LIVENESS_FILE = os.environ.get("CELERY_LIVENESS_FILE", "/tmp/celery-last-task")
+
+
+@task_postrun.connect
+def _touch_liveness_file(**_kwargs: object) -> None:
+    """Best-effort: never let liveness bookkeeping fail a task."""
+    try:
+        with open(_LIVENESS_FILE, "w") as fh:
+            fh.write(str(time.time()))
+    except Exception:
+        pass
