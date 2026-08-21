@@ -92,7 +92,7 @@ error; everything else is free to run as often as useful.
 | `Movex write path` FAIL | M3 unreachable, or a genuine silent-write regression | Check `curl http://localhost:5000/health`. `CWBCO1004 - Remote address could not be resolved` = movex-rest-api cannot reach the AS/400 — infrastructure, not code |
 | `Celery worker` FAIL | worker not running, or broker URL wrong | `docker compose --profile worker up -d`; check the worker's `DATABASE_URL` matches the app's |
 | `Crash recovery` FAIL | sweeper unregistered or unscheduled | Regression in `celery_app.beat_schedule` or the `oskar.tasks.*` naming convention |
-| `Email` SKIP | Mailpit not running | `docker compose --profile mail up -d` |
+| `Email` SKIP | Mailpit not running, or not reachable from where the check runs | `docker compose --profile mail up -d`. The tests auto-discover Mailpit (localhost → `oskar-mailpit-dev` → `host.docker.internal`), so a skip with the container healthy means none of those hosts resolve — set `MAILPIT_API` / `MAILPIT_SMTP_HOST` explicitly |
 | `Email` FAIL | SMTP accepted but nothing delivered, or bad headers | Check `SMTP_FROM` — it must be set, and read (not `SMTP_SENDER`, which no code reads) |
 | happy/reject FAIL | ordering regression, or leaked test data | If REFUSED: a previous run leaked `MSEQ 887/888` or `OPNO 888` — see cleanup below |
 
@@ -134,6 +134,12 @@ python scripts/movex_smoke_test.py --read-only
   existed to catch. It now asserts a task *completed* recently
   (`scripts/worker_healthcheck.py`, fed by a `task_postrun` signal). If the
   worker stops consuming, the container goes `unhealthy` within ~10 minutes.
+- **Check the skip count, not just the failure count.** Two separate false
+  skips hid real coverage gaps: ~246 integration tests skipped whenever
+  `DATABASE_URL` was unset, and all 9 email tests skipped from inside the
+  container while Mailpit was healthy. Both produced green-looking runs that
+  verified far less than they appeared to. A skip is a boundary that was **not
+  checked** — if the count moves, find out why before trusting the run.
 - **`LstOperation` returns unstable results.** Three identical calls seconds
   apart returned 29, 29, then 40 records with a spurious `OPNO=0`. Never assert
   presence/absence from a list call — use `GetOperation` with the **exact**
