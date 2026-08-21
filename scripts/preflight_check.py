@@ -48,6 +48,14 @@ import sys
 import time
 from typing import Any, Callable
 
+# This script was validated inside the Linux dev container, where stdout is UTF-8.
+# On a Windows host the console defaults to cp1252 and every box-drawing or arrow
+# character raises UnicodeEncodeError before a single check runs — the whole
+# checklist is unusable from the machine it is most likely to be run from.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 PASS, FAIL, SKIP = "PASS", "FAIL", "SKIP"
@@ -202,13 +210,33 @@ def check_email() -> Result:
     except Exception as exc:
         return Result("Email deliverability", SKIP, f"import failed: {exc}")
 
-    api = os.environ.get("MAILPIT_API", "http://localhost:8025")
-    host = os.environ.get("MAILPIT_SMTP_HOST", "localhost")
     port = int(os.environ.get("MAILPIT_SMTP_PORT", "1025"))
 
-    try:
-        httpx.get(f"{api}/api/v1/messages", timeout=3.0).raise_for_status()
-    except Exception:
+    # Auto-discover Mailpit. "localhost" reaches the published ports from the
+    # host machine, but from inside the app container Mailpit is only reachable
+    # by its service name on the compose network — hardcoding either one makes
+    # this check SKIP in the other context while the catcher is perfectly
+    # healthy, which reports an unverified boundary as a missing prerequisite.
+    # Mirrors the same fix in tests/tasks/test_email_deliverability.py.
+    candidates = [
+        (os.environ.get("MAILPIT_SMTP_HOST"), os.environ.get("MAILPIT_API")),
+        ("localhost", "http://localhost:8025"),
+        ("oskar-mailpit-dev", "http://oskar-mailpit-dev:8025"),
+        ("host.docker.internal", "http://host.docker.internal:8025"),
+    ]
+
+    host = api = None
+    for cand_host, cand_api in candidates:
+        if not cand_host or not cand_api:
+            continue
+        try:
+            httpx.get(f"{cand_api}/api/v1/messages", timeout=3.0).raise_for_status()
+            host, api = cand_host, cand_api
+            break
+        except Exception:
+            continue
+
+    if host is None:
         return Result("Email deliverability", SKIP,
                       "Mailpit not reachable — start the 'mail' compose profile")
 
@@ -295,17 +323,48 @@ def check_digikey() -> Result:
     return Result("DigiKey (live)", FAIL, last[-1][:200] if last else tail[-200:])
 
 
+def check_ldap() -> Result:
+    """Verify group resolution against the real DC.
+
+    Mocked tests cannot prove AD accepts the chain-walk filter, that the service
+    account can read the Application Roles OU, or that nested membership
+    resolves — and a user who resolves to no roles is locked out while AD looks
+    correctly configured. Only a real login proves it.
+    """
+    if os.environ.get("AUTH_PROVIDER", "ldap").lower() != "ldap":
+        return Result("AD group resolution", SKIP,
+                      "AUTH_PROVIDER is not 'ldap' — running on the dev bypass, "
+                      "so real AD is UNVERIFIED")
+    if not os.environ.get("LDAP_BIND_PW"):
+        return Result("AD group resolution", SKIP, "LDAP_BIND_PW not set")
+    if not (os.environ.get("LDAP_VERIFY_NESTED_USER")
+            or os.environ.get("LDAP_VERIFY_DIRECT_USER")):
+        return Result("AD group resolution", SKIP,
+                      "no LDAP_VERIFY_*_USER configured — nesting UNVERIFIED")
+
+    code, tail = _run_script("ldap_verify.py", timeout=120)
+    if code == 0:
+        summary = next((l.strip() for l in tail.splitlines() if "roles:" in l), "")
+        return Result("AD group resolution", PASS,
+                      summary or "nested + direct membership resolved")
+    if code == 2:
+        return Result("AD group resolution", SKIP, "refused — incomplete configuration")
+    last = [l for l in tail.splitlines() if "[FAIL]" in l]
+    return Result("AD group resolution", FAIL, last[-1].strip()[:200] if last else tail[-200:])
+
+
 CHECKS: dict[str, Callable[[], Result]] = {
     "movex": check_movex,
     "worker": check_worker,
     "crash": check_crash_recovery,
     "email": check_email,
+    "ldap": check_ldap,
     "happy": check_happy_path,
     "reject": check_rejection_path,
     "digikey": check_digikey,
 }
 
-DEFAULT_ORDER = ["movex", "worker", "crash", "email", "happy", "reject"]
+DEFAULT_ORDER = ["movex", "worker", "crash", "email", "ldap", "happy", "reject"]
 
 
 def main() -> int:
