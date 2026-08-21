@@ -1075,7 +1075,7 @@ CREATE INDEX idx_training_ack_user ON ecn_training_acknowledgements(username)
     WHERE acknowledged_at IS NULL;
 ```
 
-On ECN CLOSED (70): system INSERTs rows for all active `OSKAR-Engineers` members. Users acknowledge via UI (Sprint 2). Outstanding acknowledgements visible to DC/QM.
+On ECN CLOSED (70): system INSERTs rows for all active `ecn-initiator` members. Users acknowledge via UI (Sprint 2). Outstanding acknowledgements visible to DC/QM.
 
 ---
 

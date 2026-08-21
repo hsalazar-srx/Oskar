@@ -53,7 +53,7 @@ for bypass). Circuit breaker (`pybreaker`) on the LDAP connection pool.
 **Break-glass account:** One local PostgreSQL account (`svc-oskar-admin`), bcrypt-hashed,
 disabled by default. Enabled only by Devian (DISP security owner) via documented procedure.
 This account can trigger operational recovery only — it cannot approve ECNs (enforced by
-`ecn_approval_steps.approver_type = 'HUMAN'` constraint + OSKAR-Approvers group check).
+`ecn_approval_steps.approver_type = 'HUMAN'` constraint + `ecn-approver` group check).
 
 ### Token design: 60-minute access + 8-hour refresh
 

@@ -272,6 +272,63 @@ mailbox Kombu's SQLAlchemy transport does not implement. Replaced with a `/proc`
 process is `python3.12 /usr/local/bin/celery ...`). A permanently-red healthcheck is worse
 than none — it trains everyone to ignore it and masks a genuine outage.
 
+### 8. Active Directory — the same gap, found in the auth layer — ✅ DELIVERED 2026-08-21
+
+Not in the original plan. It surfaced while working through the AD group model with Manal, and
+it is the same shape as §1–§4: **every LDAP test in the suite mocks `ldap3`**, so the suite
+proved the filter was built correctly and the response parsed correctly, and could not prove
+that AD accepts the filter, that the service account can read the Application Roles OU, or that
+membership resolves at all. See ADR-013 for the decisions.
+
+Two real defects were found by reading the auth path, both of the "silence looks like success"
+kind this plan exists to close:
+
+- **Nested membership resolved to nothing.** `srxglobal.com` nests Business Function groups
+  (`grp-*`) into the Application Role groups (`ecn-*`), so a quality manager reaches
+  `ecn-approver` via `grp-quality-manager`. `get_groups()` read the user's own `memberOf`
+  attribute, which returns **direct membership only** — every nested user would have resolved to
+  no roles and been locked out, while AD looked correctly configured to anyone checking. Now
+  resolved with AD's `LDAP_MATCHING_RULE_IN_CHAIN`; direct membership still matches at depth
+  zero, which is what `ecn-doc-controller` relies on.
+- **A directory outage was indistinguishable from "this user has no groups."** Every LDAP method
+  ended `except Exception: return []`. A DC outage, an expired service-account password or a
+  rejected search all reached the user as `401 Invalid credentials` or a clean `403` — sending
+  them to raise a permissions ticket against AD while the real fault was infrastructure. Exactly
+  the I2-21 shape: a check that cannot tell "checked and found nothing" from "could not check."
+  Now `LDAPDirectoryError` → **503**, never 401/403. A genuinely role-less user still returns
+  `[]`, and an unset `mail` still returns `None` — those are real answers.
+
+A third was found in passing: `list_application_groups()` filtered members by
+`objectClass=user`, so the admin "who can approve?" view would have shown `ecn-approver` as
+**empty** once nesting was in place. It now resolves effective membership through the chain.
+
+**`scripts/ldap_verify.py`** (preflight check #5) is what proves any of this against the real
+DC: service-account bind, nested resolution, direct resolution, no `grp-*` leaking into the
+roles claim, `mail` populated, and a warning on any ECN role with no effective members.
+
+Validated by breaking it, not by observing green:
+
+| Injected fault | Result |
+|---|---|
+| Missing LDAP configuration | `REFUSED` → INCOMPLETE, exit 2 |
+| No `LDAP_BIND_PW` | `[SKIP]` → INCOMPLETE, exit 1 |
+| Unreachable DC | `[FAIL]` → NOT READY, exit 1 |
+
+**Still UNVERIFIED against real AD** — and the check says so rather than passing. It needs the
+test accounts from Manal, specifically ones whose ECN access comes *only* through nesting
+(`LDAP_VERIFY_NESTED_USER`) plus one added directly (`LDAP_VERIFY_DIRECT_USER`). Without both,
+preflight reports INCOMPLETE and exits non-zero.
+
+**Also fixed here:** `preflight_check.py` crashed with `UnicodeEncodeError` on any Windows host.
+It was validated inside the Linux dev container where stdout is UTF-8; the Windows console
+defaults to cp1252 and the arrow characters raised before a single check ran — the checklist was
+unusable from the machine most likely to run it. One `sys.stdout.reconfigure` at import.
+
+**Known cost, not yet measured:** `get_groups()` now calls `_find_user_dn()` first, making a
+login five LDAP connections rather than four, and the chain-walk is slower than reading an
+attribute. Fine at ~50 users in principle, but this needs measuring against the real DC rather
+than assuming. Connection reuse is the obvious fix.
+
 ---
 
 ## Explicitly out of scope for this plan

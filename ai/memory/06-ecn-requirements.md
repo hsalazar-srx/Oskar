@@ -169,13 +169,34 @@ DRAFT
 
 ### Role-to-AD Group Mapping
 
-| OSKAR Role(s) | AD Group |
-|--------------|---------|
-| DC, SE, CE, EM, PM, QM, SC, FN, CA | `OSKAR-Approvers` |
-| OR, RD, TE, MQ | `OSKAR-Engineers` |
-| AD | `OSKAR-Admins` |
+AD answers only the coarse question — *can this person log in and approve at
+all?* Three groups cover all 13 roles, because the fine-grained question (*is this
+person the QM for Melbourne?*) is answered by `system_role_users`, which is
+facility-aware. AD is not.
 
-Per-ECN role assignment is derived from `system_role_users` table at ECN creation — not from the JWT AD group claim alone.
+| OSKAR Role(s) | AD Group (CN) |
+|--------------|---------|
+| OR, and any engineer raising a change | `ecn-initiator` |
+| DC, SE, CE, EM, PM, QM, SC, FN, CA, AD | `ecn-approver` |
+| DC (mandatory gate — **also needs `ecn-approver`**) | `ecn-doc-controller` |
+| RD, TE, MQ (observers — notified only, no approval) | none required |
+
+All three live under `OU=Application Roles,OU=Groups,DC=srxglobal,DC=com`.
+
+`ecn-doc-controller` is checked independently of `ecn-approver` — a DC in only
+the DC group passes the document-control gate and is rejected on ordinary
+approvals. Both memberships are required.
+
+**Membership is nested** (confirmed with Manal, 2026-08-21): Business Function
+groups (`grp-eng-manager`, `grp-quality-manager`, …) are members of the ECN
+roles, so ECN access follows normal onboarding. `ecn-doc-controller` is the
+exception and takes users directly — Document Controller is a duty within the
+ECN process, not an org function, so there is no Business Function group above
+it. Resolution therefore walks the chain (`LDAP_MATCHING_RULE_IN_CHAIN`) rather
+than reading the user's `memberOf`, which returns direct membership only.
+
+Per-ECN role assignment is derived from the `system_role_users` table at ECN
+creation — not from the JWT AD group claim alone.
 
 ---
 

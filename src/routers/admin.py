@@ -21,7 +21,12 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.auth.dependencies import CurrentUser, get_current_user
-from src.auth.providers import DevIdentityProvider, LDAPIdentityProvider, get_identity_provider
+from src.auth.providers import (
+    DevIdentityProvider,
+    LDAPDirectoryError,
+    LDAPIdentityProvider,
+    get_identity_provider,
+)
 from src.db import get_session
 from src.services.admin import (
     AdminService,
@@ -55,16 +60,27 @@ def _require_dc(user: CurrentUser) -> None:
 async def list_ldap_groups(
     user: CurrentUser = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
-    """Return all Application Roles groups from LDAP with their members.
+    """Return all Application Roles groups from LDAP with their effective members.
 
-    Queries AD live. Returns an empty list (not an error) if LDAP is
-    unavailable or the provider does not support group enumeration
-    (e.g. DevIdentityProvider in local dev).
+    Queries AD live. Membership is resolved through nested Business Function
+    groups, so this shows who can actually action each role.
+
+    Returns an empty list only when the provider does not support group
+    enumeration at all (e.g. EntraIDProvider). A directory that could not be
+    reached raises 503 rather than returning [] — an empty list here reads as
+    "nobody holds any role", which for a DC checking who can approve is worse
+    than an error.
     """
     _require_dc(user)
     provider = get_identity_provider()
     if isinstance(provider, (LDAPIdentityProvider, DevIdentityProvider)):
-        return provider.list_application_groups()
+        try:
+            return provider.list_application_groups()
+        except LDAPDirectoryError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Directory service unavailable — group list could not be read",
+            ) from exc
     return []
 
 

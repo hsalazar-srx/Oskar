@@ -175,7 +175,7 @@ sequenceDiagram
 
   E->>FE: Click "Approve" (e.g. QM approves at MANAGEMENT_REVIEW)
   FE->>API: POST /api/v1/ecn/{id}/approve-role {role_id: "QM"}
-  API->>API: Verify JWT — check OSKAR-Approvers group
+  API->>API: Verify JWT — check ecn-approver group
   API->>API: ECNWorkflowMachine.approve_role() — guard conditions
   API->>API: BEGIN transaction
   API->>API: UPDATE ecn_instances SET status=... (if block complete → APPROVED)
@@ -261,8 +261,8 @@ sequenceDiagram
     API-->>FE: 401 Unauthorized
     FE-->>E: Invalid credentials
   else Authentication succeeded
-    API->>LDAP: get_groups(username) — memberOf query
-    LDAP-->>API: [OSKAR-Engineers, OSKAR-Approvers]
+    API->>LDAP: get_groups(username) — chain-walk over Application Roles OU
+    LDAP-->>API: [ecn-initiator, ecn-approver]
     API->>API: Issue JWT access token (60min) + HttpOnly refresh cookie (8h), groups claim
     API-->>FE: 200 OK — JWT token
     FE->>FE: Store JWT in memory (not localStorage)
@@ -521,7 +521,7 @@ This eliminates Stargile's stuck-ECN problem: APPROVED = Movex pending (correct)
 | Layer | Store | Question answered | Who manages |
 |---|---|---|---|
 | Authentication | Active Directory (LDAPS bind port 636) | Is this a valid Scanfil APAC user? | IT (Manal) |
-| Platform access | AD groups (`OSKAR-Engineers`, `OSKAR-Approvers`) | Can this user log into OSKAR? | IT (Manal) |
+| Platform access | AD groups (`ecn-initiator`, `ecn-approver`, `ecn-doc-controller`) — resolved through nested Business Function groups | Can this user log into OSKAR? | IT (Manal) |
 | System role | `system_role_users` (PostgreSQL) | Is this user a DC / EM / QM system-wide? | OSKAR Admin |
 | Per-ECN role | `ecn_role_assignments` (PostgreSQL) | Who is the DC for ECN-2026-0042? | Auto-assigned at creation; overrideable by Admin |
 

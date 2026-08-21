@@ -64,8 +64,11 @@ Verifies that OSKAR functions correctly according to its specification under nor
 | OQ-01 | Valid AD credentials return JWT access token (60min) + HttpOnly refresh cookie (8h) | Response contains `access_token`; `Set-Cookie` header with `HttpOnly; Secure; SameSite=Strict` |
 | OQ-02 | Invalid credentials return 401 | No token issued; no stack trace in response body |
 | OQ-03 | Expired access token rejected; refresh cookie issues new token | 401 on expired token; 200 on `/auth/refresh` with valid cookie |
-| OQ-04 | User not in `OSKAR-Engineers` AD group cannot log in | 403 Forbidden |
-| OQ-05 | User in `OSKAR-Engineers` cannot access approver endpoints | 403 on `POST /api/v1/ecn/{id}/approve` |
+| OQ-04 | User in no `ecn-*` Application Role cannot reach protected endpoints | 403 Forbidden |
+| OQ-05 | User in `ecn-initiator` only cannot access approver endpoints | 403 on `POST /api/v1/ecn/{id}/approve` |
+| OQ-05a | User in `ecn-doc-controller` but NOT `ecn-approver` is rejected on ordinary approvals | 403 — the two groups are checked independently |
+| OQ-05b | User whose role comes ONLY via a nested Business Function group resolves correctly | Groups claim contains `ecn-approver`; verified against the real DC by `scripts/ldap_verify.py` |
+| OQ-05c | Directory unreachable during login returns 503, never 401/403 | An outage must not present as invalid credentials or missing permissions |
 | OQ-06 | Self-approval blocked | Originator of ECN cannot approve any stage — 403 returned |
 | OQ-07 | JTI blocklist — logout invalidates token immediately | Logged-out token returns 401 on subsequent request |
 
