@@ -47,18 +47,50 @@ from typing import Any
 import pytest
 
 # Mailpit's SMTP + HTTP API, as published by the "mail" compose profile.
-MAILPIT_SMTP_HOST = os.environ.get("MAILPIT_SMTP_HOST", "localhost")
+#
+# The host differs by where the tests run: "localhost" reaches the published
+# ports from the host machine, but from inside the app container Mailpit is
+# only reachable by its service name on the compose network. Hardcoding
+# either one makes the suite skip in the other context — and these tests
+# skipping is indistinguishable from Mailpit being down, which is precisely
+# the silence-looks-like-success failure this file exists to catch. Verified
+# 2026-08-20: all 9 tests skipped from inside the container while Mailpit was
+# healthy and had been up 4 days.
+#
+# So probe both, preferring an explicit override.
 MAILPIT_SMTP_PORT = int(os.environ.get("MAILPIT_SMTP_PORT", "1025"))
-MAILPIT_API = os.environ.get("MAILPIT_API", "http://localhost:8025")
+
+_MAILPIT_CANDIDATES = [
+    (os.environ.get("MAILPIT_SMTP_HOST"), os.environ.get("MAILPIT_API")),
+    ("localhost", "http://localhost:8025"),
+    ("oskar-mailpit-dev", "http://oskar-mailpit-dev:8025"),
+    ("host.docker.internal", "http://host.docker.internal:8025"),
+]
+
+
+def _probe(api: str) -> bool:
+    try:
+        import httpx
+
+        return httpx.get(f"{api}/api/v1/messages", timeout=3.0).status_code == 200
+    except Exception:
+        return False
+
+
+def _resolve_mailpit() -> tuple[str, str] | None:
+    for host, api in _MAILPIT_CANDIDATES:
+        if host and api and _probe(api):
+            return host, api
+    return None
+
+
+_resolved = _resolve_mailpit()
+MAILPIT_SMTP_HOST = _resolved[0] if _resolved else "localhost"
+MAILPIT_API = _resolved[1] if _resolved else "http://localhost:8025"
 
 
 def _mailpit_up() -> bool:
-    try:
-        import httpx
-        r = httpx.get(f"{MAILPIT_API}/api/v1/messages", timeout=3.0)
-        return r.status_code == 200
-    except Exception:
-        return False
+    return _resolved is not None
 
 
 requires_mailpit = pytest.mark.skipif(
