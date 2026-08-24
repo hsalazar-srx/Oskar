@@ -1,0 +1,11 @@
+Item No,Operation No,Operation Description,Work Centre,Run Time,Setup Time,Change Type
+LFAM050001,10,Kitting,KIT,0.83,,ADD
+LFAM050001,20,Machine Labelling,LABEL,0.15,0.15,ADD
+LFAM050001,30,Prepping & Label Printing,PREP,0.2,0.04,ADD
+LFAM050001,50,SMT First Side,SMTTS,2.84,2.61,ADD
+LFAM050001,60,X-Ray Inspection,XRAY,0.77,0.15,ADD
+LFAM050001,120,ICT / Flying Probe,ICT,2.79,0.1,ADD
+LFAM050001,130,Functional Test,FCT,3.25,0.1,ADD
+LFAM050001,180,QC Inspection,QA,1.39,0.05,ADD
+LFAM050001,190,Packing & Reporting,PACK,1.17,,ADD
+LFDR410018,10,Kitting,KIT,0.15,,ADD
