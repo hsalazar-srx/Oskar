@@ -1,0 +1,4 @@
+Item No,Component Number,Change Type,Quantity,Unit of Measure,Operation Number,Sequence Number,From Date,Old From Date,Old Quantity,Circuit Reference,Notes
+LFAM050001,LFDR120001,ADD,4,EA,50,150,2026-09-01,,,"R1,R141,R153,R7",New pull-up resistors for revised power stage
+LFAM050001,LFDR410018,CHANGE,2,EA,50,160,2026-09-01,2024-01-18,1,"U23,U24",Quantity increased from 1 to 2
+LFAM050001,LFDR990012,DELETE,,,,170,,2024-01-18,,,Obsolete part removed at Rev C

@@ -1,0 +1,4 @@
+Item No,Item Name,Item Status,Procurement Group,Product Group,Order Type,Lead Free Code,Good Receiving Method,Is New Item,Item Description,Drawing No,Item Group,Unit of Measurement,Revision No,Supplier,Responsible,Customer Alias
+LFAM050001,Main control PCB assembly,20,PUR,PCBA,PUR,LF,STD,No,Rev C control board with revised power stage,DWG-050001,ELEC,EA,C,,N Lim,
+LFDR410018,Op-amp LM741 8-PDIP,20,PUR,COMP,PUR,LF,STD,Yes,Standard general purpose amplifier 1 circuit,,ELEC,EA,A,,N Lim,CUST-OA-741
+LFDR120001,Resistor 1K 0603 1%,20,PUR,COMP,PUR,LF,STD,Yes,RES SMD 1K OHM 1% 1/10W 0603,,ELEC,EA,A,,N Lim,

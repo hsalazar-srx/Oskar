@@ -17,12 +17,13 @@ What it creates
 4. DC_APPROVED        — "Routing change — remove wave solder op" (hsalazar, full approval)
 5. APPROVED           — "BOM rationalisation — Q2 2026"          (hsalazar, DC approved)
 6. REJECTED           — "Add conformal coating step"             (eng_user, rejected by SE)
-7. CLOSED             — "Phase 1 EOL component swap"             (hsalazar, archived)
-8. DRAFT (BOM)        — "BOM changes — Widget Assembly A rev"    (hsalazar, ADD/CHANGE/DELETE lines)
-9. DC_APPROVED (BOM)  — "BOM supersession — connector swap"      (hsalazar, full write-back chain)
-10. DC_APPROVED (blocked) — "BOM change blocked by live conflict"    (hsalazar, dc_approve fails — see below)
+7. ON_HOLD            — "Supplier change — TDK to Murata"        (held by DC from MGMT_REVIEW)
+8. CLOSED             — "Phase 1 EOL component swap"             (hsalazar, archived)
+9. DRAFT (BOM)        — "BOM changes — Widget Assembly A rev"    (hsalazar, ADD/CHANGE/DELETE lines)
+10. DC_APPROVED (BOM)  — "BOM supersession — connector swap"      (hsalazar, full write-back chain)
+11. DC_APPROVED (blocked) — "BOM change blocked by live conflict"    (hsalazar, dc_approve fails — see below)
 
-ECNs 8-10 exercise the BOM module (Slice E) against item LF100001, the item
+ECNs 9-11 exercise the BOM module (Slice E) against item LF100001, the item
 tests/fixtures/bom/single_level.json and scripts/movex_stub.py both key off.
 They need a reachable ERP endpoint (MOVEX_API_URL) to show their full
 behaviour — the script probes it once at startup (see "BOM demo notes" below)
@@ -36,29 +37,35 @@ Each ECN has:
   - Routing operations (where routing_changes=True)
   - Full audit chain (real transitions via ECNService — not raw SQL)
 
-BOM demo notes (ECNs 8-10)
+BOM demo notes (ECNs 9-11)
 ---------------------------
 The script probes MOVEX_API_URL once at startup (a real GET /bom/LF100001,
 not health_check() — movex_stub.py has no /health route):
-  - Reachable   -> ECN 9 goes through a real submit-time snapshot + dc_approve
-                   concurrency re-fetch; ECN 10 is set up by actually POSTing
+  - Reachable   -> ECN 10 goes through a real submit-time snapshot + dc_approve
+                   concurrency re-fetch; ECN 11 is set up by actually POSTing
                    to the stub's /_test-mutate/bom/LF100001 endpoint between
                    submit and dc_approve so the conflict is real, not staged.
                    Point MOVEX_API_URL at scripts/movex_stub.py for this —
                    the real movex-rest-api doesn't expose /_test-mutate and
                    W-1 (UpdComponent) isn't built there yet (I2-19), so the
-                   real API is NOT a safe target for ECN 9/10's dc_approve.
+                   real API is NOT a safe target for ECN 10/11's dc_approve.
   - Unreachable -> both ECNs still get created with the same bom_changes
                    rows; the snapshot/concurrency-gate calls skip themselves
                    with a logged warning (production's own degrade-gracefully
                    behaviour — see ecn.bom_snapshot.capture_failed /
                    ecn.bom_concurrency.skipped_no_erp_adapter in workflow.py),
-                   so ECN 9 simply reaches DC_APPROVED without ever having
+                   so ECN 10 simply reaches DC_APPROVED without ever having
                    compared against a live BOM, and ECN 10 is skipped
                    entirely (there's nothing to conflict against).
 Run the stub first if you want the full story:
     uvicorn scripts.movex_stub:app --port 8100
-    MOVEX_API_URL=http://localhost:8100 python scripts/seed_demo.py
+    MOVEX_API_URL=http://localhost:8100 MOVEX_CONO=300 python scripts/seed_demo.py
+
+MOVEX_CONO is required as well as MOVEX_API_URL — MovexRestAdapter() reads both
+from the environment and raises KeyError without them, *after* the eight
+non-BOM ECNs have already been created. From a Windows host, also point
+DATABASE_URL at localhost (the container hostname oskar-db-dev does not resolve):
+    DATABASE_URL=postgresql+asyncpg://oskar:oskar_dev@localhost:5432/oskar
 
 Idempotent: deletes existing demo ECNs by title prefix "[DEMO]" before re-creating.
 Safe to run against dev DB. Never touches the test DB (port 5433).
@@ -94,6 +101,14 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from datetime import date, timedelta
+
+# This script prints ✓/✗ status marks. On a Windows host the console defaults to
+# cp1252 and those raise UnicodeEncodeError, masking the real error behind an
+# encoding traceback (the container's stdout is UTF-8, so it only bites on the host).
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 # Allow running from project root inside Docker (/app) or Windows host
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -500,6 +515,47 @@ async def _ecn_rejected(svc: ECNService) -> str:
     return ecn.id
 
 
+async def _ecn_on_hold(svc: ECNService) -> str:
+    """ON_HOLD (90) — paused mid-review by the DC.
+
+    The only status the demo set otherwise never reaches, so nothing exercised
+    the hold banner, the resume action, or the pre-hold status badge. Held from
+    MANAGEMENT_REVIEW because that is where a real hold usually happens: an
+    approver asks a question the originator cannot answer immediately.
+
+    `place_on_hold` requires BOTH a reason and an expected resume date — the
+    guard rejects the transition without them.
+    """
+    ecn = await svc.create(
+        _req(
+            title="[DEMO] Supplier change — TDK to Murata inductors",
+            description=(
+                "Second-source the 10uH power inductor on PCBA-LF-004 from Murata "
+                "following extended TDK lead times. Electrically equivalent; "
+                "footprint identical."
+            ),
+            new_parts=True, lead_time_changes=True,
+        ),
+        OR,
+    )
+    item = await svc.create_item(ecn.id, line_number=10, item_number="LF-IND-0010",
+                                 item_name="Inductor 10uH 20% 1210", is_new_item=True)
+    await svc.create_mpn(ecn.id, item.id, mpn="DFE252012F-100M",
+                         manufacturer="Murata", is_default=True)
+    await _advance(svc, ecn.id, "submit", OR, "OR")
+    await _advance(svc, ecn.id, "approve_engineering", SE, "SE")
+    await _advance(
+        svc, ecn.id, "place_on_hold", DC, "DC",
+        hold_reason=(
+            "Awaiting qualification test report from Murata. Quality will not "
+            "approve the second source until DCR and saturation-current data "
+            "for the new part are on file."
+        ),
+        expected_resume_date=(date.today() + timedelta(days=21)).isoformat(),
+    )
+    return ecn.id
+
+
 async def _ecn_closed(svc: ECNService) -> str:
     ecn = await svc.create(
         _req(
@@ -731,6 +787,7 @@ async def main() -> None:
         ("DC_APPROVED",        _ecn_dc_approved),
         ("APPROVED",           _ecn_approved),
         ("REJECTED",           _ecn_rejected),
+        ("ON_HOLD",            _ecn_on_hold),
         ("CLOSED",             _ecn_closed),
     ]
 
