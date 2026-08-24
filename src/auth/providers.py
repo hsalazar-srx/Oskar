@@ -19,6 +19,24 @@ from __future__ import annotations
 import os
 from typing import Protocol, runtime_checkable
 
+import structlog
+
+log = structlog.get_logger(__name__)
+
+
+class LDAPDirectoryError(RuntimeError):
+    """The directory could not be consulted — the answer is unknown, not empty.
+
+    Raised when AD is unreachable, the service account cannot bind, the search
+    is rejected, or a user's DN cannot be resolved. Callers must not treat this
+    as "the user has no groups": that conflation is what makes a DC outage look
+    to the user like a permissions problem, sending them to raise a ticket
+    against AD while the real fault is infrastructure.
+
+    A user who genuinely holds no Application Roles still returns [], and an
+    absent mail attribute still returns None — those are real answers.
+    """
+
 
 @runtime_checkable
 class IdentityProvider(Protocol):
@@ -103,6 +121,9 @@ class LDAPIdentityProvider:
 
         Users are distributed across site OUs (JohorBahru, Melbourne, Penang) under
         DC=srxglobal,DC=com — a flat CN={user},DC=... bind would fail for most accounts.
+
+        Returns None when the directory answered and holds no such user.
+        Raises LDAPDirectoryError when the directory could not be consulted.
         """
         try:
             import ldap3  # type: ignore[import]
@@ -116,46 +137,101 @@ class LDAPIdentityProvider:
             )
             conn.search(
                 search_base=self.base_dn,
-                search_filter=f"(sAMAccountName={username})",
+                search_filter=f"(sAMAccountName={self._escape_filter_value(username)})",
                 attributes=["distinguishedName"],
             )
-            if not conn.entries:
-                return None
-            return str(conn.entries[0].distinguishedName.value)  # type: ignore[attr-defined]
-        except Exception:
+        except Exception as exc:
+            log.error("ldap.find_user_dn.failed", username=username, error=str(exc))
+            raise LDAPDirectoryError(
+                f"Directory lookup failed for {username!r}: {exc}"
+            ) from exc
+
+        if not conn.entries:
             return None
+        return str(conn.entries[0].distinguishedName.value)  # type: ignore[attr-defined]
 
     def authenticate(self, username: str, password: str) -> bool:
         """Bind to LDAPS with user credentials. Return True on success.
 
         Resolves the user's full DN via sAMAccountName search first, then binds.
         Required because users sit under site OUs (JohorBahru, Melbourne, Penang).
-        """
-        try:
-            import ldap3  # type: ignore[import]
 
-            user_dn = self._find_user_dn(username)
-            if not user_dn:
-                return False
+        Returns False for a genuine credential failure — wrong password, or no
+        such user. Raises LDAPDirectoryError when the directory itself could not
+        be reached, so an outage is never reported to the user as bad credentials.
+        """
+        import ldap3  # type: ignore[import]
+
+        user_dn = self._find_user_dn(username)  # raises LDAPDirectoryError
+        if not user_dn:
+            return False
+
+        try:
             server = self._make_server(self.server_uri)
             conn = ldap3.Connection(server, user=user_dn, password=password)
-            return conn.bind()
-        except Exception:
-            return False
+            return bool(conn.bind())
+        except Exception as exc:
+            log.error("ldap.authenticate.failed", username=username, error=str(exc))
+            raise LDAPDirectoryError(
+                f"Directory bind failed for {username!r}: {exc}"
+            ) from exc
 
     # OU containing all ECN application role groups (srxglobal-active-directory-groups-structure.md)
     _GROUP_SEARCH_BASE = "OU=Application Roles,OU=Groups,DC=srxglobal,DC=com"
 
+    # AD extended match that walks the full nesting chain (LDAP_MATCHING_RULE_IN_CHAIN).
+    # Required because Business Function groups are nested INTO the Application Role
+    # groups — see the get_groups() docstring.
+    _MATCHING_RULE_IN_CHAIN = "1.2.840.113556.1.4.1941"
+
+    @staticmethod
+    def _escape_filter_value(value: str) -> str:
+        """Escape RFC 4515 filter metacharacters in a DN before interpolation."""
+        for raw, escaped in (
+            ("\\", "\\5c"),   # must be first — later escapes emit backslashes
+            ("(", "\\28"),
+            (")", "\\29"),
+            ("*", "\\2a"),
+            ("\0", "\\00"),
+        ):
+            value = value.replace(raw, escaped)
+        return value
+
     def get_groups(self, username: str) -> list[str]:
-        """Return CN values of AD groups the user belongs to.
+        """Return CN values of the Application Role groups this user holds.
 
-        Searches the user's memberOf attribute and returns only groups that live
-        under OU=Application Roles,OU=Groups — ECN groups are ecn-initiator,
-        ecn-approver, ecn-doc-controller (docs/srxglobal-active-directory-groups-structure.md).
+        Resolves membership through nesting. srxglobal.com nests Business Function
+        groups (grp-eng-manager, grp-quality-manager, …) INTO the Application Role
+        groups (ecn-initiator, ecn-approver), so a quality manager reaches
+        ecn-approver via grp-quality-manager rather than by direct membership.
+
+        Reading the user's own memberOf attribute would return direct membership
+        only — such a user would come back with no roles and be locked out while
+        AD looked correctly configured. Instead this searches the Application Roles
+        OU for groups whose membership chain contains the user, using AD's
+        LDAP_MATCHING_RULE_IN_CHAIN extended match.
+
+        Direct membership still resolves — the chain matches it at depth zero —
+        which is what ecn-doc-controller relies on (a process duty with no
+        Business Function group above it).
+
+        Searching from the Application Roles OU is also what confines the result
+        to Oskar's own roles: grp-* groups live in Business Functions and are
+        never returned as roles.
+
+        A user who genuinely holds no Application Roles returns []. A directory
+        that could not be consulted raises LDAPDirectoryError — the two must stay
+        distinguishable, or an outage reaches the user as a permissions error.
         """
-        try:
-            import ldap3  # type: ignore[import]
+        import ldap3  # type: ignore[import]
 
+        user_dn = self._find_user_dn(username)  # raises LDAPDirectoryError
+        if not user_dn:
+            raise LDAPDirectoryError(
+                f"Cannot resolve a DN for {username!r} — group membership is unknown"
+            )
+
+        try:
             server = self._make_server(self.server_uri)
             conn = ldap3.Connection(
                 server,
@@ -164,22 +240,20 @@ class LDAPIdentityProvider:
                 auto_bind=True,
             )
             conn.search(
-                search_base=self.base_dn,
-                search_filter=f"(sAMAccountName={username})",
-                attributes=["memberOf"],
+                search_base=self._GROUP_SEARCH_BASE,
+                search_filter=(
+                    f"(member:{self._MATCHING_RULE_IN_CHAIN}:="
+                    f"{self._escape_filter_value(user_dn)})"
+                ),
+                attributes=["cn"],
             )
-            if not conn.entries:
-                return []
-            member_of: list[str] = conn.entries[0].memberOf.values  # type: ignore[attr-defined]
-            # Return CN of groups that live in the Application Roles OU only
-            app_role_dn_suffix = self._GROUP_SEARCH_BASE.lower()
-            return [
-                dn.split(",")[0].replace("CN=", "")
-                for dn in member_of
-                if app_role_dn_suffix in dn.lower()
-            ]
-        except Exception:
-            return []
+        except Exception as exc:
+            log.error("ldap.get_groups.failed", username=username, error=str(exc))
+            raise LDAPDirectoryError(
+                f"Group lookup failed for {username!r}: {exc}"
+            ) from exc
+
+        return [str(entry.cn.value) for entry in conn.entries]
 
     def get_email(self, username: str) -> str | None:
         """Return the email address from the LDAP mail attribute for the given username.
@@ -187,8 +261,12 @@ class LDAPIdentityProvider:
         Uses the service account bind (LDAP_BIND_DN / LDAP_BIND_PW) — same credentials
         as get_groups(). Looks up the 'mail' attribute by sAMAccountName.
 
-        Returns None if the user is not found, has no mail attribute set in AD,
-        or on any LDAP error. Callers must handle None — skip notification, don't raise.
+        Returns None when the directory answered and the user has no mail attribute
+        (or does not exist) — callers skip the notification, which is correct.
+
+        Raises LDAPDirectoryError when the directory could not be consulted.
+        Notification callers should catch it and log, so an unreachable DC shows
+        up as a warning rather than silently sending nothing.
         """
         try:
             import ldap3  # type: ignore[import]
@@ -202,21 +280,33 @@ class LDAPIdentityProvider:
             )
             conn.search(
                 search_base=self.base_dn,
-                search_filter=f"(sAMAccountName={username})",
+                search_filter=f"(sAMAccountName={self._escape_filter_value(username)})",
                 attributes=["mail"],
             )
-            if not conn.entries:
-                return None
-            mail = conn.entries[0].mail.value  # type: ignore[attr-defined]
-            return str(mail) if mail else None
-        except Exception:
+        except Exception as exc:
+            log.error("ldap.get_email.failed", username=username, error=str(exc))
+            raise LDAPDirectoryError(
+                f"Email lookup failed for {username!r}: {exc}"
+            ) from exc
+
+        if not conn.entries:
             return None
+        mail = conn.entries[0].mail.value  # type: ignore[attr-defined]
+        return str(mail) if mail else None
 
     def list_application_groups(self) -> list[dict]:
         """Return all groups under OU=Application Roles with their members.
 
         Each entry: { cn, distinguished_name, members: [{username, display_name, email}] }
-        Returns empty list on any LDAP error.
+
+        Members are resolved through nesting — a group's `member` attribute holds
+        the DNs of nested Business Function groups as well as users, so listing
+        only direct user members would show ecn-approver as empty once nesting is
+        in place. Each role's effective membership is instead resolved with the
+        same chain-walk get_groups() uses, which is what makes "who can approve?"
+        answerable from one screen rather than by walking the tree in ADUC.
+
+        Raises LDAPDirectoryError when the directory could not be consulted.
         """
         try:
             import ldap3  # type: ignore[import]
@@ -231,35 +321,39 @@ class LDAPIdentityProvider:
             conn.search(
                 search_base=self._GROUP_SEARCH_BASE,
                 search_filter="(objectClass=group)",
-                attributes=["cn", "distinguishedName", "member"],
+                attributes=["cn", "distinguishedName"],
             )
+            role_groups = [
+                (str(e.cn.value), str(e.distinguishedName.value)) for e in conn.entries
+            ]
+
             groups = []
-            for entry in conn.entries:
-                cn = str(entry.cn.value)
-                dn = str(entry.distinguishedName.value)
-                member_dns: list[str] = list(entry.member.values) if entry.member else []
-
-                members = []
-                for member_dn in member_dns:
-                    conn.search(
-                        search_base=member_dn,
-                        search_filter="(objectClass=user)",
-                        attributes=["sAMAccountName", "displayName", "mail"],
-                        search_scope=ldap3.BASE,
-                    )
-                    if conn.entries:
-                        u = conn.entries[0]
-                        members.append({
-                            "username": str(u.sAMAccountName.value) if u.sAMAccountName else "",
-                            "display_name": str(u.displayName.value) if u.displayName else None,
-                            "email": str(u.mail.value) if u.mail else None,
-                        })
-
+            for cn, dn in role_groups:
+                # Effective members: every user whose membership chain reaches this
+                # group, at any depth. Matches direct members at depth zero.
+                conn.search(
+                    search_base=self.base_dn,
+                    search_filter=(
+                        f"(&(objectClass=user)"
+                        f"(memberOf:{self._MATCHING_RULE_IN_CHAIN}:="
+                        f"{self._escape_filter_value(dn)}))"
+                    ),
+                    attributes=["sAMAccountName", "displayName", "mail"],
+                )
+                members = [
+                    {
+                        "username": str(u.sAMAccountName.value) if u.sAMAccountName else "",
+                        "display_name": str(u.displayName.value) if u.displayName else None,
+                        "email": str(u.mail.value) if u.mail else None,
+                    }
+                    for u in conn.entries
+                ]
                 groups.append({"cn": cn, "distinguished_name": dn, "members": members})
 
             return sorted(groups, key=lambda g: g["cn"])
-        except Exception:
-            return []
+        except Exception as exc:
+            log.error("ldap.list_application_groups.failed", error=str(exc))
+            raise LDAPDirectoryError(f"Group enumeration failed: {exc}") from exc
 
 
 class EntraIDProvider:

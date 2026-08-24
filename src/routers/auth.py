@@ -34,10 +34,20 @@ from src.auth.jwt import (
     decode_refresh_token,
     hash_token,
 )
-from src.auth.providers import get_identity_provider
+from src.auth.providers import LDAPDirectoryError, get_identity_provider
 from src.db import get_session
 
 log = structlog.get_logger(__name__)
+
+# A directory fault means the user's identity or roles are UNKNOWN, not absent.
+# Returning 401/403 would tell the user their credentials or permissions are wrong
+# and send them to raise a ticket against AD, while the actual fault is the DC.
+# The detail is deliberately generic — DNs, server URIs and bind errors go to the
+# log, never to an unauthenticated caller.
+_DIRECTORY_UNAVAILABLE = HTTPException(
+    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+    detail="Directory service unavailable — please try again shortly",
+)
 
 auth_router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -159,7 +169,13 @@ async def login(
     """Authenticate with AD credentials via LDAPS. Issues access + refresh tokens."""
     provider = get_identity_provider()
 
-    if not provider.authenticate(body.username, body.password):
+    try:
+        authenticated = provider.authenticate(body.username, body.password)
+    except LDAPDirectoryError as exc:
+        log.error("auth.login.directory_unavailable", username=body.username, error=str(exc))
+        raise _DIRECTORY_UNAVAILABLE from exc
+
+    if not authenticated:
         log.warning("auth.login.failed", username=body.username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -167,8 +183,15 @@ async def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    groups = provider.get_groups(body.username)
-    email = provider.get_email(body.username)
+    # Credentials are valid, but a token whose groups claim is empty because the
+    # directory was unreachable would silently strip the user's permissions for
+    # the life of the token. Fail the login instead.
+    try:
+        groups = provider.get_groups(body.username)
+        email = provider.get_email(body.username)
+    except LDAPDirectoryError as exc:
+        log.error("auth.login.groups_unavailable", username=body.username, error=str(exc))
+        raise _DIRECTORY_UNAVAILABLE from exc
 
     # Display name: use LDAP cn if available; fall back to username
     display_name = body.username  # providers.py can expose get_display_name() later
@@ -243,8 +266,15 @@ async def refresh(
     await _revoke_refresh_token(session, oskar_refresh)
 
     provider = get_identity_provider()
-    groups = provider.get_groups(username)
-    email = provider.get_email(username)
+    try:
+        groups = provider.get_groups(username)
+        email = provider.get_email(username)
+    except LDAPDirectoryError as exc:
+        # Same reasoning as login: refreshing into an empty groups claim would
+        # silently strip permissions. The old refresh token is already revoked
+        # above, so the user re-authenticates once the directory is back.
+        log.error("auth.refresh.directory_unavailable", username=username, error=str(exc))
+        raise _DIRECTORY_UNAVAILABLE from exc
 
     access_token, _jti, access_exp = create_access_token(
         username=username,

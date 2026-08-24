@@ -193,12 +193,22 @@ async def _fetch_digest_recipients(facility: str) -> list[str | None]:
     usernames = await asyncio.get_event_loop().run_in_executor(None, _query)
 
     try:
-        from src.auth.providers import LDAPIdentityProvider
-        provider = LDAPIdentityProvider()
-        return [provider.get_email(u) for u in usernames]
-    except Exception:
-        fallback = os.getenv("DC_FALLBACK_EMAIL")
-        return [fallback] if fallback else []
+        get_email = _get_email_fn()  # logs and returns None per failed lookup
+        resolved = [get_email(u) for u in usernames]
+    except Exception as exc:
+        log.error("dc_email_lookup_failed", error=str(exc))
+        resolved = []
+
+    if any(resolved):
+        return resolved
+
+    # Nobody resolved — fall back so a DC alert is not lost entirely.
+    fallback = os.getenv("DC_FALLBACK_EMAIL")
+    if fallback:
+        log.warning("dc_email_fallback_used", recipient_count=len(usernames))
+        return [fallback]
+    log.error("dc_email_unresolved", consequence="DC alert not delivered")
+    return []
 
 
 def _system_role_emails(ecn_id: str, role_id: str, get_email: Any) -> list[str | None]:
@@ -233,11 +243,35 @@ def _status_name(status: int) -> str:
 # ---------------------------------------------------------------------------
 
 def _get_email_fn() -> Any:
+    """Return a get_email(username) callable that never raises.
+
+    Notifications degrade rather than abort: one unreachable directory must not
+    stop an entire escalation run for every other recipient. But a lookup that
+    failed is logged at ERROR, not swallowed — an address missing because the DC
+    was down looks identical to an address missing because `mail` is unset, and
+    only the log tells them apart. A silent skip here is why a stalled ECN can go
+    unnoticed: nobody is notified and nothing reports that nobody was notified.
+    """
     try:
-        from src.auth.providers import LDAPIdentityProvider
-        return LDAPIdentityProvider().get_email
-    except Exception:
+        from src.auth.providers import LDAPDirectoryError, LDAPIdentityProvider
+        provider = LDAPIdentityProvider()
+    except Exception as exc:
+        log.error("notification_email_provider_unavailable", error=str(exc))
         return lambda _: None
+
+    def _lookup(username: str) -> str | None:
+        try:
+            return provider.get_email(username)
+        except LDAPDirectoryError as exc:
+            log.error(
+                "notification_email_lookup_failed",
+                username=username,
+                error=str(exc),
+                consequence="recipient skipped — notification not delivered",
+            )
+            return None
+
+    return _lookup
 
 
 async def check_overdue_escalations() -> None:

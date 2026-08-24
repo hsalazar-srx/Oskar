@@ -23,7 +23,7 @@ docker compose --env-file .env -f docker/docker-compose.dev.yml \
     --profile worker --profile mail up -d
 
 # 2. Run the preflight
-python scripts/preflight_check.py                 # 6 checks, no external cost
+python scripts/preflight_check.py                 # 7 checks, no external cost
 python scripts/preflight_check.py --with-digikey  # + live DigiKey (3 API calls)
 python scripts/preflight_check.py --only movex,worker
 ```
@@ -54,7 +54,7 @@ docker exec -e PYTHONPATH=/app \
 > elsewhere, ~246 integration tests **silently skip** rather than fail — a
 > green-looking run that verified far less than it appears to.
 
-Typical runtime: **~20 seconds** for all 6 checks.
+Typical runtime: **~20 seconds** for all 7 checks.
 
 ## Exit codes
 
@@ -78,7 +78,10 @@ close.
 | 4 | Email deliverability | mail is accepted by a real SMTP server with correct From/To | free |
 | 5 | ECN happy path | approved ECN's **ordered** writes reach M3 via the real worker (S-3) | free |
 | 6 | ECN rejection path | a rejected ECN writes **nothing** to M3 | free |
-| 7 | DigiKey (opt-in) | live OAuth2 + response-shape drift | 3 API calls |
+| 7 | AD group resolution | the chain-walk resolves nested Business Function
+      membership against the real DC; Business Function groups never leak into
+      roles; `mail` is populated | free |
+| 8 | DigiKey (opt-in) | live OAuth2 + response-shape drift | 3 API calls |
 
 DigiKey is opt-in because it spends from a **1000 requests/month** budget
 (confirmed 2026-08-19, and independently corroborated by DigiKey's own
