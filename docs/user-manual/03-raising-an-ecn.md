@@ -81,11 +81,15 @@ changes. That happens on the four tabs.
 Each tab has **+ Add** for one row at a time, and **Upload ↑** for a spreadsheet. For more than a
 handful of rows, use the upload — see [Bulk uploads](07-bulk-uploads.md).
 
-### Order matters
+### Order matters — for routing and MPNs
 
-**Add items before routing, BOM changes or MPNs.** Those three all reference an item number, and
-they will be rejected if the item is not already on the ECN. Routing upload in particular does not
-create items.
+**Add items before routing operations or MPNs.** Both reference an item number and will be
+rejected if the item is not already on the ECN. Routing upload in particular does not create
+items.
+
+**BOM changes are the exception — they do not need an item.** A BOM change names its parent
+assembly directly, so an ECN that revises only a structure needs no items at all. See
+[BOM-only ECNs](#bom-only-ecns--changing-a-structure-with-no-item-change) below.
 
 ### Effectivity — the field that catches people out
 
@@ -110,19 +114,41 @@ above:
   you mean.
 - **DELETE** — a component coming out
 
+### BOM-only ECNs — changing a structure with no item change
+
+Revising an assembly's structure without touching any item master record is a normal, frequent
+case. You do **not** need to add the parent as an item to do it.
+
+On the **BOM Changes** tab, click **+ Add BOM change**. Type the parent assembly's item number and
+the change stands on its own. Rows created this way are labelled **BOM only**, which tells
+reviewers no item-master change is implied — previously you had to add a dummy item row, which
+made it look like the item itself was changing when it was not.
+
+The parent must already exist in Movex. Oskar checks this when you save, and will tell you if the
+number is wrong.
+
+**Browsing the current BOM.** In the same panel, enter a parent number and click **Browse** to see
+that assembly's live Movex structure. Click **Change** or **Remove** on any line to author against
+it — the existing values, including the *old from date*, are filled in for you. This is worth
+using for CHANGE and DELETE rows: the old from date has to match the live Movex line exactly, and
+typing it by hand is the easiest thing to get wrong.
+
 ---
 
 ## Step 3 — Submit
 
 When the ECN is complete, click **Submit for Review**.
 
-Oskar checks two things, and only two:
+Oskar checks three things:
 
 - You are the originator — **only you can submit your own ECN**
 - The title is not empty
+- The ECN carries **some content** — at least one item, routing operation, BOM change or MPN
 
-> **Oskar does not check that you have added any items.** An ECN with no content will submit
-> quite happily and waste a reviewer's time. Check the tabs before you submit — nothing else will.
+> **The content check is deliberately loose.** It stops a completely empty ECN reaching a
+> reviewer, but it cannot tell whether what you have added is *right* or complete. A BOM-only ECN
+> with no items passes, because that is a legitimate change. Check the tabs before you submit —
+> nothing else will.
 
 Once submitted the ECN moves to **Engineering Review** and **you can no longer edit it**. That is
 deliberate: reviewers must be able to trust that what they approved is what gets built.
