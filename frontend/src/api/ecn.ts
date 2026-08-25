@@ -275,7 +275,15 @@ export async function bulkCreateRoutingOps(ecnId: string, file: File): Promise<R
 
 export interface BOMChange {
   id: string
-  ecn_item_id: string
+  ecn_id: string
+  /** The parent assembly this BOM change applies to (Stargile BMPRNO).
+   * Authoritative — always present, whether or not the parent also happens
+   * to be an item on this ECN. */
+  parent_item_number: string
+  /** ADR-014 — convenience link only, NULL for a BOM-only change (a BOM
+   * change authored against a parent that is not an item on this ECN).
+   * Never assume this is set: check before using it to address an item. */
+  ecn_item_id: string | null
   change_type: "ADD" | "CHANGE" | "DELETE"
   component_number: string
   quantity: number | null
@@ -334,6 +342,29 @@ export async function createBomChange(
 ): Promise<BOMChange> {
   const { data } = await axiosInstance.post(
     `/api/v1/ecn/${ecnId}/items/${itemId}/bom-changes`,
+    body,
+    { params: actorRole ? { actor_role: actorRole } : undefined },
+  )
+  return data
+}
+
+/** ADR-014 — POST /api/v1/ecn/{ecnId}/bom-changes.
+ *
+ * Creates a BOM change with NO item on the ECN: the parent assembly is named
+ * directly (parent_item_number, Stargile's BMPRNO) rather than resolved
+ * through an ecn_items row. Use for a BOM-only ECN — one that revises a
+ * structure without any item-master change.
+ *
+ * The backend validates that the parent exists in Movex before writing, so a
+ * 422 here usually means the parent item number is wrong.
+ */
+export async function createEcnScopedBomChange(
+  ecnId: string,
+  body: BOMChangeBody & { parent_item_number: string },
+  actorRole?: string,
+): Promise<BOMChange> {
+  const { data } = await axiosInstance.post(
+    `/api/v1/ecn/${ecnId}/bom-changes`,
     body,
     { params: actorRole ? { actor_role: actorRole } : undefined },
   )
