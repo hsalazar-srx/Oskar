@@ -443,7 +443,7 @@ def build_html(page_map: dict[str, int], part: str = "all",
 
   <h2>What Oskar does</h2>
   <p>Oskar is the system Scanfil APAC uses to raise, review and approve <strong>Engineering
-  Change Notices</strong> (ECNs), and to push approved changes into Movex. It replaces
+  Change Notes</strong> (ECNs), and to push approved changes into Movex. It replaces
   <strong>Stargile</strong>.</p>
   <p>Movex remains the single source of truth for items, BOMs and routings. Oskar governs how
   changes get into it.</p>
@@ -655,7 +655,7 @@ def main() -> int:
         writer.add_metadata({
             "/Title": f"Oskar User Manual v{MANUAL_VERSION} ({STATUS})",
             "/Author": "Scanfil APAC",
-            "/Subject": "Engineering Change Notices — user manual",
+            "/Subject": "Engineering Change Notes — user manual",
             "/Keywords": f"Oskar, ECN, Movex, Scanfil APAC, v{MANUAL_VERSION}, {STATUS}",
         })
         with open(OUT_PDF, "wb") as fh:

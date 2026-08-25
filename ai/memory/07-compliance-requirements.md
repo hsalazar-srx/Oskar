@@ -24,7 +24,7 @@
 
 ## 1. Why IQ/OQ/PQ Applies
 
-OSKAR processes Engineering Change Notices that directly affect medical device BOMs and manufacturing processes. Scanfil APAC holds ISO 13485:2016 certification. Any software system that controls or records product changes for medical device clients must be validated per ISO 13485 §7.5.6 (software validation) and §4.1.6 (software used in quality management).
+OSKAR processes Engineering Change Notes that directly affect medical device BOMs and manufacturing processes. Scanfil APAC holds ISO 13485:2016 certification. Any software system that controls or records product changes for medical device clients must be validated per ISO 13485 §7.5.6 (software validation) and §4.1.6 (software used in quality management).
 
 **Consequence of skipping:** Audit finding at next ISO 13485 surveillance. Risk to certification.
 

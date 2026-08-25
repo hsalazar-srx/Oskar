@@ -121,7 +121,7 @@ item**.
 **Controlled document** — a drawing, work instruction, test spec or similar whose revisions must
 be tracked for quality compliance.
 
-**ECN** — Engineering Change Notice. The formal record that a product design, bill of materials,
+**ECN** — Engineering Change Note. The formal record that a product design, bill of materials,
 or manufacturing process has been changed, who approved it, and when it took effect. It is both a
 workflow and an audit record: quality standards require that changes to a released product are
 reviewed and approved before they take effect, by people qualified to judge the impact.
@@ -162,7 +162,7 @@ to set up, how long to run.
 | IPN | Internal Part Number — your own item number |
 | MPN | Manufacturer Part Number |
 | BOM | Bill of Materials |
-| ECN | Engineering Change Notice |
+| ECN | Engineering Change Note |
 | ERP | Enterprise Resource Planning — the business system, here Movex/M3 |
 | EOL | End of Life — a component the manufacturer has discontinued |
 | NRND | Not Recommended for New Designs — still available, but avoid designing it in |

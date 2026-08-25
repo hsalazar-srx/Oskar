@@ -19,7 +19,7 @@ modern, extensible platform that serves as the engineering workflow and intellig
 pillar of the Dream Factory programme.
 
 **Three iterations:**
-- **Iteration 1 (~12 weeks):** ECN module — Engineering Change Notice workflow
+- **Iteration 1 (~12 weeks):** ECN module — Engineering Change Note workflow
 - **Iteration 2 (~8 weeks):** BOM module — Bill of Materials management
 - **Iteration 3 (~8–10 weeks):** Supplier Intelligence module
 

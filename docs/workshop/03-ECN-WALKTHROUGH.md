@@ -1,6 +1,6 @@
 # ECN Lifecycle Walkthrough — Step by Step
 
-This document follows a single Engineering Change Notice from the moment an engineer decides
+This document follows a single Engineering Change Note from the moment an engineer decides
 a component needs to change all the way to its permanent record in Movex. It is written for
 engineers who are new to the platform and want to understand both the **what** and the **why**
 behind each step.
@@ -9,7 +9,7 @@ behind each step.
 
 ## Background: What Is an ECN?
 
-An **Engineering Change Notice (ECN)** is the formal record that a product design, bill of
+An **Engineering Change Note (ECN)** is the formal record that a product design, bill of
 materials, or manufacturing process has been modified. At Scanfil APAC:
 
 - Every change to a released component must be controlled — required by **ISO 13485** (medical),

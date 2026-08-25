@@ -57,7 +57,7 @@ All groups are **Security Group — Universal**.
 
 | Prefix | Application |
 |--------|-------------|
-| `ecn-` | Engineering Change Notice (ECN) |
+| `ecn-` | Engineering Change Note (ECN) |
 | `mes-` | Manufacturing Execution System (MES) |
 | `pur-` | Purchasing |
 
