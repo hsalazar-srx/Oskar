@@ -45,6 +45,9 @@ def _ecn(status: ECNStatus = ECNStatus.DRAFT, **overrides) -> ECNModel:
         originator_username="jsmith",
         revision_number=1,
         item_count=2,
+        # ADR-014 — the submit guard checks content_count (items + routing
+        # ops + BOM changes + MPNs), not item_count.
+        content_count=2,
         title="Replace capacitor C12 with higher-voltage rating",
     )
     defaults.update(overrides)
@@ -155,18 +158,33 @@ class TestGuards:
         with pytest.raises(GuardFailed, match="Only the originator"):
             m.submit()
 
-    def test_submit_allowed_with_no_items(self):
-        ecn = _ecn(ECNStatus.DRAFT, item_count=0)
+    def test_submit_allowed_with_no_items_when_other_content_exists(self):
+        """ADR-014 — a BOM-only ECN has zero items and is legitimate: the
+        guard checks content_count, not item_count. This replaces the old
+        test_submit_allowed_with_no_items, which asserted that an ECN with
+        NOTHING on any tab could be submitted (the docstring-vs-code gap
+        ADR-014 records)."""
+        ecn = _ecn(ECNStatus.DRAFT, item_count=0, content_count=1)
         ctx = _ctx(actor_username="jsmith")
         m = _machine(ecn, ctx)
         m.submit()
         assert m.ecn.status == ECNStatus.ENGINEERING_REVIEW
 
+    def test_submit_blocked_when_ecn_has_no_content_at_all(self):
+        """An ECN with no items, routing operations, BOM changes or MPNs has
+        nothing for a reviewer to review."""
+        ecn = _ecn(ECNStatus.DRAFT, item_count=0, content_count=0)
+        ctx = _ctx(actor_username="jsmith")
+        m = _machine(ecn, ctx)
+        with pytest.raises(GuardFailed, match="at least one item"):
+            m.submit()
+        assert m.ecn.status == ECNStatus.DRAFT
+
     def test_submit_blocked_if_no_title(self):
         ecn2 = ECNModel(
             id="x", ecn_number="ECN-X", facility="L", status=0,
             pre_hold_status=None, originator_username="jsmith",
-            revision_number=1, item_count=2, title=""
+            revision_number=1, item_count=2, content_count=2, title=""
         )
         ctx = _ctx(actor_username="jsmith")
         m = _machine(ecn2, ctx)
