@@ -13,6 +13,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.services.ecn.helpers import (
+    _count_ecn_content,
     _count_ecn_items,
     _get_last_transition_hash,
     _load_ecn_row,
@@ -74,6 +75,9 @@ class ECNWorkflowMixin:
 
         ecn_model = _row_to_ecn_model(row)
         ecn_model.item_count = await _count_ecn_items(self._session, ecn_id)
+        # ADR-014 — the submit guard checks content_count, not item_count:
+        # a BOM-only ECN has zero items and is legitimate.
+        ecn_model.content_count = await _count_ecn_content(self._session, ecn_id)
 
         ctx = TransitionContext(
             actor_username=actor_username,
@@ -563,12 +567,12 @@ class ECNWorkflowMixin:
             log.warning("ecn.bom_snapshot.skipped_no_erp_adapter", ecn_id=ecn_id)
             return
 
+        # ADR-014 — anchored on b.ecn_id/b.parent_item_number directly (no
+        # JOIN through ecn_items), so BOM-only changes are captured too.
         rows = await self._session.execute(
             sa.text(
-                "SELECT DISTINCT i.item_number, i.id AS item_id "
-                "FROM ecn_bom_changes b "
-                "JOIN ecn_items i ON i.id = b.ecn_item_id "
-                "WHERE i.ecn_id = :ecn_id"
+                "SELECT DISTINCT parent_item_number "
+                "FROM ecn_bom_changes WHERE ecn_id = :ecn_id"
             ),
             {"ecn_id": ecn_id},
         )
@@ -585,7 +589,7 @@ class ECNWorkflowMixin:
         from src.services.bom.browse import get_single_level_bom
 
         for parent in parent_items:
-            item_number = parent["item_number"]
+            item_number = parent["parent_item_number"]
             try:
                 bom_head = await get_single_level_bom(
                     erp, item_number, facility, include_expired=True,
@@ -619,12 +623,18 @@ class ECNWorkflowMixin:
                 captured_by="system:submit",
                 ecn_id=ecn_id,
             )
+            # ADR-014's named trap: this stamp-back must be keyed on
+            # ecn_id+parent_item_number, not ecn_item_id — a NULL-item BOM-
+            # only row would otherwise never get a snapshot_id, and
+            # _check_bom_concurrency treats a missing snapshot as "cannot
+            # verify, proceed" — silently disabling the I2-6 concurrency
+            # gate for exactly the new case this ADR unlocks.
             await self._session.execute(
                 sa.text(
                     "UPDATE ecn_bom_changes SET snapshot_id = :snapshot_id "
-                    "WHERE ecn_item_id = :item_id"
+                    "WHERE ecn_id = :ecn_id AND parent_item_number = :item_number"
                 ),
-                {"snapshot_id": snapshot.id, "item_id": str(parent["item_id"])},
+                {"snapshot_id": snapshot.id, "ecn_id": ecn_id, "item_number": item_number},
             )
             log.info(
                 "ecn.bom_snapshot.captured",
@@ -656,13 +666,12 @@ class ECNWorkflowMixin:
         from src.services.bom.compare import CompareOptions, diff_boms
         from src.services.bom.snapshots import content_hash, get_snapshot
 
+        # ADR-014 — anchored on b.ecn_id/b.parent_item_number directly, no
+        # JOIN through ecn_items, so BOM-only changes are covered by the gate.
         change_rows = await self._session.execute(
             sa.text(
-                "SELECT b.component_number, b.operation_number, b.snapshot_id, "
-                "i.item_number, i.id AS item_id "
-                "FROM ecn_bom_changes b "
-                "JOIN ecn_items i ON i.id = b.ecn_item_id "
-                "WHERE i.ecn_id = :ecn_id"
+                "SELECT component_number, operation_number, snapshot_id, parent_item_number "
+                "FROM ecn_bom_changes WHERE ecn_id = :ecn_id"
             ),
             {"ecn_id": ecn_id},
         )
@@ -682,7 +691,7 @@ class ECNWorkflowMixin:
         by_item: dict[str, dict[str, Any]] = {}
         for c in changes:
             entry = by_item.setdefault(
-                c["item_number"], {"item_id": str(c["item_id"]), "snapshot_id": c["snapshot_id"], "keys": set()}
+                c["parent_item_number"], {"snapshot_id": c["snapshot_id"], "keys": set()}
             )
             entry["keys"].add((str(c["component_number"]).strip().upper(), c["operation_number"]))
 
@@ -1015,27 +1024,35 @@ class ECNWorkflowMixin:
         TestIdempotencyOnReplay in tests/integration/test_queue_bom_changes_outbox.py).
         Returns list of newly inserted outbox IDs for post-commit Celery dispatch.
         """
+        # ADR-014 — b.parent_item_number is authoritative (no JOIN through
+        # ecn_items needed to know the parent); facility comes from
+        # ecn_instances via b.ecn_id directly. ecn_item_id is still passed
+        # through to movex_outbox as a convenience link (nullable there
+        # already), via a LEFT JOIN so BOM-only rows (ecn_item_id NULL)
+        # still queue correctly instead of being dropped by an inner JOIN.
         rows = await self._session.execute(
             sa.text(
-                "SELECT b.id, b.ecn_item_id, i.item_number, e.facility, "
+                "SELECT b.id, b.ecn_item_id, b.parent_item_number, e.facility, "
                 "b.change_type, b.component_number, b.quantity, b.unit_of_measure, "
                 "b.operation_number, b.from_date, b.to_date, b.bom_type, "
                 "b.old_operation_number, b.old_from_date, b.old_to_date, "
                 "b.sequence_number, b.circuit_refs_new "
                 "FROM ecn_bom_changes b "
-                "JOIN ecn_items i ON i.id = b.ecn_item_id "
-                "JOIN ecn_instances e ON e.id = i.ecn_id "
-                "WHERE i.ecn_id = :ecn_id"
+                "JOIN ecn_instances e ON e.id = b.ecn_id "
+                "WHERE b.ecn_id = :ecn_id"
             ),
             {"ecn_id": ecn_id},
         )
         inserted: list[str] = []
 
         async def _insert(
-            item_id: str, mi_tx: str, idempotency_key: str, mi_params: dict,
+            item_id: str | None, mi_tx: str, idempotency_key: str, mi_params: dict,
             depends_on: str | None = None,
         ) -> str | None:
             new_id = str(uuid.uuid4())
+            # ADR-014 — item_id is None for a BOM-only change's outbox row;
+            # movex_outbox.ecn_item_id is already nullable, so pass NULL
+            # through rather than the literal string "None".
             result = await self._session.execute(
                 sa.text(
                     "INSERT INTO movex_outbox "
@@ -1044,7 +1061,8 @@ class ECNWorkflowMixin:
                     "ON CONFLICT (idempotency_key) DO NOTHING RETURNING id"
                 ),
                 {
-                    "id": new_id, "ecn_id": ecn_id, "item_id": str(item_id),
+                    "id": new_id, "ecn_id": ecn_id,
+                    "item_id": str(item_id) if item_id is not None else None,
                     "mi_tx": mi_tx, "mi_params": json.dumps(mi_params),
                     "ikey": idempotency_key, "depends_on": depends_on,
                 },

@@ -265,15 +265,20 @@ VALID_BOM_CHANGE_TYPES = {"ADD", "CHANGE", "DELETE"}
 
 @dataclass
 class BOMChangeRequest:
-    """One ecn_bom_changes row authored by an engineer on an ECN item.
+    """One ecn_bom_changes row authored by an engineer.
 
     CHANGE/DELETE require old_from_date (validated in the service layer, not
     here — see ECNBomChangesMixin.create_bom_change) since it identifies
     which live Movex line (MPDMAT key: CONO+FACI+PRNO+STRT+MSEQ+OPNO+FDAT) is
     being superseded/closed at dc_approve (D6).
+
+    ADR-014 — parent_item_number is only supplied on the ECN-scoped path
+    (no item on the ECN, Stargile's BMPRNO model). On the item-scoped path
+    it stays None and is resolved from the item row instead.
     """
     change_type: str                    # 'ADD' | 'CHANGE' | 'DELETE'
     component_number: str
+    parent_item_number: str | None = None
     quantity: float | None = None
     unit_of_measure: str | None = None
     operation_number: int | None = None
@@ -294,7 +299,8 @@ class BOMChangeRequest:
 class BOMChangeResponse:
     """ecn_bom_changes row as returned by the API."""
     id: str
-    ecn_item_id: str
+    ecn_id: str
+    parent_item_number: str
     change_type: str
     component_number: str
     quantity: float | None
@@ -314,6 +320,9 @@ class BOMChangeResponse:
     snapshot_id: str | None
     movex_snapshot_at_review: dict | None
     created_at: datetime
+    # ADR-014 — convenience link only, no semantic load. None when the BOM
+    # change was authored without a parent item on the ECN (BOM-only ECN).
+    ecn_item_id: str | None = None
     # Populated only by an ECN-wide aggregate list, mirroring the routing-op
     # response's item_number/line_number convention — None on the per-item path.
     item_number: str | None = None
