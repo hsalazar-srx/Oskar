@@ -249,18 +249,42 @@ class MovexRestAdapter(ERPAdapter):
         """Fetch item master record via MMS200MI.GetItmBasic (generic MI transaction route).
 
         Returns a dict with keys: STAT, ITNO, ITDS (item name ≤30 chars), ITTY, UNMS.
-        Returns {} when the item is not found (HTTP 404 from movex-rest-api).
+        Returns {} when the item does not exist.
+
+        Uses POST, not GET (fixed 2026-08-25). The generic MI passthrough route
+        rejects GET outright — movex-rest-api answers
+        `{"success":false,"error":"Transaction is not configured for GET. Use
+        POST with a JSON body."}` with HTTP 400, verified live against CONO=300.
+        Every other MI call in this adapter already POSTs; this method was the
+        only one issuing a GET, so it could never have succeeded against the
+        real service.
+
+        It went unnoticed because its only caller until now was parts.py's
+        autofill preview, which swallows ERP errors on the dry_run path
+        (`movex_item = None`) and degrades silently rather than failing. The
+        ADR-014 parent-existence check is the first caller that depends on a
+        real answer, which is what surfaced it.
+
+        Not-found is reported by this route as HTTP 422 with
+        `{"success": false, "error": "Item number X does not exist"}`, not as a
+        404 — also verified live. 404, 422 and a 200-with-success-false are all
+        treated as "not found" and return {}, so callers have one contract.
         """
         try:
-            resp = await self._get(
+            resp = await self._post(
                 "/MMS200MI/GetItmBasic",
-                params={"CONO": self.cono, "ITNO": item_number.strip()},
+                json={"CONO": self.cono, "ITNO": item_number.strip()},
             )
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 404:
+            if exc.response.status_code in (404, 422):
                 return {}
             raise
         payload = resp.json()
+        # A 200 with success=false is possible on this passthrough route; treat
+        # it the same as not-found rather than returning a falsey envelope that
+        # a caller might read as a real item.
+        if payload.get("success") is False:
+            return {}
         return payload.get("data", payload)
 
     async def get_item_facility(self, item_number: str, facility: str) -> dict[str, Any]:
