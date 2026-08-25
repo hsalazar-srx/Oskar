@@ -43,6 +43,7 @@ Design notes worth knowing before editing:
 from __future__ import annotations
 
 import html
+import json
 import os
 import re
 import subprocess
@@ -162,28 +163,44 @@ def namespace_headings(html_text: str, cid: str) -> tuple[str, list[tuple[int, s
     return html_text, entries
 
 
-def css(status_footer: str) -> str:
+def css(status_footer: str, part: str = "all") -> str:
     # A non-approved manual carries its status in the page footer as well as on
     # the cover, so a page photocopied out of context still says what it is.
+
+    # The cover is a full-bleed dark page and the body is not, so the page
+    # margin is set per document rather than overridden with `@page :first`.
+    #
+    # That override is what broke "About this manual": the cover renders as its
+    # own document, so in the body document `:first` matched the front matter
+    # instead, printing it edge to edge with its H1 under the running header.
+    if part == "cover":
+        page_margin = "0"
+        margin_note = "/* Cover bleeds to the paper edge; no running furniture. */"
+    else:
+        page_margin = "20mm 18mm 18mm 18mm"
+        margin_note = (
+            "/* Room for Chromium's header/footer templates, which Playwright\n"
+            "     supplies because Chromium has no @page margin boxes. 20mm top\n"
+            "     clears the header band; at 16mm it collided with each H1. */"
+        )
+
     return f"""
 @page {{
   size: A4;
-  /* Top/bottom margin leaves room for Chromium's header/footer templates,
-     which are supplied by Playwright rather than by @page margin boxes —
-     Chromium does not implement those. 20mm top clears the header band; at
-     16mm the running header collided with each chapter's H1. */
-  margin: 20mm 18mm 18mm 18mm;
+  {margin_note}
+  margin: {page_margin};
 }}
-/* Cover bleeds to the paper edge and suppresses the running furniture; the
-   suppression is done by Playwright's per-page CSS below, not here. */
-@page :first {{ margin: 0; }}
 
 html {{ font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
        font-size: 10.2pt; line-height: 1.55; color: #1e293b; }}
 body {{ margin: 0; }}
 
 /* ── Cover ─────────────────────────────────────────────────────────────── */
-.cover {{ page: cover; height: 297mm; position: relative; page-break-after: always;
+/* 100vh, not a hard 297mm: with zero page margins Chromium's printable box is
+   very slightly under a full A4 sheet, and 297mm overflowed onto a second
+   blank page while shrinking the visible panel. `page: cover` is a Prince
+   named-page reference Chromium ignores; harmless, kept out. */
+.cover {{ height: 100vh; position: relative; overflow: hidden;
          background: #0f172a; color: #fff; }}
 .cover-inner {{ position: absolute; top: 62mm; left: 22mm; right: 22mm; }}
 .cover .mark {{ width: 15mm; height: 15mm; border-radius: 3mm; background: #0066cc;
@@ -204,7 +221,9 @@ body {{ margin: 0; }}
                  padding-top: 4mm; }}
 
 /* ── Front matter ──────────────────────────────────────────────────────── */
-.frontmatter {{ page: frontmatter; page-break-after: always; }}
+/* `page: frontmatter` was a Prince named-page reference; Chromium has no
+   named pages, and there is no matching @page rule any more. */
+.frontmatter {{ page-break-after: always; }}
 .doc-control td:first-child {{ width: 34mm; color: #64748b; }}
 .status-note {{ background: #fffbeb; border-left: 2.5pt solid #f59e0b;
                padding: 3mm 4mm; border-radius: 0 1mm 1mm 0; margin: 0 0 5mm; }}
@@ -383,13 +402,13 @@ def build_html(page_map: dict[str, int], part: str = "all",
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <title>Oskar — User Manual v{MANUAL_VERSION} ({STATUS})</title>
-<style>{css(status_footer)}</style></head><body>
+<style>{css(status_footer, part)}</style></head><body>
 <div class="__probe__" style="position:absolute;top:0;left:0;width:1px;height:265mm;visibility:hidden"></div>
 
 {cover_open}<div class="cover"><div class="cover-inner">
   <div class="mark">O</div>
   <h1>Oskar</h1>
-  <p class="sub">User Manual — Engineering Change Notices</p>
+  <p class="sub">User Manual — Engineering Change Notes</p>
   <div class="badge {approved}">{STATUS}</div>
   <div class="meta">
     <strong>Version {MANUAL_VERSION}</strong> &nbsp;·&nbsp; {built}<br>
@@ -484,7 +503,8 @@ RENDER_JS = r"""
 const { chromium } = require('playwright');
 
 (async () => {
-  const [htmlPath, pdfPath, headerHtml, footerHtml] = process.argv.slice(2);
+  const [htmlPath, pdfPath, headerHtml, footerHtml, marginCss, showFurniture] =
+    process.argv.slice(2);
   const browser = await chromium.launch();
   const page = await browser.newPage();
   await page.goto('file:///' + htmlPath.split('\\').join('/'), { waitUntil: 'load' });
@@ -494,10 +514,13 @@ const { chromium } = require('playwright');
     path: pdfPath,
     format: 'A4',
     printBackground: true,
-    displayHeaderFooter: true,
+    // Playwright's margin option overrides the stylesheet's @page margin, so
+    // it must be supplied per document — the cover needs zero for its
+    // full-bleed background, the body needs room for the running furniture.
+    displayHeaderFooter: showFurniture === 'yes',
     headerTemplate: headerHtml,
     footerTemplate: footerHtml,
-    margin: { top: '20mm', bottom: '18mm', left: '18mm', right: '18mm' },
+    margin: JSON.parse(marginCss),
   };
   await page.pdf(opts);
 
@@ -512,7 +535,9 @@ const { chromium } = require('playwright');
 """
 
 
-def _render(html_path: Path, pdf_path: Path, header: str, footer: str) -> None:
+def _render(html_path: Path, pdf_path: Path, header: str, footer: str,
+            margin: dict[str, str] | None = None,
+            furniture: bool = True) -> None:
     # Written into frontend/, not next to this script: Node resolves
     # `require('playwright')` from the script's own directory upwards, and
     # only frontend/ has node_modules.
@@ -524,7 +549,10 @@ def _render(html_path: Path, pdf_path: Path, header: str, footer: str) -> None:
                str(Path(os.environ.get("LOCALAPPDATA", "")) / "ms-playwright"))}
     try:
         proc = subprocess.run(
-            ["node", str(js), str(html_path), str(pdf_path), header, footer],
+            ["node", str(js), str(html_path), str(pdf_path), header, footer,
+             json.dumps(margin or {"top": "20mm", "bottom": "18mm",
+                                   "left": "18mm", "right": "18mm"}),
+             "yes" if furniture else "no"],
             cwd=FRONTEND, capture_output=True, text=True, env=env, timeout=600,
         )
         if proc.returncode != 0:
@@ -614,7 +642,9 @@ def main() -> int:
         print("Cover…")
         cover_html = HERE / "_cover.html"
         cover_html.write_text(build_html({}, part="cover"), encoding="utf-8")
-        _render(cover_html, cover_pdf, "<span></span>", "<span></span>")
+        _render(cover_html, cover_pdf, "", "",
+                margin={"top": "0", "bottom": "0", "left": "0", "right": "0"},
+                furniture=False)
         cover_html.unlink(missing_ok=True)
 
         print("Merging…")
