@@ -31,6 +31,7 @@ from fastapi.testclient import TestClient
 from src.auth.dependencies import CurrentUser, get_current_user
 from src.db import get_session
 from src.main import app
+from src.routers.ecn_bom import _get_erp_adapter
 from src.services.ecn import ECNService
 from src.services.ecn.models import BOMChangeResponse
 
@@ -69,7 +70,8 @@ def _make_change(
 ) -> BOMChangeResponse:
     return BOMChangeResponse(
         id=id,
-        ecn_item_id=_ITEM_ID,
+        ecn_id=_ECN_ID,
+        parent_item_number="LF100001",
         change_type=change_type,
         component_number=component_number,
         quantity=quantity,
@@ -89,6 +91,7 @@ def _make_change(
         snapshot_id=snapshot_id,
         movex_snapshot_at_review=None,
         created_at=_NOW,
+        ecn_item_id=_ITEM_ID,
     )
 
 
@@ -96,10 +99,19 @@ def _make_change(
 # Fixtures
 # ---------------------------------------------------------------------------
 
+class _StubERPAdapter:
+    """Every parent resolves in Movex — the happy path for the ADR-014
+    ECN-scoped route's existence check."""
+
+    async def get_item(self, item_number: str) -> dict:
+        return {"itno": item_number}
+
+
 @pytest.fixture(autouse=True)
 def _override_deps():
     app.dependency_overrides[get_current_user] = lambda: _ENGINEER
     app.dependency_overrides[get_session] = lambda: None
+    app.dependency_overrides[_get_erp_adapter] = lambda: _StubERPAdapter()
     yield
     app.dependency_overrides.clear()
 
@@ -330,5 +342,100 @@ class TestDeleteBomChange:
         ):
             resp = client.delete(
                 f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/bom-changes/{_CHANGE_ID}"
+            )
+        assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# POST /{ecn_id}/bom-changes — ECN-scoped create, no item required (ADR-014)
+# ---------------------------------------------------------------------------
+
+class TestCreateEcnScopedBomChange:
+    """The BOM-only path. Stargile's ZECNBOMS row is self-contained (its own
+    BMPRNO parent, no FK to the items table) and the check requiring the
+    parent to be an ECN item was written there and deliberately commented
+    out — so Oskar drops it too, and adopts the rule Stargile did enforce:
+    the parent must exist in Movex."""
+
+    def test_create_without_item_returns_201(self, client):
+        change = _make_change(change_type="ADD")
+        change.ecn_item_id = None
+        with patch.object(
+            ECNService, "create_bom_change", new=AsyncMock(return_value=change)
+        ) as mock:
+            resp = client.post(
+                f"/api/v1/ecn/{_ECN_ID}/bom-changes",
+                json={
+                    "change_type": "ADD",
+                    "component_number": "LF200010",
+                    "parent_item_number": "LF100001",
+                    "quantity": 4.0,
+                    "operation_number": 10,
+                    "from_date": 20260901,
+                },
+            )
+        assert resp.status_code == 201
+        assert resp.json()["ecn_item_id"] is None
+        # item_id must be passed as None so the service takes the BOM-only path
+        assert mock.await_args.args[1] is None
+
+    def test_parent_item_number_is_required(self, client):
+        resp = client.post(
+            f"/api/v1/ecn/{_ECN_ID}/bom-changes",
+            json={"change_type": "ADD", "component_number": "LF200010"},
+        )
+        assert resp.status_code == 422
+
+    def test_parent_missing_from_movex_returns_422(self, client):
+        """A nonexistent parent makes get_item return {} — the MI route reports
+        not-found as HTTP 422 / success:false, which the adapter absorbs, so an
+        empty dict is the signal rather than a raised 404. Verified live against
+        CONO=300 (2026-08-25)."""
+
+        class _MissingParentERP:
+            async def get_item(self, item_number: str) -> dict:
+                return {}
+
+        app.dependency_overrides[_get_erp_adapter] = lambda: _MissingParentERP()
+        resp = client.post(
+            f"/api/v1/ecn/{_ECN_ID}/bom-changes",
+            json={
+                "change_type": "ADD",
+                "component_number": "LF200010",
+                "parent_item_number": "NOSUCHITEM",
+            },
+        )
+        assert resp.status_code == 422
+        assert "does not exist in Movex" in resp.json()["detail"]
+
+    def test_erp_circuit_breaker_returns_503(self, client):
+        class _BreakerOpenERP:
+            async def get_item(self, item_number: str):
+                raise RuntimeError("circuit breaker is open")
+
+        app.dependency_overrides[_get_erp_adapter] = lambda: _BreakerOpenERP()
+        resp = client.post(
+            f"/api/v1/ecn/{_ECN_ID}/bom-changes",
+            json={
+                "change_type": "ADD",
+                "component_number": "LF200010",
+                "parent_item_number": "LF100001",
+            },
+        )
+        assert resp.status_code == 503
+
+    def test_ecn_not_found_returns_404(self, client):
+        from src.services.ecn.models import ECNNotFound
+        with patch.object(
+            ECNService, "create_bom_change",
+            new=AsyncMock(side_effect=ECNNotFound(_ECN_ID)),
+        ):
+            resp = client.post(
+                f"/api/v1/ecn/{_ECN_ID}/bom-changes",
+                json={
+                    "change_type": "ADD",
+                    "component_number": "LF200010",
+                    "parent_item_number": "LF100001",
+                },
             )
         assert resp.status_code == 404

@@ -40,10 +40,13 @@ from __future__ import annotations
 
 from typing import Annotated
 
+import httpx
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, status
+import structlog
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.adapters.erp.movex import MovexRestAdapter
 from src.auth.dependencies import CurrentUser, get_current_user
 from src.db import get_session
 from src.routers.bulk_export import BulkExportSpec, ExportColumn, build_xlsx
@@ -53,6 +56,7 @@ from src.routers.ecn_schemas import (
     BOMChangeOut,
     BOMChangePatchBody,
     BulkBomChangeRow,
+    ECNScopedBOMChangeBody,
     bom_change_out,
 )
 from src.services.ecn import (
@@ -63,7 +67,68 @@ from src.services.ecn import (
 )
 from src.workflow.machine import ECNStatus
 
+log = structlog.get_logger(__name__)
+
 _XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _get_erp_adapter(request: Request) -> MovexRestAdapter:
+    return request.app.state.erp_adapter
+
+
+async def _require_parents_exist_in_movex(
+    erp: MovexRestAdapter, parent_item_numbers: set[str]
+) -> None:
+    """Validate that every named parent assembly exists in Movex (ADR-014).
+
+    This replaces the ECN-membership rule Oskar invented with the rule
+    Stargile actually enforced: RequestECNBoMDetailValidationHelper.java
+    :342-352 checks the parent against MITMAS + MPDHED. v1 checks MITMAS
+    only (via erp.get_item) — the MPDHED half is recorded as an open
+    question in ADR-014's "Still to confirm" §1, not settled parity.
+
+    Lives in the router, not the service, because the ERP adapter is
+    injected per-route; routers/parts.py:407-440 is the existing precedent
+    for this error-handling shape (circuit breaker -> 503, 404 -> user-
+    facing message, connect/timeout -> 503).
+
+    Callers must de-duplicate first: a 200-row upload typically names only
+    1-10 distinct parents, so this is a handful of calls, not 200.
+    """
+    for parent in sorted(parent_item_numbers):
+        try:
+            # get_item returns {} for a nonexistent item — the MI route reports
+            # not-found as 422/success-false rather than raising, so an empty
+            # result is the "does not exist" signal, not an exception.
+            item = await erp.get_item(parent)
+            if not item:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        f"Parent item {parent!r} does not exist in Movex. A BOM change "
+                        "must name a parent assembly that already exists in the ERP."
+                    ),
+                )
+        except RuntimeError as exc:
+            if "circuit breaker" not in str(exc):
+                raise
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="ERP system unavailable (circuit breaker open). Try again shortly.",
+            )
+        except httpx.HTTPStatusError as exc:
+            # get_item already absorbs the not-found statuses (404/422) and
+            # returns {}, handled above. Anything still raising here is a
+            # genuine ERP fault, not a missing item.
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"ERP returned unexpected status {exc.response.status_code}.",
+            )
+        except (httpx.ConnectError, httpx.TimeoutException):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="ERP system unreachable. Try again shortly.",
+            )
 
 _BOM_CHANGES_EXPORT_SPEC = BulkExportSpec(
     sheet_name="BOM Changes",
@@ -187,6 +252,59 @@ _BOM_CHANGE_UPLOAD_SPEC = BulkUploadSpec(
 
 
 @ecn_bom_router.post(
+    "/{ecn_id}/bom-changes",
+    response_model=BOMChangeOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Add a BOM change with no item on the ECN (BOM-only ECN, ADR-014)",
+)
+async def create_ecn_scoped_bom_change(
+    ecn_id: str,
+    body: ECNScopedBOMChangeBody,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    erp: Annotated[MovexRestAdapter, Depends(_get_erp_adapter)],
+    actor_role: str | None = None,
+) -> BOMChangeOut:
+    """Create a BOM change that stands alone — no ecn_items row required.
+
+    ADR-014: Stargile's ZECNBOMS rows carry their own parent (BMPRNO) and
+    never referenced the items table; the check requiring the parent to be
+    on the ECN was written and then deliberately commented out there. Oskar
+    adopts the rule Stargile actually kept instead: the parent must exist in
+    Movex, validated here before the row is written.
+    """
+    await _require_parents_exist_in_movex(erp, {body.parent_item_number})
+
+    svc = ECNService(session)
+    req = BOMChangeRequest(
+        change_type=body.change_type,
+        component_number=body.component_number,
+        parent_item_number=body.parent_item_number,
+        quantity=body.quantity,
+        unit_of_measure=body.unit_of_measure,
+        operation_number=body.operation_number,
+        sequence_number=body.sequence_number,
+        from_date=body.from_date,
+        to_date=body.to_date,
+        bom_type=body.bom_type,
+        notes=body.notes,
+        old_quantity=body.old_quantity,
+        old_operation_number=body.old_operation_number,
+        old_from_date=body.old_from_date,
+        old_to_date=body.old_to_date,
+        circuit_refs_old=body.circuit_refs_old,
+        circuit_refs_new=body.circuit_refs_new,
+    )
+    try:
+        change = await svc.create_bom_change(ecn_id, None, req, actor_role=actor_role)
+    except ECNNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ECN not found")
+    except ECNValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    return bom_change_out(change)
+
+
+@ecn_bom_router.post(
     "/{ecn_id}/items/{item_id}/bom-changes",
     response_model=BOMChangeOut,
     status_code=status.HTTP_201_CREATED,
@@ -256,6 +374,7 @@ async def bulk_create_bom_changes(
     file: UploadFile,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    erp: Annotated[MovexRestAdapter, Depends(_get_erp_adapter)],
     actor_role: str | None = None,
 ) -> list[BOMChangeOut]:
     rows = await parse_bulk_upload(file, _BOM_CHANGE_UPLOAD_SPEC)
@@ -296,6 +415,22 @@ async def bulk_create_bom_changes(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="; ".join(errors),
         )
+
+    # -- Movex-existence check for parents not already on this ECN (ADR-014)
+    # A parent that IS on the ECN was already validated when the item was
+    # added, so only the off-ECN ones need an ERP round-trip. De-duplicated
+    # by distinct parent first: a 200-row upload names 1-10 distinct
+    # parents, so this is a handful of calls rather than one per row.
+    on_ecn_rows = await session.execute(
+        sa.text("SELECT item_number FROM ecn_items WHERE ecn_id = :ecn_id"),
+        {"ecn_id": ecn_id},
+    )
+    on_ecn = {r[0] for r in on_ecn_rows}
+    off_ecn_parents = {
+        r["item_number"] for r in validated_rows if r["item_number"] not in on_ecn
+    }
+    if off_ecn_parents:
+        await _require_parents_exist_in_movex(erp, off_ecn_parents)
 
     # -- Service call (atomic insert) -------------------------------------
     svc = ECNService(session)

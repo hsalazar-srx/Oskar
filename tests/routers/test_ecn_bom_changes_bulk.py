@@ -31,6 +31,7 @@ from fastapi.testclient import TestClient
 from src.auth.dependencies import CurrentUser, get_current_user
 from src.db import get_session
 from src.main import app
+from src.routers.ecn_bom import _get_erp_adapter
 from src.services.ecn import ECNService
 from src.services.ecn.models import BOMChangeResponse, ECNNotFound, ECNValidationError
 
@@ -58,7 +59,8 @@ def _make_change(
 ) -> BOMChangeResponse:
     return BOMChangeResponse(
         id=f"bc-{item_id}-{component_number}",
-        ecn_item_id=item_id,
+        ecn_id=_ECN_ID,
+        parent_item_number=item_number or "LF100001",
         change_type=change_type,
         component_number=component_number,
         quantity=quantity,
@@ -78,6 +80,7 @@ def _make_change(
         snapshot_id=None,
         movex_snapshot_at_review=None,
         created_at=_NOW,
+        ecn_item_id=item_id,
         item_number=item_number,
     )
 
@@ -100,10 +103,33 @@ def _make_csv(rows: list[dict]) -> bytes:
     return "\n".join(lines).encode("utf-8")
 
 
+class _NoItemsSession:
+    """Minimal session stub for the ADR-014 on-ECN-parent lookup.
+
+    The bulk route now runs one `SELECT item_number FROM ecn_items` to work
+    out which parents are already on the ECN (those skip the Movex check).
+    ECNService is mocked per test, so this is the only real query the route
+    makes. Returning no rows means every parent is treated as off-ECN, which
+    is what exercises the new Movex-existence path.
+    """
+
+    async def execute(self, *_args, **_kwargs):
+        return []
+
+
+class _StubERPAdapter:
+    """Every parent resolves — the happy path. Tests that need a missing
+    parent patch this per-test."""
+
+    async def get_item(self, item_number: str) -> dict:
+        return {"itno": item_number}
+
+
 @pytest.fixture()
 def client():
     app.dependency_overrides[get_current_user] = lambda: _ENGINEER
-    app.dependency_overrides[get_session] = lambda: None
+    app.dependency_overrides[get_session] = lambda: _NoItemsSession()
+    app.dependency_overrides[_get_erp_adapter] = lambda: _StubERPAdapter()
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -352,19 +378,46 @@ class TestBulkBomChangeStateGuards:
             )
         assert resp.status_code == 409
 
-    def test_unresolved_item_number_returns_422(self, client):
-        """item_number not already on this ECN — bulk BOM-change upload does
-        not create items, same as bulk routing."""
+    def test_parent_not_on_ecn_is_accepted_as_bom_only_change(self, client):
+        """ADR-014 — a parent that is NOT an item on this ECN is no longer an
+        error. Stargile's ZECNBOMS rows carry their own BMPRNO and never
+        referenced the items table; the check requiring the parent to be on
+        the ECN was written there and deliberately commented out. The row is
+        created standing alone (ecn_item_id NULL).
+
+        This replaces the previous test_unresolved_item_number_returns_422,
+        which asserted the constraint this ADR removes.
+        """
+        created = [_make_change("item-x", "LF200010", item_number="LFAM050001")]
         with patch.object(
-            ECNService, "bulk_create_bom_changes",
-            new=AsyncMock(side_effect=ECNValidationError(
-                "Row 1: item_number 'LFAM050001' was not found on this ECN — add it via item upload first"
-            )),
+            ECNService, "bulk_create_bom_changes", new=AsyncMock(return_value=created)
         ):
             resp = client.post(
                 f"/api/v1/ecn/{_ECN_ID}/bom-changes/bulk",
                 files={"file": ("bom.xlsx", self._one_row_xlsx(),
                                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
             )
+        assert resp.status_code == 201
+        assert resp.json()[0]["parent_item_number"] == "LFAM050001"
+
+    def test_parent_missing_from_movex_returns_422(self, client):
+        """ADR-014 — the rule Stargile actually enforced
+        (RequestECNBoMDetailValidationHelper.java:342-352): the parent must
+        exist in Movex. Off-ECN parents get an ERP existence check.
+
+        get_item returns {} for a nonexistent item: the MI route reports
+        not-found as HTTP 422 / success:false, absorbed by the adapter.
+        Verified live against CONO=300 (2026-08-25)."""
+
+        class _MissingParentERP:
+            async def get_item(self, item_number: str) -> dict:
+                return {}
+
+        app.dependency_overrides[_get_erp_adapter] = lambda: _MissingParentERP()
+        resp = client.post(
+            f"/api/v1/ecn/{_ECN_ID}/bom-changes/bulk",
+            files={"file": ("bom.xlsx", self._one_row_xlsx(),
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
         assert resp.status_code == 422
-        assert "item_number" in resp.json()["detail"]
+        assert "does not exist in Movex" in resp.json()["detail"]
