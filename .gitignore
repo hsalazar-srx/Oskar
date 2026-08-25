@@ -54,3 +54,11 @@ htmlcov/
 
 # Session state — regenerated each session, not committed
 oskar-state.md
+
+# User manual build intermediates (the PDF itself is committed — see
+# docs/user-manual/build-pdf.py; it is the deliverable staff receive)
+docs/user-manual/oskar-user-manual.html
+docs/user-manual/_*.pdf
+docs/user-manual/_*.html
+docs/user-manual/_*.json
+frontend/_render-manual.cjs
