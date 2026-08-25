@@ -1,6 +1,6 @@
 # Oskar — User Manual
 
-Oskar is the system Scanfil APAC uses to raise, review and approve **Engineering Change Notices**
+Oskar is the system Scanfil APAC uses to raise, review and approve **Engineering Change Notes**
 (ECNs), and to push approved changes into Movex.
 
 It replaces **Stargile**. If you used Stargile, start with

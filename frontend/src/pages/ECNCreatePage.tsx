@@ -275,7 +275,7 @@ export default function ECNCreatePage() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4"/>
             </svg>
           </div>
-          <span className="text-sm font-semibold text-[#0f172a]">New Engineering Change Notice</span>
+          <span className="text-sm font-semibold text-[#0f172a]">New Engineering Change Note</span>
         </div>
       </header>
 

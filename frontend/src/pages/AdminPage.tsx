@@ -89,7 +89,7 @@ function groupPrefix(cn: string): string {
 }
 
 const APP_PREFIX_LABEL: Record<string, string> = {
-  ECN: "Engineering Change Notice",
+  ECN: "Engineering Change Note",
   MES: "Manufacturing Execution System",
   PUR: "Purchasing",
 }

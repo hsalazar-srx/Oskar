@@ -79,7 +79,7 @@ Always express OSKAR value in QSDC terms, not technology terms:
 
 | System | Technology | Function | Status |
 |--------|-----------|---------|--------|
-| Stargile | Java | ECN (Engineering Change Notice) management | Mandatory decommission — target ~June/July 2026 | Purchase Planners Workbench
+| Stargile | Java | ECN (Engineering Change Note) management | Mandatory decommission — target ~June/July 2026 | Purchase Planners Workbench
 | PLMServer | PHP | BOM management + Supplier Intelligence | Mandatory decommission — same timeline | 
 
 Both systems are in active use. OSKAR must provide functional equivalence before cutover. No hard date mandated by management as of 2026-04-07 — Karen confirmed "the quicker the better."
