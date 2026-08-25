@@ -26,6 +26,28 @@ _ACTOR = "hsalazar"
 _FACILITY = "L"
 
 
+@pytest.fixture(autouse=True)
+def _no_broker_dispatch(monkeypatch):
+    """Capture retry_movex_outbox_entry's re-dispatch instead of performing it.
+
+    Same rationale as tests/tasks/conftest.py: celery_app builds broker_url
+    from DATABASE_URL at import time, and the root conftest sets that to a
+    placeholder DSN (user "test" on port 5432) purely so src.db can be
+    imported. apply_async therefore tries to reach a broker that does not
+    exist and raises OperationalError, failing these tests for a reason
+    unrelated to what they assert — they are about the DB state transition.
+    Real broker round-trips are covered by test_celery_worker_smoke.py.
+    """
+    from src.tasks import movex_outbox as _mo
+
+    dispatched: list = []
+    monkeypatch.setattr(
+        _mo.process_outbox_entry, "apply_async",
+        lambda *a, **kw: dispatched.append(kw.get("args") or (a[0] if a else None)),
+    )
+    return dispatched
+
+
 async def _make_ecn(db_session: AsyncSession, **overrides) -> str:
     svc = ECNService(db_session)
     req = ECNCreateRequest(

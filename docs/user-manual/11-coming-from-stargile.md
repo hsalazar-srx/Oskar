@@ -62,6 +62,11 @@ resolve it before anything is written.
 
 ## Also fixed
 
+- **BOM changes don't need an item on the ECN.** As in Stargile, a BOM change names its parent
+  assembly directly, so an ECN that revises only a structure needs no items at all. An earlier
+  version of Oskar required a parent item row, which meant adding a dummy item that made it look
+  like the item master was changing — this now matches how Stargile always worked. Oskar does
+  enforce the rule Stargile actually had: the parent must exist in Movex.
 - **BOM upload no longer accepts duplicate sequence numbers.** Stargile took them and corrupted
   the data; Oskar rejects the file and tells you which row.
 - **No currency field on MPN uploads.** It was mandatory in Stargile and never used. It's gone.

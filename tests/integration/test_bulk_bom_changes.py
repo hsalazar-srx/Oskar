@@ -119,14 +119,56 @@ class TestBulkCreateBomChanges:
         with pytest.raises(ECNValidationError, match="old_from_date"):
             await svc.bulk_create_bom_changes(ecn_id, rows)
 
-    async def test_unresolved_item_number_raises(self, db_session: AsyncSession):
-        """item_number not already on this ECN — bulk BOM-change upload does
-        not create items, same as bulk routing."""
+    async def test_parent_not_on_ecn_creates_standalone_row(self, db_session: AsyncSession):
+        """ADR-014 — a parent that is not an item on this ECN is no longer an
+        error. The row is created standing alone: parent_item_number set,
+        ecn_item_id NULL, mirroring Stargile's self-contained ZECNBOMS row.
+
+        Replaces test_unresolved_item_number_raises, which asserted the
+        constraint this ADR removes. (Movex-existence of the parent is
+        checked at the router, which is where the ERP adapter is injected.)
+        """
+        import sqlalchemy as sa
+
         svc = ECNService(db_session)
         ecn_id, _item1_id, _item2_id = await _make_ecn_with_items(db_session)
         rows = [{"item_number": "LFNOTONECN", "component_number": "LF200010", "change_type": "ADD"}]
-        with pytest.raises(ECNValidationError, match="item_number"):
-            await svc.bulk_create_bom_changes(ecn_id, rows)
+
+        created = await svc.bulk_create_bom_changes(ecn_id, rows)
+
+        assert len(created) == 1
+        assert created[0].parent_item_number == "LFNOTONECN"
+        assert created[0].ecn_item_id is None
+
+        row = await db_session.execute(
+            sa.text(
+                "SELECT ecn_id, parent_item_number, ecn_item_id "
+                "FROM ecn_bom_changes WHERE id = :id"
+            ),
+            {"id": created[0].id},
+        )
+        r = row.first()
+        assert str(r[0]) == ecn_id
+        assert r[1] == "LFNOTONECN"
+        assert r[2] is None
+
+    async def test_mixed_on_and_off_ecn_parents_in_one_upload(
+        self, db_session: AsyncSession
+    ):
+        """A single upload may name both a parent that IS on the ECN (keeps
+        the convenience ecn_item_id link) and one that is not (stands alone)."""
+        svc = ECNService(db_session)
+        ecn_id, item1_id, _item2_id = await _make_ecn_with_items(db_session)
+        rows = [
+            {"item_number": "LFBULK0001", "component_number": "LF200010", "change_type": "ADD"},
+            {"item_number": "LFNOTONECN", "component_number": "LF200020", "change_type": "ADD"},
+        ]
+
+        created = await svc.bulk_create_bom_changes(ecn_id, rows)
+
+        by_parent = {c.parent_item_number: c for c in created}
+        assert str(by_parent["LFBULK0001"].ecn_item_id) == str(item1_id)
+        assert by_parent["LFNOTONECN"].ecn_item_id is None
 
     async def test_unknown_ecn_raises(self, db_session: AsyncSession):
         svc = ECNService(db_session)

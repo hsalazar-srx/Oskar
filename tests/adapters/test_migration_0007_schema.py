@@ -2,9 +2,20 @@
 TDD schema tests for migration 0007 (ai_suggestions, agent_actions,
 ecn_mpns extended columns, pg_notify trigger).
 
-These tests run against a live PostgreSQL test database (DATABASE_URL env var).
-They verify that after alembic upgrade head the schema has the expected structure.
-Skip when DATABASE_URL is absent (e.g. pure unit test runs without Docker).
+These tests run against the live PostgreSQL test database and verify that
+after `alembic upgrade head` the schema has the expected structure.
+
+Connection target: TEST_DATABASE_URL if set, otherwise the same default the
+integration suite uses (tests/integration/conftest.py) — the real
+oskar_test database. It deliberately does NOT use DATABASE_URL: the root
+conftest sets that to a placeholder ("postgresql+asyncpg://test:test@
+localhost/test") purely so src.db can be imported, and that host/user does
+not exist. Keying off DATABASE_URL made these tests attempt a doomed
+connection and fail with a password-authentication error instead of either
+running or skipping.
+
+Skips (rather than fails) when the test database is unreachable, e.g. a
+pure unit-test run with no Docker/Postgres up.
 """
 from __future__ import annotations
 
@@ -14,21 +25,26 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy import create_engine, inspect, text
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-_SKIP = pytest.mark.skipif(
-    not DATABASE_URL,
-    reason="DATABASE_URL not set — database schema tests require a live PostgreSQL instance",
+_TEST_DB_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql+asyncpg://oskar:oskar_dev@localhost:5433/oskar_test",
 )
-pytestmark = _SKIP
 
 
 @pytest.fixture(scope="module")
 def engine():
-    if not DATABASE_URL:
-        pytest.skip("DATABASE_URL not set")
-    sync_url = DATABASE_URL.replace("+asyncpg", "").replace("postgresql+asyncpg", "postgresql")
+    sync_url = (
+        _TEST_DB_URL.replace("+asyncpg", "")
+        .replace("postgresql+asyncpg", "postgresql")
+        .split("?")[0]
+    )
     eng = create_engine(sync_url)
+    try:
+        with eng.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as exc:  # noqa: BLE001 — any connection failure means "no DB here"
+        eng.dispose()
+        pytest.skip(f"test database unreachable ({exc.__class__.__name__}) — skipping schema tests")
     yield eng
     eng.dispose()
 

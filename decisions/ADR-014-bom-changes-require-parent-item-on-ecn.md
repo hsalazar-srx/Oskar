@@ -1,6 +1,7 @@
 # ADR-014 — BOM Changes Require a Parent Item on the ECN (Divergence from Stargile)
 
-**Status:** Accepted — Option A
+**Status:** Accepted — Option A — **implemented and live-verified 2026-08-25** (see Implementation
+record)
 **Date:** 2026-08-24
 **Owner:** Lead Engineer
 **Raised by:** End user, during user-manual review
@@ -225,9 +226,97 @@ time, replacing the ECN-membership rule Oskar invented.
 1. **Does the ERP-existence check belong at authoring time?** Yes per this decision, but the
    `MITMAS`-only vs `MITMAS`+`MPDHED` question is a judgement call, not verified parity — Stargile
    checked both, inside its new-BOM branch. `MITMAS` only is proposed for v1.
+   → **Implemented as `MITMAS` only** (via `erp.get_item`). The `MPDHED` half remains an open
+   question, deliberately not adopted; revisit if a parent with no product-structure header turns
+   out to be reachable in practice.
 2. **`fk_outbox_item`'s `ON DELETE` clause** — confirm before writing the migration.
+   → **No change needed.** `movex_outbox.ecn_item_id` was already nullable, so the outbox required
+   no migration at all; `src/tasks/movex_outbox.py` is untouched, as predicted.
 3. **How many existing test fixtures submit a contentless ECN** — determines the submit guard's
    real cost.
+   → **Two.** `tests/workflow/test_machine.py::test_submit_allowed_with_no_items` (which asserted
+   the too-loose behaviour outright and was replaced) and
+   `test_snapshot_at_submit.py::test_no_bom_changes_captures_nothing` (whose own docstring
+   describes a routing-only ECN but which never added any content — now adds one item, matching
+   its stated scenario). Materially cheaper than the ½-1 day estimated.
+
+---
+
+## Implementation record (2026-08-25)
+
+Landed in four sequenced steps, matching this ADR's own guidance.
+
+**1. Migration `0032_bom_changes_parent_item_number.py`.** Adds `ecn_id` (NOT NULL, `ON DELETE
+CASCADE`) and `parent_item_number` (NOT NULL), both backfilled from the existing `ecn_item_id`
+FK before the NOT NULL is applied; `ecn_item_id` becomes nullable and its FK moves from
+`ON DELETE RESTRICT` to `ON DELETE SET NULL`. The auto-generated constraint name
+(`ecn_bom_changes_ecn_item_id_fkey`) was **verified against the live database** via
+`pg_constraint`, not assumed from the naming convention. Upgrade → downgrade → re-upgrade
+round-trips cleanly; backfill verified with zero mismatches.
+
+**2. Read-path refactor (pure, no behaviour change).** Every query that reached an ECN by joining
+`ecn_bom_changes → ecn_items` now reads `b.ecn_id` / `b.parent_item_number` directly:
+`bom_changes.py` (`_SELECT_COLUMNS`, `_get_bom_change`, `list_all_bom_changes`, both INSERTs) and
+`workflow.py` (`_capture_bom_snapshots_at_submit`, `_check_bom_concurrency`,
+`_queue_bom_changes_outbox`). **The named trap was handled**: the snapshot stamp-back is now keyed
+on `(ecn_id, parent_item_number)` — there is a dedicated regression test asserting a NULL-item row
+receives a `snapshot_id`, because the failure mode is a silently disabled concurrency gate rather
+than an error.
+
+**3. BOM-only ECNs + the Movex-existence check.** `create_bom_change` accepts `item_id=None`;
+a new `POST /api/v1/ecn/{ecn_id}/bom-changes` route carries `parent_item_number`; bulk upload no
+longer rejects an off-ECN parent. The ERP check lives in the router per this ADR
+(`routers/parts.py:407-440`'s error-handling shape), and de-duplicates by distinct parent —
+parents already on the ECN skip the round-trip entirely, since they were validated when added.
+
+**4. Submit guard.** `_guard_submit` now checks a new `content_count` (items + routing operations
++ BOM changes + MPNs, via `_count_ecn_content`) rather than the `≥1 item` its docstring had always
+claimed and never enforced. Landed after step 3, per the sequencing note.
+
+**Test results:** 1130 non-integration tests pass. Integration files run isolated (see the
+pre-existing I2-18 note — DB-backed files must run one at a time on Windows/Python 3.14):
+BOM-only 6/6, migration 8/8, core BOM changes 18/18, snapshot-at-submit 7/7, concurrency gate 5/5,
+workflow combinations 12/12, outbox/tasks 39/39.
+
+**5. Frontend (2026-08-25).** `+ Add BOM change` on the ECN-wide BOM Changes tab opens
+`AddBomChangeDrawer.tsx`, which names the parent directly — no item needed. It embeds a BOM
+browser (the "browse by item number" half of backlog item **I2-15**): type a parent, see its live
+Movex structure, click a line to author a CHANGE/DELETE against it with the old values prefilled
+from the real line. That prefill matters because `old_from_date` must identify the live MPDMAT
+line, and hand-typing it is the most error-prone part of the form. The search-as-you-type item
+finder remains the open half of I2-15 — it needs a backend route first (the adapter has
+`search_items`; nothing exposes it).
+
+`BOMChangeOut.ecn_item_id` is now nullable, which made `BOMChangesTabContent.tsx` pass `null`
+into an item-id parameter; that row's "Manage" action is now hidden for BOM-only rows, and rows
+carry a **BOM only** badge so reviewers can see no item-master change is implied.
+
+**6. Live verification against CONO=300 (2026-08-25).** A BOM-only ECN was created, walked
+submit → engineering → EM/QM/SC → `dc_approve`, and its queued `PDS002MI.AddComponent` dispatched
+to real M3. The line landed correctly (`PRNO` sourced from `parent_item_number`, `ecn_item_id`
+NULL on the outbox row), the submit-time snapshot was captured and stamped on the NULL-item row,
+and the test line was deleted afterwards — BOM restored to its original 11 lines.
+
+### Defect found by this work — `MovexRestAdapter.get_item` (fixed)
+
+The ERP-existence check is the first caller that needed a real answer from `get_item`, and it
+immediately failed with a 502. Two genuine, pre-existing bugs, both verified live:
+
+1. It issued a **GET** to `/MMS200MI/GetItmBasic`. The generic MI passthrough route rejects GET —
+   HTTP 400, `"Transaction is not configured for GET. Use POST with a JSON body."` Every other MI
+   call in the adapter already POSTs; this one could never have worked against the real service.
+2. Not-found is reported as **HTTP 422** with `success:false`, not 404 — so the existing
+   `if status == 404: return {}` branch never fired.
+
+It went unnoticed because its only prior caller was `parts.py`'s autofill preview, whose `dry_run`
+path swallows ERP errors (`movex_item = None`) and degrades silently. Fixed to POST, and 404/422/
+200-with-`success:false` all collapse to `{}`. Covered by `tests/adapters/test_movex_get_item.py`.
+
+**Still outstanding:**
+
+- **Search-as-you-type item finder** (open half of I2-15) — needs a backend route over
+  `search_items`.
+- **`MPDHED` half of the parity check** — see "Still to confirm" §1 above; `MITMAS` only for v1.
 
 ---
 
@@ -262,6 +351,10 @@ comment at `ProcessBOMLineRule.java:362-363` describes the add-then-delete mecha
 
 That file is used as ground truth for design decisions, so the error should be fixed regardless of
 which option above is chosen.
+
+→ **Corrected 2026-08-25.** `ai/memory/05-stargile-ecn-reference.md` now reads
+"1=Add, 2=Delete, 3=Change" and describes the in-band delete with its source line references,
+carrying an inline note recording what the previous text claimed.
 
 ---
 

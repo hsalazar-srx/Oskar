@@ -106,7 +106,7 @@ Indexes on `(BMPRNO, BMZECNID, BMZECNLN)` and `(BMMTNO, BMZECNID, BMZECNLN)`
 | BMPRNO | Parent product number (VARCHAR 15) |
 | BMSTRT | Product structure type (CHAR 3) |
 | BMMSEQ | Sequence number (INT) |
-| BMZACTFL | **Action flag: 1=Add, 3=Change** |
+| BMZACTFL | **Action flag: 1=Add, 2=Delete, 3=Change** |
 | BMOPNO | Operation number (links to routing) |
 | BMMTNO | Component / material number (VARCHAR 15) |
 | BMZNWQTY | New quantity (DECIMAL 15,6) |
@@ -114,7 +114,18 @@ Indexes on `(BMPRNO, BMZECNID, BMZECNLN)` and `(BMMTNO, BMZECNID, BMZECNLN)`
 | BMZBOMNT | BOM notes (CLOB) |
 | BMSTA1 | Update status (CHAR 2) |
 
-Delete operations use a separate PDS002MI `DeleteComponent` call — no action flag 2.
+Delete operations are handled **in-band by action flag 2**, in the same rule that
+handles add and change — `ProcessBOMLineRule.java:360` (`if(zactfl.equals("2"))`),
+confirmed independently at `RequestECNBoMDetailValidationHelper.java:165`
+(`case 2: //DELETE`) and `:420`. Stargile's own comment at
+`ProcessBOMLineRule.java:362-363` describes the add-then-delete mechanism verbatim.
+
+> **Corrected 2026-08-25 (ADR-014).** This section previously stated that
+> `BMZACTFL` was only "1=Add, 3=Change" and that deletes used a separate
+> `DeleteComponent` call with "no action flag 2". Both claims were wrong,
+> verified against Stargile's source at the line references above. This file is
+> used as ground truth for design decisions, so the error is corrected here
+> rather than only noted in the ADR.
 
 ---
 

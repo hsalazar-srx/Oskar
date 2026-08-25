@@ -147,7 +147,7 @@ Adds, changes or removes components within an assembly. Start from
 
 | Column | Max length | Notes |
 |---|---|---|
-| `Item No` | 15 | The parent assembly |
+| `Item No` | 15 | The parent assembly. Does **not** have to be an item on the ECN — see below |
 | `Component Number` | 15 | The part going into it |
 | `Change Type` | — | `ADD`, `CHANGE` or `DELETE` |
 
@@ -156,6 +156,11 @@ Adds, changes or removes components within an assembly. Start from
 
 > **`CHANGE`, not `UPDATE`.** Routing uses `UPDATE`; BOM changes use `CHANGE`. The two uploads
 > genuinely differ here, and using the wrong word fails validation.
+
+**The parent does not need to be on the ECN.** Unlike the routing and MPN uploads, a BOM-change
+row whose `Item No` is not an item on this ECN is accepted — the row stands on its own and is
+labelled **BOM only**. This means a BOM-change upload can be the *only* thing on an ECN. The
+parent must exist in Movex, which Oskar checks on upload.
 
 **`CHANGE` and `DELETE` need `Old From Date`.** Oskar has to know which existing BOM line you
 mean, and the same component can appear more than once with different effective dates. Without it

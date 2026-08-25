@@ -137,6 +137,30 @@ async def _count_ecn_items(session: AsyncSession, ecn_id: str) -> int:
     return int(row.scalar_one())
 
 
+async def _count_ecn_content(session: AsyncSession, ecn_id: str) -> int:
+    """Total authored content on an ECN — items + routing operations + BOM
+    changes + MPNs (ADR-014, submit guard).
+
+    Items, routing operations and MPNs all hang off ecn_items, so they are
+    counted through it. BOM changes are counted on their own ecn_id: since
+    ADR-014 a BOM change can exist with no item at all, which is exactly the
+    case this count has to see.
+    """
+    row = await session.execute(
+        sa.text(
+            "SELECT "
+            "  (SELECT COUNT(*) FROM ecn_items WHERE ecn_id = :ecn_id) "
+            "+ (SELECT COUNT(*) FROM ecn_routing_operations r "
+            "     JOIN ecn_items i ON i.id = r.ecn_item_id WHERE i.ecn_id = :ecn_id) "
+            "+ (SELECT COUNT(*) FROM ecn_bom_changes WHERE ecn_id = :ecn_id) "
+            "+ (SELECT COUNT(*) FROM ecn_mpns m "
+            "     JOIN ecn_items i ON i.id = m.ecn_item_id WHERE i.ecn_id = :ecn_id)"
+        ),
+        {"ecn_id": ecn_id},
+    )
+    return int(row.scalar_one())
+
+
 # ---------------------------------------------------------------------------
 # Audit chain
 # ---------------------------------------------------------------------------

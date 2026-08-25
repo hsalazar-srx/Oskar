@@ -417,6 +417,18 @@ class BOMChangeBody(BaseModel):
         return v
 
 
+class ECNScopedBOMChangeBody(BOMChangeBody):
+    """Create body for the ECN-scoped BOM-change route (ADR-014).
+
+    Same fields as BOMChangeBody plus a required parent_item_number, because
+    there is no item on the URL to resolve the parent from. Mirrors
+    Stargile's self-contained ZECNBOMS row, which carries its own BMPRNO.
+    The parent's existence is validated against Movex at the router before
+    the service call.
+    """
+    parent_item_number: str = Field(..., min_length=1, max_length=15)
+
+
 class BOMChangePatchBody(BaseModel):
     change_type: str | None = None
     component_number: str | None = Field(None, min_length=1, max_length=15)
@@ -668,7 +680,8 @@ class RoutingOpOut(BaseModel):
 
 class BOMChangeOut(BaseModel):
     id: str
-    ecn_item_id: str
+    ecn_id: str
+    parent_item_number: str
     change_type: str
     component_number: str
     quantity: float | None
@@ -688,6 +701,9 @@ class BOMChangeOut(BaseModel):
     snapshot_id: str | None
     movex_snapshot_at_review: dict[str, Any] | None
     created_at: str
+    # ADR-014 — convenience link only; None for a BOM-only change (no item
+    # on this ECN).
+    ecn_item_id: str | None = None
     item_number: str | None = None
 
 
@@ -851,7 +867,8 @@ def routing_op_out(op: RoutingOperationResponse) -> RoutingOpOut:
 def bom_change_out(c: BOMChangeResponse) -> BOMChangeOut:
     return BOMChangeOut(
         id=c.id,
-        ecn_item_id=c.ecn_item_id,
+        ecn_id=c.ecn_id,
+        parent_item_number=c.parent_item_number,
         change_type=c.change_type,
         component_number=c.component_number,
         quantity=c.quantity,
@@ -871,6 +888,7 @@ def bom_change_out(c: BOMChangeResponse) -> BOMChangeOut:
         snapshot_id=c.snapshot_id,
         movex_snapshot_at_review=c.movex_snapshot_at_review,
         created_at=c.created_at.isoformat(),
+        ecn_item_id=c.ecn_item_id,
         item_number=c.item_number,
     )
 

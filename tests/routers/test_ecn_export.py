@@ -66,12 +66,14 @@ _ROUTING_OP = RoutingOperationResponse(
 )
 
 _BOM_CHANGE = BOMChangeResponse(
-    id="bc-1", ecn_item_id="item-1", change_type="ADD", component_number="LF200010",
+    id="bc-1", ecn_id="ecn-1", parent_item_number="LF-001",
+    change_type="ADD", component_number="LF200010",
     quantity=4.0, unit_of_measure="EA", operation_number=10, sequence_number=None,
     from_date=20260901, to_date=None, bom_type="M", notes=None,
     old_quantity=None, old_operation_number=None, old_from_date=None, old_to_date=None,
     circuit_refs_old=None, circuit_refs_new=None, snapshot_id=None,
-    movex_snapshot_at_review=None, created_at=_NOW, item_number="LF-001",
+    movex_snapshot_at_review=None, created_at=_NOW,
+    ecn_item_id="item-1", item_number="LF-001",
 )
 
 

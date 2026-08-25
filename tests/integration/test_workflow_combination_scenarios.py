@@ -542,12 +542,10 @@ class TestS5HoldResumePreservesStagedChanges:
     most likely to go wrong."""
 
     async def _staged_rows(self, db_session, ecn_id) -> list[str]:
+        # ADR-014 — ecn_bom_changes.ecn_id is now the row's real anchor back
+        # to its ECN; a JOIN through ecn_items would miss a BOM-only change.
         rows = await db_session.execute(
-            sa.text(
-                "SELECT c.id FROM ecn_bom_changes c "
-                "JOIN ecn_items i ON i.id = c.ecn_item_id "
-                "WHERE i.ecn_id = :e ORDER BY c.id"
-            ),
+            sa.text("SELECT id FROM ecn_bom_changes WHERE ecn_id = :e ORDER BY id"),
             {"e": ecn_id},
         )
         return [str(r[0]) for r in rows.all()]

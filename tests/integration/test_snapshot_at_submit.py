@@ -122,7 +122,14 @@ class TestSnapshotCapturedAtSubmit:
 
     async def test_no_bom_changes_captures_nothing(self, db_session: AsyncSession):
         """An ECN with zero ecn_bom_changes rows is the common case (routing-
-        only, MPN-only, etc.) — must be a silent no-op, not an error."""
+        only, MPN-only, etc.) — must be a silent no-op, not an error.
+
+        The ECN carries one item so it has content: since ADR-014 the submit
+        guard requires an ECN to hold at least one item, routing operation,
+        BOM change or MPN. That matches this test's own stated scenario (a
+        routing-only ECN) — it previously submitted an ECN that was empty on
+        every tab, which the guard's docstring had always claimed to reject.
+        """
         svc = ECNService(db_session)
         req = ECNCreateRequest(
             facility=_FACILITY, title="No BOM changes ECN",
@@ -131,6 +138,7 @@ class TestSnapshotCapturedAtSubmit:
             requires_customer_approval=False, regulatory_impact=False,
         )
         ecn = await svc.create(req, _ACTOR)
+        await svc.create_item(ecn.id, line_number=10, item_number="LFNOBOM001")
         erp = FakeERPAdapter()
         await svc.transition(
             ecn.id,

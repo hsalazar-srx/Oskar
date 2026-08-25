@@ -31,7 +31,9 @@ export default function BOMChangesTabContent({ ecnId, onManageItem }: Props) {
     return (
       <div className="py-10 flex flex-col items-center gap-2">
         <p className="text-sm text-[#94a3b8]">No BOM changes defined yet.</p>
-        <p className="text-xs text-[#cbd5e1]">Open an item and use its BOM Changes tab to add one.</p>
+        <p className="text-xs text-[#cbd5e1]">
+          Open an item and use its BOM Changes tab, or upload a BOM change file.
+        </p>
       </div>
     )
   }
@@ -48,10 +50,23 @@ export default function BOMChangesTabContent({ ecnId, onManageItem }: Props) {
           </span>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-mono text-xs font-semibold text-[#0066cc]">{c.item_number}</span>
+              <span className="font-mono text-xs font-semibold text-[#0066cc]">
+                {c.parent_item_number}
+              </span>
               <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${CHANGE_TYPE_BADGE[c.change_type] ?? "bg-neutral-100 text-neutral-600"}`}>
                 {c.change_type}
               </span>
+              {/* ADR-014 — a BOM-only change has no item row on this ECN.
+                  Labelled so a reviewer can see the item master is NOT
+                  changing, which is the whole point of the ADR. */}
+              {c.ecn_item_id === null && (
+                <span
+                  className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-neutral-100 text-neutral-500"
+                  title="BOM-only change — this parent is not an item on this ECN, so no item-master change is implied"
+                >
+                  BOM only
+                </span>
+              )}
             </div>
             <p className="text-xs text-neutral-500 mt-0.5">
               {c.change_type !== "ADD" && (
@@ -62,13 +77,19 @@ export default function BOMChangesTabContent({ ecnId, onManageItem }: Props) {
               )}
             </p>
           </div>
-          <button
-            type="button"
-            className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 text-xs font-medium text-[#0066cc] hover:underline"
-            onClick={() => onManageItem(c.ecn_item_id)}
-          >
-            Manage
-          </button>
+          {/* "Manage" opens the owning item's panel — only possible when the
+              parent is actually an item on this ECN. A BOM-only change
+              (ADR-014) has no item to open, so the action is omitted rather
+              than rendered broken. */}
+          {c.ecn_item_id !== null && (
+            <button
+              type="button"
+              className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 text-xs font-medium text-[#0066cc] hover:underline"
+              onClick={() => onManageItem(c.ecn_item_id as string)}
+            >
+              Manage
+            </button>
+          )}
         </div>
       ))}
     </div>

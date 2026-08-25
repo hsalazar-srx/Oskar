@@ -106,6 +106,11 @@ class ECNModel:
 
     # Items (used by submit guard)
     item_count: int = 0             # COUNT(*) from ecn_items for this ECN
+    # ADR-014 — total authored content on this ECN: items + routing
+    # operations + BOM changes + MPNs. The submit guard checks THIS, not
+    # item_count: a BOM-only ECN carries no items and is legitimate, while
+    # an ECN with nothing on any tab is not.
+    content_count: int = 0
 
 
 @dataclass
@@ -449,11 +454,25 @@ class ECNWorkflowMachine:
     # ---------------------------------------------------------------------------
 
     def _guard_submit(self) -> bool:
-        """DRAFT → ENGINEERING_REVIEW: mandatory header + ≥1 item (ADR-009)."""
+        """DRAFT → ENGINEERING_REVIEW: mandatory header + some content.
+
+        This docstring previously claimed "≥1 item (ADR-009)" while the code
+        checked only actor + title — an ECN with nothing on any tab submitted
+        successfully and was routed to a reviewer. ADR-014 settles the two
+        halves together: BOM changes no longer require an item (so "≥1 item"
+        would be the wrong rule), but submit does require the ECN to carry
+        content of SOME kind — an item, a routing operation, a BOM change or
+        an MPN.
+        """
         if self.ctx.actor_username != self.ecn.originator_username:
             raise GuardFailed("Only the originator can submit an ECN.")
         if not self.ecn.title or not self.ecn.title.strip():
             raise GuardFailed("ECN title is required before submission.")
+        if self.ecn.content_count <= 0:
+            raise GuardFailed(
+                "An ECN must have at least one item, routing operation, BOM "
+                "change or MPN before it can be submitted."
+            )
         return True
 
     def _guard_is_dc(self) -> bool:

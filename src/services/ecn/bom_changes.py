@@ -93,10 +93,12 @@ class ECNBomChangesMixin:
 
     # ── Row mapping ──────────────────────────────────────────────────────────
 
-    # Qualified with "b." — _get_bom_change joins against ecn_items (alias "i"),
-    # which also has an "id" column; an unqualified "id" is ambiguous there.
+    # ADR-014 — ecn_id/parent_item_number are the row's real anchor back to
+    # its ECN now; ecn_item_id is a nullable convenience link only. No JOIN
+    # against ecn_items needed to read these columns.
     _SELECT_COLUMNS = (
-        "b.id, b.ecn_item_id, b.change_type, b.component_number, b.quantity, b.unit_of_measure, "
+        "b.id, b.ecn_id, b.parent_item_number, b.ecn_item_id, b.change_type, b.component_number, "
+        "b.quantity, b.unit_of_measure, "
         "b.operation_number, b.sequence_number, b.from_date, b.to_date, b.bom_type, b.notes, "
         "b.old_quantity, b.old_operation_number, b.old_from_date, b.old_to_date, "
         "b.circuit_refs_old, b.circuit_refs_new, b.snapshot_id, b.movex_snapshot_at_review, b.created_at"
@@ -106,26 +108,28 @@ class ECNBomChangesMixin:
     def _row_to_bom_change(row: Any) -> BOMChangeResponse:
         return BOMChangeResponse(
             id=str(row[0]),
-            ecn_item_id=str(row[1]),
-            change_type=row[2],
-            component_number=row[3],
-            quantity=float(row[4]) if row[4] is not None else None,
-            unit_of_measure=row[5],
-            operation_number=row[6],
-            sequence_number=row[7],
-            from_date=row[8],
-            to_date=row[9],
-            bom_type=row[10],
-            notes=row[11],
-            old_quantity=float(row[12]) if row[12] is not None else None,
-            old_operation_number=row[13],
-            old_from_date=row[14],
-            old_to_date=row[15],
-            circuit_refs_old=row[16],
-            circuit_refs_new=row[17],
-            snapshot_id=str(row[18]) if row[18] else None,
-            movex_snapshot_at_review=row[19],
-            created_at=row[20],
+            ecn_id=str(row[1]),
+            parent_item_number=row[2],
+            ecn_item_id=str(row[3]) if row[3] else None,
+            change_type=row[4],
+            component_number=row[5],
+            quantity=float(row[6]) if row[6] is not None else None,
+            unit_of_measure=row[7],
+            operation_number=row[8],
+            sequence_number=row[9],
+            from_date=row[10],
+            to_date=row[11],
+            bom_type=row[12],
+            notes=row[13],
+            old_quantity=float(row[14]) if row[14] is not None else None,
+            old_operation_number=row[15],
+            old_from_date=row[16],
+            old_to_date=row[17],
+            circuit_refs_old=row[18],
+            circuit_refs_new=row[19],
+            snapshot_id=str(row[20]) if row[20] else None,
+            movex_snapshot_at_review=row[21],
+            created_at=row[22],
         )
 
     # ── CRUD ─────────────────────────────────────────────────────────────────
@@ -133,20 +137,44 @@ class ECNBomChangesMixin:
     async def create_bom_change(
         self,
         ecn_id: str,
-        item_id: str,
+        item_id: str | None,
         req: BOMChangeRequest,
         *,
         actor_role: str | None = None,
     ) -> BOMChangeResponse:
+        """Create one ecn_bom_changes row.
+
+        ADR-014 — two entry paths:
+
+          * item-scoped (item_id given): the parent must be an ecn_items row
+            on this ECN, and parent_item_number is resolved from it. This is
+            the pre-ADR-014 behaviour, unchanged.
+          * ECN-scoped (item_id None): no item is required. The caller
+            supplies req.parent_item_number directly, mirroring Stargile's
+            self-contained ZECNBOMS row (BMPRNO). The parent's existence in
+            Movex is validated at the router, not here — the ERP adapter is
+            injected per-route (routers/parts.py:407-440 is the precedent).
+        """
         await self._require_bom_change_editable(ecn_id, actor_role)
         self._validate_change_type_fields(req.change_type, req.old_from_date)
 
-        item_row = await self._session.execute(
-            sa.text("SELECT id FROM ecn_items WHERE id = :item_id AND ecn_id = :ecn_id"),
-            {"item_id": item_id, "ecn_id": ecn_id},
-        )
-        if not item_row.first():
-            raise ECNNotFound(item_id)
+        if item_id is not None:
+            item_row = await self._session.execute(
+                sa.text("SELECT item_number FROM ecn_items WHERE id = :item_id AND ecn_id = :ecn_id"),
+                {"item_id": item_id, "ecn_id": ecn_id},
+            )
+            item = item_row.first()
+            if not item:
+                raise ECNNotFound(item_id)
+            parent_item_number = item[0]
+        else:
+            if not req.parent_item_number or not req.parent_item_number.strip():
+                raise ECNValidationError(
+                    "parent_item_number is required when no item_id is supplied"
+                )
+            parent_item_number = req.parent_item_number.strip()
+            # ECN must still exist — _require_bom_change_editable already
+            # raised ECNNotFound above if it does not, so nothing more here.
 
         import json
 
@@ -154,17 +182,20 @@ class ECNBomChangesMixin:
         await self._session.execute(
             sa.text(
                 "INSERT INTO ecn_bom_changes "
-                "(id, ecn_item_id, change_type, component_number, quantity, unit_of_measure, "
+                "(id, ecn_id, parent_item_number, ecn_item_id, change_type, component_number, "
+                "quantity, unit_of_measure, "
                 "operation_number, sequence_number, from_date, to_date, bom_type, notes, "
                 "old_quantity, old_operation_number, old_from_date, old_to_date, "
                 "circuit_refs_old, circuit_refs_new) "
-                "VALUES (:id, :item_id, :change_type, :component_number, :quantity, :uom, "
+                "VALUES (:id, :ecn_id, :parent_item_number, :item_id, :change_type, :component_number, "
+                ":quantity, :uom, "
                 ":opno, :seqno, :from_date, :to_date, :bom_type, :notes, "
                 ":old_quantity, :old_opno, :old_from_date, :old_to_date, "
                 "CAST(:circuit_refs_old AS jsonb), CAST(:circuit_refs_new AS jsonb))"
             ),
             {
-                "id": change_id, "item_id": item_id, "change_type": req.change_type,
+                "id": change_id, "ecn_id": ecn_id, "parent_item_number": parent_item_number,
+                "item_id": item_id, "change_type": req.change_type,
                 "component_number": req.component_number, "quantity": req.quantity,
                 "uom": req.unit_of_measure, "opno": req.operation_number,
                 "seqno": req.sequence_number, "from_date": req.from_date,
@@ -178,16 +209,20 @@ class ECNBomChangesMixin:
         return await self._get_bom_change(ecn_id, item_id, change_id)
 
     async def _get_bom_change(
-        self, ecn_id: str, item_id: str, change_id: str
+        self, ecn_id: str, item_id: str | None, change_id: str
     ) -> BOMChangeResponse:
+        # ADR-014 — anchored on ecn_id directly, no JOIN through ecn_items.
+        # item_id is kept in the signature so existing item-scoped callers
+        # read naturally, but it is no longer part of the WHERE clause: a
+        # BOM-only change has no item to scope by, and (ecn_id, change_id)
+        # already identifies the row uniquely.
         row = await self._session.execute(
             sa.text(
                 f"SELECT {self._SELECT_COLUMNS} "
                 "FROM ecn_bom_changes b "
-                "JOIN ecn_items i ON i.id = b.ecn_item_id "
-                "WHERE b.id = :change_id AND b.ecn_item_id = :item_id AND i.ecn_id = :ecn_id"
+                "WHERE b.id = :change_id AND b.ecn_id = :ecn_id"
             ),
-            {"change_id": change_id, "item_id": item_id, "ecn_id": ecn_id},
+            {"change_id": change_id, "ecn_id": ecn_id},
         )
         r = row.first()
         if not r:
@@ -218,6 +253,15 @@ class ECNBomChangesMixin:
         mirrors list_all_routing_operations/list_all_mpns (items.py). Each
         row carries item_number so the tab can group/label rows without a
         second per-item fetch.
+
+        ADR-014 — anchored on b.ecn_id directly, not on a JOIN through
+        ecn_items, so BOM-only changes (ecn_item_id NULL) are included.
+        item_number comes from parent_item_number, which is authoritative
+        whether or not the row also has a convenience ecn_item_id link.
+        Ordered by ecn_items.line_number when the row has an item (keeps the
+        existing item-grouping order for parity rows), then by
+        parent_item_number for BOM-only rows with no item to order by,
+        then by created_at.
         """
         ecn_row = await self._session.execute(
             sa.text("SELECT id FROM ecn_instances WHERE id = :ecn_id"),
@@ -228,18 +272,18 @@ class ECNBomChangesMixin:
 
         rows = await self._session.execute(
             sa.text(
-                f"SELECT {self._SELECT_COLUMNS}, i.item_number "
+                f"SELECT {self._SELECT_COLUMNS} "
                 "FROM ecn_bom_changes b "
-                "JOIN ecn_items i ON i.id = b.ecn_item_id "
-                "WHERE i.ecn_id = :ecn_id "
-                "ORDER BY i.line_number, b.created_at"
+                "LEFT JOIN ecn_items i ON i.id = b.ecn_item_id "
+                "WHERE b.ecn_id = :ecn_id "
+                "ORDER BY i.line_number NULLS LAST, b.parent_item_number, b.created_at"
             ),
             {"ecn_id": ecn_id},
         )
         result: list[BOMChangeResponse] = []
         for r in rows:
             change = self._row_to_bom_change(r)
-            change.item_number = r[21]
+            change.item_number = change.parent_item_number
             result.append(change)
         return result
 
@@ -356,9 +400,9 @@ class ECNBomChangesMixin:
         )
         item_by_number = {r[1]: r[0] for r in item_rows}
         if not item_by_number:
-            # No items at all on this ECN -> confirm the ECN itself exists
-            # before reporting a row-level "item not found" (matches
-            # create_bom_change's ECNNotFound(ecn_id)-vs-item distinction).
+            # ADR-014 — an ECN with no items at all is now legitimate (a
+            # BOM-only ECN), so this is no longer a precursor to a row-level
+            # "item not found"; it only confirms the ECN itself exists.
             ecn_row = await self._session.execute(
                 sa.text("SELECT id FROM ecn_instances WHERE id = :ecn_id"),
                 {"ecn_id": ecn_id},
@@ -367,15 +411,15 @@ class ECNBomChangesMixin:
                 raise ECNNotFound(ecn_id)
 
         # -- Per-row validation + insert ----------------------------------------
-        created: list[tuple[str, str]] = []  # (item_id, change_id)
+        created: list[tuple[str | None, str]] = []  # (item_id, change_id)
         for idx, row in enumerate(rows, start=1):
             item_number = row["item_number"]
+            # ADR-014 — a parent that is NOT on this ECN is no longer an
+            # error: the row stands alone with parent_item_number set and
+            # ecn_item_id NULL (Stargile's BMPRNO model). When the parent
+            # IS on the ECN, the convenience link is still recorded.
+            # Movex-existence of the parent is validated at the router.
             item_id = item_by_number.get(item_number)
-            if item_id is None:
-                raise ECNValidationError(
-                    f"Row {idx}: item_number '{item_number}' was not found on this "
-                    "ECN — add it via item upload first"
-                )
 
             change_type = row["change_type"]
             old_from_date = row.get("old_from_date")
@@ -392,15 +436,19 @@ class ECNBomChangesMixin:
             await self._session.execute(
                 sa.text(
                     "INSERT INTO ecn_bom_changes "
-                    "(id, ecn_item_id, change_type, component_number, quantity, unit_of_measure, "
+                    "(id, ecn_id, parent_item_number, ecn_item_id, change_type, component_number, "
+                    "quantity, unit_of_measure, "
                     "operation_number, sequence_number, from_date, old_from_date, old_quantity, "
                     "notes, circuit_refs_new) "
-                    "VALUES (:id, :item_id, :change_type, :component_number, :quantity, :uom, "
+                    "VALUES (:id, :ecn_id, :parent_item_number, :item_id, :change_type, :component_number, "
+                    ":quantity, :uom, "
                     ":opno, :seqno, :from_date, :old_from_date, :old_quantity, :notes, "
                     "CAST(:circuit_refs_new AS jsonb))"
                 ),
                 {
-                    "id": change_id, "item_id": str(item_id), "change_type": change_type,
+                    "id": change_id, "ecn_id": ecn_id, "parent_item_number": item_number,
+                    "item_id": str(item_id) if item_id is not None else None,
+                    "change_type": change_type,
                     "component_number": row["component_number"], "quantity": row.get("quantity"),
                     "uom": row.get("unit_of_measure"), "opno": row.get("operation_number"),
                     "seqno": row.get("sequence_number"),
@@ -410,13 +458,13 @@ class ECNBomChangesMixin:
                     "circuit_refs_new": json.dumps(circuit_refs_new) if circuit_refs_new is not None else None,
                 },
             )
-            created.append((str(item_id), change_id))
+            created.append((str(item_id) if item_id is not None else None, change_id))
 
         result: list[BOMChangeResponse] = []
         for item_id, change_id in created:
             change = await self._get_bom_change(ecn_id, item_id, change_id)
-            change.item_number = next(
-                (num for num, iid in item_by_number.items() if str(iid) == item_id), None
-            )
+            # parent_item_number is authoritative for the aggregate view's
+            # label, whether or not the row also links to an item row.
+            change.item_number = change.parent_item_number
             result.append(change)
         return result

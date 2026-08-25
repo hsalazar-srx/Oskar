@@ -98,7 +98,9 @@ as row 1).
 | File exceeds the 1 MB limit | Split it, or save as `.csv` — much smaller than `.xlsx` |
 | Duplicate row | The same key appears twice. Oskar checks within your file as well as against the ECN |
 | Value too long | Over the column's maximum — `Item Name` is only 30 characters |
-| "item_number ... was not found on this ECN" | The item isn't on the ECN yet. **Upload items before routing, BOM changes or MPNs.** |
+| "item_number ... was not found on this ECN" | The item isn't on the ECN yet. **Upload items before routing or MPNs.** Does not apply to BOM changes — those name their parent directly and no longer need an item |
+| "Parent item ... does not exist in Movex" | A BOM change named a parent assembly Movex does not have. Check the number — this is the ERP being asked, not Oskar |
+| "An ECN must have at least one item, routing operation, BOM change or MPN" | You tried to submit an empty ECN. Add content on one of the four tabs first |
 
 **Do not export and re-upload.** The export format is deliberately different from the upload
 format and will be rejected — see [Bulk uploads](07-bulk-uploads.md).
