@@ -312,11 +312,13 @@ It went unnoticed because its only prior caller was `parts.py`'s autofill previe
 path swallows ERP errors (`movex_item = None`) and degrades silently. Fixed to POST, and 404/422/
 200-with-`success:false` all collapse to `{}`. Covered by `tests/adapters/test_movex_get_item.py`.
 
-**Still outstanding:**
+**Still outstanding — both deferred to backlog 2026-08-26, neither blocking:**
 
-- **Search-as-you-type item finder** (open half of I2-15) — needs a backend route over
-  `search_items`.
+- **Search-as-you-type item finder** — needs a backend route over `search_items`, which exists on
+  every adapter but is exposed by none. Tracked as **I2-15** (open half; the browse-by-item-number
+  half shipped with this ADR).
 - **`MPDHED` half of the parity check** — see "Still to confirm" §1 above; `MITMAS` only for v1.
+  Tracked as **I2-22**.
 
 ---
 
