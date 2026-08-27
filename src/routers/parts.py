@@ -425,16 +425,9 @@ async def autofill_item(
                     detail="ERP system unavailable (circuit breaker open). Try again shortly.",
                 )
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 404:
-                if body.dry_run:
-                    log.info("autofill.dry_run_movex_item_not_found", item_number=body.item_number)
-                    movex_item = None
-                else:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Item {body.item_number!r} not found in Movex.",
-                    )
-            elif body.dry_run:
+            # get_item absorbs the not-found statuses (404/422) and returns {},
+            # handled below — anything raising here is a genuine ERP fault.
+            if body.dry_run:
                 log.warning("autofill.dry_run_movex_error", item_number=body.item_number, status_code=exc.response.status_code)
                 movex_item = None
             else:
@@ -452,7 +445,26 @@ async def autofill_item(
                     detail="ERP connection failed after retries.",
                 )
 
-        if movex_item:
+        # An empty result means Movex has no such item. get_item returns {}
+        # rather than raising (the MI route reports not-found as 422 with
+        # success:false, not 404), so the empty case is checked here.
+        #
+        # dry_run stays best-effort — a preview should still show whatever the
+        # supplier chain found. The write path must not: confirming an
+        # item_number Movex does not have is exactly what this check exists to
+        # prevent.
+        if not movex_item:
+            if body.dry_run:
+                log.info(
+                    "autofill.dry_run_movex_item_not_found",
+                    item_number=body.item_number,
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Item {body.item_number!r} not found in Movex.",
+                )
+        else:
             unms = movex_item.get("UNMS", "").strip()
             if unms:
                 updates["unit_of_measure"] = unms

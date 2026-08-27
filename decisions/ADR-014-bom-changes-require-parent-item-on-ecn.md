@@ -338,6 +338,10 @@ A coherent outcome is likely: **BOM changes stand alone**, and **submit requires
 at least one item, routing operation, BOM change or MPN** — i.e. content of some kind, not items
 specifically.
 
+→ **Implemented 2026-08-25**, exactly as outlined above — see step 4 of the Implementation record.
+`_guard_submit` now checks `content_count` (items + routing operations + BOM changes + MPNs) in
+place of the item-only check its docstring had always claimed and never enforced.
+
 ---
 
 ## Correction to existing documentation

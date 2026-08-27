@@ -529,12 +529,46 @@ class TestStockCodeAutofillERPErrors:
     def test_timeout_returns_502(self):
         assert self._call_erp_error(httpx.TimeoutException("timeout")) == 502
 
-    def test_item_not_found_in_movex_returns_404(self):
-        req = httpx.Request("GET", "http://movex/MMS200MI/GetItmBasic")
+    def test_raised_404_is_an_erp_fault_not_a_missing_item(self):
+        """A raised HTTPStatusError now means the ERP itself misbehaved.
+
+        `get_item` absorbs both 404 and 422 into `{}` (movex.py:278-281) — the MI
+        passthrough reports not-found as 422, not 404, and both map to the same
+        empty-dict contract. So nothing raising out of `get_item` can mean
+        "item doesn't exist" any more; it means the call genuinely failed, which
+        is a 502. The missing-item path is covered by
+        `test_empty_item_result_returns_404` below, which exercises the real
+        contract.
+        """
+        req = httpx.Request("POST", "http://movex/MMS200MI/GetItmBasic")
         r = httpx.Response(404, request=req)
         assert self._call_erp_error(
             httpx.HTTPStatusError("404", request=req, response=r)
-        ) == 404
+        ) == 502
+
+    def test_empty_item_result_returns_404(self):
+        """`get_item` returning {} is how "no such item" actually arrives.
+
+        The write path must reject it — confirming an item_number Movex does not
+        have is precisely what this guard prevents.
+        """
+        with (
+            patch("src.routers.parts.SupplierChain") as mock_chain_cls,
+            patch.object(MovexRestAdapter, "get_item", new_callable=AsyncMock) as mock_get_item,
+            patch("src.routers.parts.ECNService") as mock_svc_cls,
+        ):
+            mock_chain_cls.return_value.get_part = AsyncMock(return_value={})
+            mock_get_item.return_value = {}
+            mock_svc = MagicMock()
+            mock_svc.get_item = AsyncMock(return_value=_item_mock(mpns=[]))
+            mock_svc.update_item = AsyncMock(return_value=_item_mock())
+            mock_svc_cls.return_value = mock_svc
+            client = _make_client(_ENGINEER)
+            resp = client.post("/api/v1/parts/autofill", json=_BODY)
+
+        assert resp.status_code == 404
+        # update_item must not have been called — nothing was confirmed
+        mock_svc.update_item.assert_not_awaited()
 
 
 # ── dry_run preview mode (S9-6) ───────────────────────────────────────────────
@@ -743,3 +777,59 @@ class TestStockCodeAutofillDryRunMovexDegradation:
         )
         assert resp.status_code == 200
         assert resp.json()["item_name"]
+
+
+# ── Movex not-found, post-ADR-014 contract ────────────────────────────────────
+
+class TestMovexItemNotFound:
+    """`get_item` returns {} for a nonexistent item — it no longer raises.
+
+    The MI route reports not-found as HTTP 422 with success:false (and the
+    adapter also folds in 404 and 200-with-success-false), so the router can no
+    longer rely on an `httpx.HTTPStatusError` to detect it. That change was made
+    for ADR-014's parent-existence check; this suite pins the autofill side of
+    the same contract, which had no not-found coverage at all and so silently
+    lost its 404 when the adapter changed.
+    """
+
+    def test_write_path_404s_when_item_absent_from_movex(self):
+        """The non-dry_run path must still refuse to confirm an item_number
+        that Movex does not have. Before this was fixed the empty result fell
+        through `if movex_item:` and the write proceeded silently."""
+        code, body = _call(_BODY, movex_result={})
+        assert code == 404
+        assert "not found in Movex" in body["detail"]
+
+    def test_write_path_does_not_update_item_when_absent(self):
+        with (
+            patch("src.routers.parts.SupplierChain") as mock_chain_cls,
+            patch.object(MovexRestAdapter, "get_item", new_callable=AsyncMock) as mock_get_item,
+            patch("src.routers.parts.ECNService") as mock_svc_cls,
+        ):
+            mock_chain_cls.return_value.get_part = AsyncMock(return_value=_DIGIKEY_RESULT)
+            mock_get_item.return_value = {}
+            mock_svc = MagicMock()
+            mock_svc.get_item = AsyncMock(return_value=_item_mock())
+            mock_svc.update_item = AsyncMock(return_value=_item_mock())
+            mock_svc_cls.return_value = mock_svc
+
+            resp = _make_client(_ENGINEER).post("/api/v1/parts/autofill", json=_BODY)
+
+        assert resp.status_code == 404
+        mock_svc.update_item.assert_not_awaited()
+
+    def test_dry_run_returns_200_when_item_absent(self):
+        """A preview must still show whatever the supplier chain found, even
+        though Movex has nothing — the dry_run path is best-effort by design."""
+        code, body = _call({**_BODY, "dry_run": True}, movex_result={})
+        assert code == 200
+        assert body["item_name"]
+        assert body["unit_of_measure"] is None
+
+    def test_new_item_skips_movex_entirely(self):
+        """is_new_item means the number does not exist in Movex yet, so the
+        lookup is skipped and its absence must not 404."""
+        code, _ = _call(
+            _BODY, movex_result={}, current_item=_item_mock(is_new_item=True),
+        )
+        assert code == 200
