@@ -4,9 +4,29 @@ OSKAR NexarAdapter — secondary supplier for part description lookup (S3-3)
 GraphQL API aggregating DigiKey, Mouser, Arrow, Avnet in one call.
 Called when DigiKeyAdapter returns no result for an MPN.
 
-Pricing tiers:
-  Free tier    — 100 matched parts/month
-  Standard 2025 — 2,000 matched parts/month at $100/month
+Pricing tiers — CORRECTED 2026-08-27, verified against Nexar's own support
+documentation (https://support.nexar.com/support/solutions/articles/
+101000476314-part-limits-and-how-they-work):
+
+  Evaluation app — 100 matched parts **LIFETIME**, verbatim: "a lifetime part
+                   limit of 100. This will not reset each month."
+  Paid plans     — reset monthly on the 1st.
+
+This docstring previously said "100 matched parts/month" for the free tier.
+That was wrong in the way that matters: the free quota is a one-time
+allowance, so this adapter's fallback capacity is exhausted permanently once
+spent, not monthly. Treat the free tier as a evaluation budget, not a
+recurring one.
+
+Quota is consumed per PART RETURNED, not per query — same source: "Your limit
+is based on the number of parts returned - not how many queries you make."
+So `search(limit=20)` can spend a fifth of the entire free allowance in one
+call. get_part is the cheap path; search is not.
+
+Because SupplierChain catches every adapter exception and falls through
+(chain.py), an exhausted quota degrades SILENTLY — the chain simply stops
+finding parts here. If Nexar appears to never return results, check the
+quota before debugging the adapter.
 
 Credentials (environment variables):
   NEXAR_CLIENT_ID     — Nexar app client ID
