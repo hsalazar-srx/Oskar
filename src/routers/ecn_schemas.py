@@ -678,6 +678,24 @@ class RoutingOpOut(BaseModel):
     line_number: int | None = None
 
 
+class BOMCrossRefOut(BaseModel):
+    """One cross-reference advisory finding (Slice F, I2-12).
+
+    check_failed distinguishes "Movex could not be reached for this component"
+    from "checked, nothing else uses it" — an empty other_parents with
+    check_failed=false is an all-clear; with check_failed=true it is an
+    unknown. Collapsing the two would turn an outage into a false all-clear.
+    """
+
+    bom_change_id: str
+    component_number: str
+    parent_item_number: str
+    change_type: str
+    other_parents: list[str] = []
+    parents_also_on_this_ecn: list[str] = []
+    check_failed: bool = False
+
+
 class BOMChangeOut(BaseModel):
     id: str
     ecn_id: str

@@ -55,10 +55,12 @@ from src.routers.ecn_schemas import (
     BOMChangeBody,
     BOMChangeOut,
     BOMChangePatchBody,
+    BOMCrossRefOut,
     BulkBomChangeRow,
     ECNScopedBOMChangeBody,
     bom_change_out,
 )
+from src.services.bom.crossref import build_bom_crossref
 from src.services.ecn import (
     BOMChangeRequest,
     ECNNotFound,
@@ -194,6 +196,62 @@ async def list_all_bom_changes(
     except ECNNotFound:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ECN not found")
     return [bom_change_out(c) for c in changes]
+
+
+async def _ecn_facility(session: AsyncSession, ecn_id: str) -> str:
+    """The ECN's facility, for the where-used lookups.
+
+    Falls back to 'D' if the ECN row somehow has no facility — the advisory
+    degrading to a default-facility answer is better than it 500ing, and the
+    column is NOT NULL DEFAULT anyway (migration 0001).
+    """
+    row = await session.execute(
+        sa.text("SELECT facility FROM ecn_instances WHERE id = :id"),
+        {"id": ecn_id},
+    )
+    found = row.first()
+    return (found[0] if found and found[0] else "D")
+
+
+@ecn_bom_router.get(
+    "/{ecn_id}/bom-crossref",
+    response_model=list[BOMCrossRefOut],
+    summary="Advisory: other live assemblies consuming components this ECN removes (Slice F, I2-12)",
+)
+async def get_bom_crossref(
+    ecn_id: str,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    erp: Annotated[MovexRestAdapter, Depends(_get_erp_adapter)],
+) -> list[BOMCrossRefOut]:
+    """For each DELETE/CHANGE BOM change on this ECN, which OTHER live
+    assemblies still consume that component.
+
+    Advisory only — never blocks a transition, and never returns an ERP error.
+    If Movex is unreachable the affected findings come back with
+    check_failed=true so the reviewer can tell "could not check" apart from
+    "nothing found". An empty list means genuinely nothing shared.
+    """
+    svc = ECNService(session)
+    try:
+        changes = await svc.list_all_bom_changes(ecn_id)
+    except ECNNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ECN not found")
+
+    facility = await _ecn_facility(session, ecn_id)
+    findings = await build_bom_crossref(erp, changes, facility=facility)
+    return [
+        BOMCrossRefOut(
+            bom_change_id=f.bom_change_id,
+            component_number=f.component_number,
+            parent_item_number=f.parent_item_number,
+            change_type=f.change_type,
+            other_parents=f.other_parents,
+            parents_also_on_this_ecn=f.parents_also_on_this_ecn,
+            check_failed=f.check_failed,
+        )
+        for f in findings
+    ]
 
 
 @ecn_bom_router.get(
