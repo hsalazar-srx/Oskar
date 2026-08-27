@@ -114,6 +114,44 @@ acceptable for this environment.
 
 ---
 
+## Amendment 2026-08-27 — time-boxed plain-LDAP deviation for UAT
+
+**Status:** Active deviation. Does not change the go-live decision above.
+
+LDAPS on the DC has been pending Manal since 2026-04-24 and is now blocking UAT user
+access for the BOM module deployment. Rather than hold UAT on an infrastructure
+dependency outside this project's control, UAT runs on plain LDAP (389) using the
+staging override already built into `_make_server()` (`src/auth/providers.py:104-107`):
+
+```
+AUTH_PROVIDER=ldap
+LDAP_SERVER=ldap://srxdc01.srxglobal.com
+LDAP_PORT=389
+LDAP_USE_TLS=false
+```
+
+**This is the DISP Tier 1 finding named in Context above, knowingly accepted for a
+bounded window.** Every UAT user's AD password and the `svc-oskar-ldap` service account
+password cross the wire in cleartext on each bind.
+
+Scope limits — all three must hold for this deviation to remain acceptable:
+
+1. **UAT only.** Production go-live still requires LDAPS. This amendment does not
+   relax the go-live gate; `LDAP_USE_TLS` defaults to `true` and stays that way.
+2. **Internal network only.** The UAT VM (`10.131.1.10`) and the DC are both on the
+   corporate LAN. No path from outside it.
+3. **Not a permanent state.** Tracked as an open go-live blocker in
+   `ai/tasks/sprint-backlog.md`; the override is removed and this amendment marked
+   superseded when LDAPS is enabled.
+
+**Risk accepted by:** Lead Engineer, 2026-08-27, to unblock BOM UAT.
+**Still owed:** Devian (DISP security owner) has not reviewed this deviation. If UAT
+uses real AD credentials rather than test accounts, that review should happen — the
+original ADR was reviewed by @expert-cybersecurity and this weakens one of its two
+core findings.
+
+---
+
 ## Consequences
 
 - PRE-3 remains valid for `IdentityProvider` Protocol and `EntraIDProvider` stub design
