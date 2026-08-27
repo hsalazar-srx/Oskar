@@ -4,6 +4,7 @@ OSKAR — BOM browse + explosion endpoints (Slice A/B, ADR-012)
 GET /api/v1/bom/{item_number}                 Single-level BOM browse (Slice A, B-1)
 GET /api/v1/bom/{item_number}/indented         Multi-level explosion (Slice B, B-2)
 GET /api/v1/bom/{item_number}/where-used       Where-used lookup (Slice B, B-3)
+GET /api/v1/bom/{item_number}/export           TXT/CSV export (Slice F, I2-12)
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from src.services.bom.compare import CompareOptions, diff_boms
 from src.services.bom.comparisons import get_comparison, insert_comparison
 from src.services.bom.customer_bom import CustomerLine, compare_customer_bom
 from src.services.bom.explode import assemble_where_used, build_bom_tree
+from src.services.bom.export import UnsupportedExportFormat, export_bom
 from src.services.bom.models import BOMCycleError, BOMHead, BOMTreeNode, WhereUsedLine
 from src.services.bom.snapshots import get_snapshot
 
@@ -760,3 +762,68 @@ async def get_where_used(
 
     lines = assemble_where_used(payload)
     return [_where_used_to_response(line) for line in lines]
+
+
+# ── Slice F: TXT/CSV export (I2-12) ──────────────────────────────────────────
+
+@bom_router.get(
+    "/{item_number}/export",
+    summary="Export a single-level BOM as TXT or CSV (Slice F, I2-12)",
+    response_class=Response,
+)
+async def export_bom_endpoint(
+    item_number: str,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    erp: Annotated[MovexRestAdapter, Depends(_get_erp_adapter)],
+    format: Annotated[str, Query(description="'csv' (default) or 'txt'")] = "csv",
+    facility: Annotated[str, Query(max_length=5, description="Movex facility (MPDHED.FACI)")] = "D",
+    structure_type: Annotated[str, Query(max_length=3, description="Movex structure type (MPDHED.STRT)")] = "001",
+    bom_type: Annotated[str, Query(max_length=1, description="'M' = manufacturing BOM (default)")] = "M",
+    effective_on: Annotated[str | None, Query(description="YYYYMMDD — optional as-of date passed to the ERP call")] = None,
+    include_expired: Annotated[bool, Query(description="Include lines whose to_date has already passed")] = False,
+) -> Response:
+    """Export the same single-level BOM that GET /bom/{item_number} returns.
+
+    Deliberately reuses get_single_level_bom rather than re-fetching
+    differently: an export that disagreed with what the browser shows for the
+    same item would be worse than no export. The effectivity/expiry query
+    params mirror the browse endpoint one-for-one for the same reason.
+
+    xlsx is not offered here — comparison xlsx export lives at
+    /bom/comparisons/{id}/export (Slice D). Asking for it returns 422 rather
+    than silently handing back a CSV.
+    """
+    try:
+        head = await get_single_level_bom(
+            erp,
+            item_number,
+            facility,
+            structure_type=structure_type,
+            bom_type=bom_type,
+            effective_on=effective_on,
+            include_expired=include_expired,
+        )
+    except BOMNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No BOM found for item {item_number!r}.",
+        )
+    except (RuntimeError, httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException) as exc:
+        _raise_for_erp_error(exc)
+        raise  # unreachable — _raise_for_erp_error always raises
+
+    try:
+        content, media_type, ext = export_bom(head, format)
+    except UnsupportedExportFormat as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        )
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="bom-{item_number}.{ext}"'
+        },
+    )
