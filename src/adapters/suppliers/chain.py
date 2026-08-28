@@ -74,6 +74,12 @@ COMMERCIAL_FIELDS: frozenset[str] = frozenset({
 # the order of months, and it is the field EOL alerting depends on. Giving it
 # a 24h TTL would make that feature hammer the API for data that barely
 # changes.
+#
+# lead_time_weeks is a genuine judgment call and sits here on purpose. It is
+# supplier-quoted like a price, but it moves on the order of weeks, and the
+# feature that consumes it (lead-time-spike alerting) needs a baseline to
+# compare against — a 24h TTL would leave nothing to detect a spike FROM.
+# It is also not commercially sensitive in the way price and stock are.
 DESCRIPTIVE_FIELDS: frozenset[str] = frozenset({
     "description",
     "manufacturer",
@@ -82,6 +88,10 @@ DESCRIPTIVE_FIELDS: frozenset[str] = frozenset({
     "mounting_type",
     "digikey_part_number",
     "nexar_mpn",
+    "element14_sku",
+    "country_of_origin",
+    "rohs_compliant",
+    "lead_time_weeks",
 })
 
 # Octopart's documented 24h ceiling is the tightest limit found across the

@@ -54,6 +54,22 @@ class TestFieldClassification:
     def test_the_two_classes_do_not_overlap(self):
         assert not (COMMERCIAL_FIELDS & DESCRIPTIVE_FIELDS)
 
+    def test_compliance_fields_are_descriptive(self):
+        """RoHS and country of origin are attributes of the part, not of
+        today's offer — and the ECN compliance fields that read them would be
+        useless if they expired every 24h."""
+        assert "rohs_compliant" in DESCRIPTIVE_FIELDS
+        assert "country_of_origin" in DESCRIPTIVE_FIELDS
+
+    def test_lead_time_is_descriptive_not_commercial(self):
+        """A judgment call, locked in deliberately. lead_time_weeks is
+        supplier-quoted like a price, but (a) it moves on the order of weeks,
+        (b) lead-time-spike alerting needs a retained baseline to detect a
+        spike FROM — a 24h TTL leaves nothing to compare against, and (c) it
+        is not commercially sensitive the way price and stock are."""
+        assert "lead_time_weeks" in DESCRIPTIVE_FIELDS
+        assert "lead_time_weeks" not in COMMERCIAL_FIELDS
+
 
 class TestSplitPayload:
     def test_splits_a_digikey_shaped_result(self):
