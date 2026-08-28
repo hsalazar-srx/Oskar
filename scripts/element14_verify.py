@@ -31,11 +31,15 @@ in Oskar as unverified.
 
 Quota
 -----
-element14 publishes no hard rate limit, describing only a "courtesy
-allowance" — that is unverified, so this script stays frugal anyway:
+The "Oskar" app key is limited to 2 calls/sec and 1,000 calls/day. This
+script is frugal against that:
 
-  * DEFAULT (--quick): 2 calls — one MPN lookup, one not-found probe.
-  * --full: 4 calls — adds a keyword search and a pricing lookup.
+  * DEFAULT: 2 calls — one MPN lookup, one not-found probe.
+  * --full:  4 calls — adds a keyword search and a pricing lookup.
+
+Even run repeatedly during a debugging session that is a rounding error
+against 1,000/day. The adapter's own throttle handles the 2/sec cap, so the
+back-to-back calls below cannot breach it.
 
 Usage
 -----

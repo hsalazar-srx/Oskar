@@ -91,6 +91,7 @@ DESCRIPTIVE_FIELDS: frozenset[str] = frozenset({
     "element14_sku",
     "country_of_origin",
     "rohs_compliant",
+    "rohs_status_code",
     "lead_time_weeks",
 })
 
