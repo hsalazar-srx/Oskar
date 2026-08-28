@@ -61,9 +61,19 @@ class AvnetAdapter(_SupplierStub):
         return "avnet"
 
 
-class Future6Adapter(_SupplierStub):
-    """Placeholder for a sixth supplier — replace when supplier is confirmed."""
-
-    @property
-    def supplier_id(self) -> str:
-        return "future6-placeholder"
+# Future6Adapter was the unnamed sixth-supplier placeholder. It is now a real
+# adapter: Element14Adapter (src/adapters/suppliers/element14.py), chosen over
+# the named stubs above because it is the only free, self-service API covering
+# price breaks + lead time + compliance together, with native my./au.
+# storefronts. See docs/supplier-api-landscape.md §4.
+#
+# On the remaining stubs, from that same research (2026-08-27):
+#   - RSComponentsAdapter — RS publishes NO public API (account-gated PunchOut
+#     only). This stub is very likely unimplementable as written; confirm with
+#     the RS account manager before anyone budgets work for it.
+#   - ArrowAdapter — poor choice on TERMS, not capability: explicitly forbids
+#     caching, revokes credentials for it, and publishes no rate limit at all.
+#   - AvnetAdapter — most complex auth (subscription key AND OAuth2) for no
+#     data the others lack.
+#   - MouserAdapter — plausible, but every figure about it is unverified;
+#     Mouser blocks automated fetching of its own terms and docs.

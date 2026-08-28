@@ -12,6 +12,7 @@ import structlog
 
 from src.adapters.erp.movex import MovexRestAdapter
 from src.adapters.suppliers.digikey import DigiKeyAdapter
+from src.adapters.suppliers.element14 import Element14Adapter
 from src.adapters.suppliers.nexar import NexarAdapter
 from src.logging_config import configure_logging
 from src.middleware.correlation import CorrelationIdMiddleware
@@ -51,6 +52,14 @@ async def _lifespan(application: FastAPI):
         nexar = NexarAdapter()
         await nexar.open()
         supplier_adapters.append(nexar)
+    if os.getenv("ELEMENT14_API_KEY"):
+        element14 = Element14Adapter()
+        await element14.open()
+        supplier_adapters.append(element14)
+        log.info(
+            "element14.adapter_enabled",
+            store_id=element14._store_id,
+        )
     application.state.supplier_adapters = supplier_adapters
 
     yield

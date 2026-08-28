@@ -5,13 +5,17 @@ Abstract base class for all supplier API integrations.
 One concrete implementation per supplier. Adding a 7th supplier = one new class file.
 Per-adapter circuit breaker pattern — one supplier outage does not affect others.
 
-Implementations (Phase 1: 1 real + 5 stubs):
-- DigiKeyAdapter    ← Wire first (DigiKey OAuth confirmed in Branko session)
+Implementations (3 real + 4 stubs):
+- DigiKeyAdapter    ← primary; OAuth2, live quota headers
+- NexarAdapter      ← secondary breadth; free tier is 100 parts LIFETIME
+- Element14Adapter  ← price breaks + lead time + compliance, my./au. stores
 - MouserAdapter     ← Stub
-- RS ComponentsAdapter  ← Stub
-- Arrow Adapter     ← Stub
+- RSComponentsAdapter ← Stub (RS publishes no public API — likely
+                        unimplementable; see stubs.py)
+- ArrowAdapter      ← Stub (poor on terms — forbids caching, revokes creds)
 - AvnetAdapter      ← Stub
-- Future6Adapter    ← Stub placeholder
+
+Selection rationale for all of the above: docs/supplier-api-landscape.md.
 """
 
 from __future__ import annotations

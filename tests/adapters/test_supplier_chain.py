@@ -40,7 +40,10 @@ def _adapter(supplier_id: str, result: dict | Exception):
 
 @pytest.mark.asyncio
 async def test_cache_hit_returns_cached_without_adapter_call():
-    cached_row = ("10kΩ resistor", "Yageo", "Passive", "Active", "digikey", None)
+    # Row shape follows _cache_get's SELECT: the last two columns are the
+    # commercial half added by migration 0033 (NULL here — descriptive-only
+    # row, which is what a pre-0033 row looks like after the scrub).
+    cached_row = ("10kΩ resistor", "Yageo", "Passive", "Active", "digikey", None, None, None)
     session = _make_session(cached_row)
     adapter = _adapter("digikey", {"description": "Should not be called"})
 
@@ -58,9 +61,14 @@ async def test_cache_hit_with_raw_json_populated():
     json.loads() on it unconditionally, raising TypeError on any real cache
     hit with data in raw_json (only ever masked because the other cache-hit
     test above used raw_json=None, which skips the json.loads() call
-    entirely)."""
-    raw_json_dict = {"mounting_type": "TH", "unit_price": 1.15, "digikey_part_number": "DK-123-ND"}
-    cached_row = ("10kΩ resistor", "Yageo", "Passive", "Active", "digikey", raw_json_dict)
+    entirely).
+
+    raw_json carries DESCRIPTIVE fields only since migration 0033 — unit_price
+    used to appear here and is now scrubbed out into commercial_json, so this
+    fixture no longer includes it. Commercial caching is covered in
+    tests/adapters/test_supplier_cache_ttl.py."""
+    raw_json_dict = {"mounting_type": "TH", "digikey_part_number": "DK-123-ND"}
+    cached_row = ("10kΩ resistor", "Yageo", "Passive", "Active", "digikey", raw_json_dict, None, None)
     session = _make_session(cached_row)
     adapter = _adapter("digikey", {"description": "Should not be called"})
 
