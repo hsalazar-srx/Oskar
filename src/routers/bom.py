@@ -5,6 +5,7 @@ GET /api/v1/bom/{item_number}                 Single-level BOM browse (Slice A, 
 GET /api/v1/bom/{item_number}/indented         Multi-level explosion (Slice B, B-2)
 GET /api/v1/bom/{item_number}/where-used       Where-used lookup (Slice B, B-3)
 GET /api/v1/bom/{item_number}/export           TXT/CSV export (Slice F, I2-12)
+POST /api/v1/bom/{item_number}/enrich          Supplier attributes (Slice F, I2-12)
 """
 
 from __future__ import annotations
@@ -28,6 +29,8 @@ from src.services.bom.browse import get_single_level_bom
 from src.services.bom.compare import CompareOptions, diff_boms
 from src.services.bom.comparisons import get_comparison, insert_comparison
 from src.services.bom.customer_bom import CustomerLine, compare_customer_bom
+from src.adapters.suppliers.chain import SupplierChain
+from src.services.bom.enrich import enrich_bom_components
 from src.services.bom.explode import assemble_where_used, build_bom_tree
 from src.services.bom.export import UnsupportedExportFormat, export_bom
 from src.services.bom.models import BOMCycleError, BOMHead, BOMTreeNode, WhereUsedLine
@@ -826,4 +829,116 @@ async def export_bom_endpoint(
         headers={
             "Content-Disposition": f'attachment; filename="bom-{item_number}.{ext}"'
         },
+    )
+
+
+# ── Slice F: supplier attribute enrichment (I2-12) ───────────────────────────
+
+# Hard ceiling on the per-request lookup cap. The cap protects a SHARED daily
+# API budget (element14 and DigiKey are 1,000/day each), so a caller must not
+# be able to raise it arbitrarily from a query param — that would let one
+# request drain the budget for everyone.
+_MAX_LIVE_LOOKUP_CAP = 200
+
+# Statuses that mean "this result is not the whole picture, run it again"
+# — as opposed to no_mpn/not_found, which are real findings about the data.
+_INCOMPLETE_STATUSES = {"cap_reached", "lookup_failed"}
+
+
+class EnrichedComponentResponse(BaseModel):
+    sequence_number: int
+    component_number: str
+    description: str
+    mpn: str | None
+    status: str
+    attributes: dict[str, Any] = {}
+
+
+class BOMEnrichResponse(BaseModel):
+    """Enrichment result for one BOM.
+
+    `summary` counts components by status and `incomplete` says outright
+    whether a re-run would add anything — so a client does not need to know
+    which statuses imply "budget spent" or "supplier unreachable".
+    """
+
+    item_number: str
+    components: list[EnrichedComponentResponse]
+    summary: dict[str, int]
+    incomplete: bool
+
+
+@bom_router.post(
+    "/{item_number}/enrich",
+    response_model=BOMEnrichResponse,
+    summary="Enrich BOM components with supplier attributes (Slice F, I2-12)",
+)
+async def enrich_bom(
+    item_number: str,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    erp: Annotated[MovexRestAdapter, Depends(_get_erp_adapter)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    request: Request,
+    facility: Annotated[str, Query(max_length=5, description="Movex facility (MPDHED.FACI)")] = "D",
+    structure_type: Annotated[str, Query(max_length=3, description="Movex structure type (MPDHED.STRT)")] = "001",
+    live_lookup_cap: Annotated[
+        int | None,
+        Query(
+            ge=1,
+            le=_MAX_LIVE_LOOKUP_CAP,
+            description=(
+                "Max distinct MPNs to look up in this request. Omit for the "
+                "service default. Capped to protect a shared daily API budget."
+            ),
+        ),
+    ] = None,
+) -> BOMEnrichResponse:
+    """Look up supplier attributes for every component on a BOM.
+
+    Cache-first and capped — see src/services/bom/enrich.py for why the cap
+    is the central design constraint rather than a nicety. Components that
+    could not be enriched are returned with a status explaining why, never
+    dropped, so the gaps stay actionable.
+
+    POST rather than GET: this can spend real, limited API quota, which is a
+    side effect a GET should not have (and which caches/prefetchers would
+    happily trigger on their own).
+    """
+    try:
+        head = await get_single_level_bom(
+            erp, item_number, facility, structure_type=structure_type
+        )
+    except BOMNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No BOM found for item {item_number!r}.",
+        )
+    except (RuntimeError, httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException) as exc:
+        _raise_for_erp_error(exc)
+        raise  # unreachable
+
+    chain = SupplierChain(session, getattr(request.app.state, "supplier_adapters", []))
+    components = await enrich_bom_components(
+        session, head, chain, live_lookup_cap=live_lookup_cap
+    )
+
+    summary: dict[str, int] = {}
+    for component in components:
+        summary[component.status] = summary.get(component.status, 0) + 1
+
+    return BOMEnrichResponse(
+        item_number=item_number,
+        components=[
+            EnrichedComponentResponse(
+                sequence_number=c.sequence_number,
+                component_number=c.component_number,
+                description=c.description,
+                mpn=c.mpn,
+                status=c.status,
+                attributes=c.attributes,
+            )
+            for c in components
+        ],
+        summary=summary,
+        incomplete=any(s in _INCOMPLETE_STATUSES for s in summary),
     )

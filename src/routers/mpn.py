@@ -10,15 +10,18 @@ is matched: 'item' (item_number), 'mfr' (manufacturer_canonical), or 'mpn'
 """
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Query
+import sqlalchemy as sa
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.adapters.suppliers.chain import SupplierChain
 from src.auth.dependencies import CurrentUser, get_current_user
 from src.db import get_session
 from src.services.bom.mpn_master import search_item_mpns
+from src.services.bom.mpn_prefill import build_mpn_ecn_prefill
 
 mpn_router = APIRouter(prefix="/mpn", tags=["mpn"])
 
@@ -80,4 +83,72 @@ async def search_mpn(
         total=result.total,
         limit=result.limit,
         offset=result.offset,
+    )
+
+
+# ── Slice F: MPN-not-found → "Create ECN" prefill (I2-12) ────────────────────
+
+class MPNPrefillResponse(BaseModel):
+    """A ready-to-post ECN draft for adding an MPN Oskar does not yet have.
+
+    `ecn_draft` goes to the existing POST /ecn/ endpoint unchanged;
+    `staged_mpn` is then attached to the created ECN's item. This endpoint
+    deliberately does NOT create anything — see
+    src/services/bom/mpn_prefill.py on why there is one creation route.
+    """
+
+    mpn: str
+    ecn_draft: dict[str, Any]
+    staged_mpn: dict[str, Any]
+    supplier_data_found: bool
+    supplier_attributes: dict[str, Any] = {}
+
+
+@mpn_router.get(
+    "/prefill-ecn",
+    response_model=MPNPrefillResponse,
+    summary="Build a Create-ECN payload for an MPN not in the master (Slice F, I2-12)",
+)
+async def prefill_ecn_for_mpn(
+    mpn: Annotated[str, Query(min_length=1, max_length=30, description="The MPN to add")],
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    request: Request,
+    facility: Annotated[str, Query(max_length=10, description="Facility for the new ECN")] = "D",
+) -> MPNPrefillResponse:
+    """Turn an MPN search miss into a ready-to-submit ECN draft.
+
+    Returns 409 if the MPN already exists in item_mpns — offering to "add"
+    something already on file would produce a duplicate ECN and hide the
+    existing record from the user, which is worse than saying so plainly.
+
+    Supplier lookup is best-effort: `supplier_data_found` says whether the
+    chain answered, so the UI can distinguish "no supplier knows this part"
+    from "we could not reach the suppliers".
+    """
+    cleaned = mpn.strip().upper()
+
+    existing = await session.execute(
+        sa.text("SELECT item_number FROM item_mpns WHERE UPPER(mpn) = :mpn LIMIT 1"),
+        {"mpn": cleaned},
+    )
+    row = existing.first()
+    if row is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"MPN {cleaned!r} already exists in the MPN master "
+                f"(item {row[0]}) — no ECN is needed to add it."
+            ),
+        )
+
+    chain = SupplierChain(session, getattr(request.app.state, "supplier_adapters", []))
+    prefill = await build_mpn_ecn_prefill(cleaned, chain, facility=facility)
+
+    return MPNPrefillResponse(
+        mpn=cleaned,
+        ecn_draft=prefill.ecn_draft,
+        staged_mpn=prefill.staged_mpn,
+        supplier_data_found=prefill.supplier_data_found,
+        supplier_attributes=prefill.supplier_attributes,
     )
