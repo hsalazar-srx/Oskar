@@ -174,9 +174,32 @@ async def _run(item: str, facility: str, strt: str, mseq: int | None, destructiv
             print("   Delete returned: " + _fmt(result)[:400])
         except MovexHTTPError as exc:
             print(f"\n   FAILED: {exc}")
-            print("\n   >> OPTION 1 DOES NOT WORK. M3 will not resolve the line")
-            print("   >> on a 6-field key. Implement option 2: GetComponent")
-            print("   >> first, then Delete with the key M3 reports.")
+
+            # Not every 422 is a key-resolution failure. M3 refuses BOM
+            # changes for reasons that have nothing to do with FDAT, and
+            # treating those as "option 1 does not work" is exactly the wrong
+            # conclusion — live-hit 2026-09-01 on EP00004, where BOTH a
+            # zero-FDAT line AND a real-FDAT control line returned the
+            # identical "ECO is active" refusal.
+            body = (exc.response_text or "").lower()
+            unrelated_refusals = (
+                ("eco is active", "an ECO (engineering change order) is active on this BOM"),
+                ("may not be changed", "M3 has locked this BOM against changes"),
+                ("status", "the item or BOM status disallows the change"),
+            )
+            for needle, meaning in unrelated_refusals:
+                if needle in body:
+                    print(f"\n   >> INCONCLUSIVE — {meaning}.")
+                    print("   >> This refusal is NOT about FDAT: M3 resolved the line")
+                    print("   >> and then declined for an unrelated reason. Nothing was")
+                    print("   >> deleted. Pick a different parent with no active ECO and")
+                    print("   >> re-run — this tells us nothing about option 1 either way.")
+                    return 2
+
+            print("\n   >> Delete failed for a reason that may be key-related.")
+            print("   >> Read the response body above before concluding anything:")
+            print("   >> a 'does not exist' / 'sequence number' message points at the")
+            print("   >> key; anything else is probably an unrelated M3 rule.")
             return 1
 
         # ── read-back ────────────────────────────────────────────────────
