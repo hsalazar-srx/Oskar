@@ -86,6 +86,18 @@ class ECNBomChangesMixin:
             raise ECNValidationError(
                 f"change_type must be one of {sorted(VALID_BOM_CHANGE_TYPES)}, got '{change_type}'"
             )
+        # `is None`, deliberately — NOT a falsiness check.
+        #
+        # old_from_date == 0 is VALID and must pass. M3 legitimately stores
+        # FDAT=0 on old MPDMAT lines (EP00002 carries it on 65 of 66 lines,
+        # verified against live CONO=300 and CONO=100 on 2026-09-01), so a
+        # zero here faithfully identifies a real line. Rejecting it would
+        # block authoring changes against any legacy BOM.
+        #
+        # The FDAT=0 problem lives in the WRITE path, not here: M3 stores a
+        # zero but will not accept one as a Delete key. That is handled in
+        # MovexRestAdapter.delete_bom_component, which omits a zero FDAT so
+        # M3 resolves the line on the remaining six key fields.
         if change_type in ("CHANGE", "DELETE") and old_from_date is None:
             raise ECNValidationError(
                 "old_from_date is required for change_type CHANGE/DELETE"

@@ -624,6 +624,48 @@ class MovexRestAdapter(ERPAdapter):
         )
         return resp.json()
 
+    async def get_bom_component(
+        self,
+        parent_item: str,
+        sequence_number: int,
+        *,
+        facility: str = "D",
+        structure_type: str = "001",
+    ) -> dict[str, Any]:
+        """PDS002MI.GetComponent — read one MPDMAT line by its MSEQ.
+
+        Exists as the OPTION 2 fallback for the FDAT=0 delete problem
+        (ECN-2026-D-0021): if omitting a zero FDAT does not let M3 resolve a
+        line (option 1, see delete_bom_component), the alternative is to ask
+        M3 for the line's real key here and delete with whatever it reports.
+
+        NOT wired into the delete path — delete_bom_component still uses
+        option 1. Switch only if scripts/verify_delete_fdat_zero.py shows
+        option 1 failing.
+
+        Deliberately sends no FDAT: the value is what this call exists to
+        learn. Returns {} when the line does not exist, matching get_item's
+        contract so callers have one not-found shape.
+
+        The transaction is confirmed to exist — it was used for read-backs
+        during the Aug 2026 UpdateComponent/TDAT investigation (see
+        update_bom_component's docstring).
+        """
+        resp = await self._post(
+            "/PDS002MI/GetComponent",
+            json={
+                "CONO": self.cono,
+                "FACI": facility,
+                "PRNO": parent_item,
+                "STRT": structure_type,
+                "MSEQ": sequence_number,
+            },
+        )
+        payload = resp.json()
+        if payload.get("success") is False:
+            return {}
+        return payload.get("data") or {}
+
     async def delete_bom_component(
         self,
         parent_item: str,
@@ -665,17 +707,44 @@ class MovexRestAdapter(ERPAdapter):
              FDAT, per analysis/PDS002MI-routing-analysis.md) made the
              identical call succeed, and the line's removal was confirmed
              via a second B-1 read.
+
+        FDAT=0 handling (added 2026-09-01, ECN-2026-D-0021)
+        --------------------------------------------------
+        M3 legitimately STORES FDAT=0 on old MPDMAT lines but will not ACCEPT
+        a zero as a key value: EP00002 has 65 of 66 lines at zero (verified
+        through B-1 against both CONO=300 and CONO=100), and every Delete
+        Oskar sent for them was rejected 422. LFAM050001 passed the Aug 2026
+        test precisely because all 11 of its lines carry real dates.
+
+        So a zero (or absent) FDAT is OMITTED, leaving M3 to resolve the line
+        on the remaining six key fields. This is deliberately NOT a blanket
+        omission — point 3 above is the counter-example: dropping FDAT when a
+        REAL date exists made Delete fail on a line confirmed to exist. Real
+        dates are still sent; only zero is dropped.
+
+        UNVERIFIED against live M3 — whether Delete accepts a 6-field key is
+        exactly what could not be established from here. Run
+        scripts/verify_delete_fdat_zero.py against a CONO=300 line with
+        FDAT=0 before trusting this path. If M3 rejects it, the fallback is
+        to resolve the true key via PDS002MI.GetComponent first (confirmed to
+        exist; used for read-backs during the Aug 2026 testing) and delete
+        with whatever it reports.
         """
+        payload: dict[str, Any] = {
+            "CONO": self.cono,
+            "FACI": facility,
+            "PRNO": parent_item,
+            "STRT": structure_type,
+            "MSEQ": sequence_number if sequence_number is not None else operation_number,
+        }
+        # Send FDAT only when it is a real date. Zero is a value M3 stores but
+        # rejects as a key; sending it guarantees a 422.
+        if from_date:
+            payload["FDAT"] = from_date
+
         resp = await self._post(
             "/PDS002MI/Delete",
-            json={
-                "CONO": self.cono,
-                "FACI": facility,
-                "PRNO": parent_item,
-                "STRT": structure_type,
-                "MSEQ": sequence_number if sequence_number is not None else operation_number,
-                "FDAT": from_date,    # YYYYMMDD integer — required in practice, see docstring
-            },
+            json=payload,
             headers={"Idempotency-Key": idempotency_key},
         )
         return resp.json()
