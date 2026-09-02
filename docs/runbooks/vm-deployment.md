@@ -237,7 +237,7 @@ sudo docker run --rm \
   -w /app \
   -e DATABASE_URL=postgresql+asyncpg://oskar:oskar_staging_pass@oskar-db-staging:5432/oskar_staging \
   -v /opt/oskar-src/Oskar-master/scripts:/app/scripts:ro \
-  10.131.1.10/oskar/oskar-app:v0.1.0 \
+  10.131.1.10/oskar/oskar-app:v0.6 \
   python scripts/seed_demo.py
 ```
 
@@ -365,7 +365,26 @@ sed -i 's/TAG=v0.1.0/TAG=v0.1.1/' .env.staging
 sudo docker compose -f docker-compose.staging.yml --env-file .env.staging pull
 sudo docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
 sudo docker exec -w /app oskar-app-staging alembic upgrade head
+
+# ALWAYS restart the frontend LAST, after the backend has its final IP.
+# nginx caches the backend's IP at startup; a rebuilt backend gets a new one,
+# and every /api/ call then returns 502. See T-15.
+sudo docker restart oskar-frontend-staging
 ```
+
+**Post-redeploy smoke check** — run these three in order. They separate "backend broken"
+from "proxy stale", which look identical from the browser:
+
+```bash
+curl -s http://10.131.1.10:8001/health                              # {"status":"ok"} — app alive
+curl -s -o /dev/null -w '%{http_code}\n' http://10.131.1.10:8001/api/v1/ecn/   # 401 — routes work
+curl -s -o /dev/null -w '%{http_code}\n' http://10.131.1.10:8080/api/v1/ecn/   # 401 — proxy works
+```
+
+If the first two pass and the third returns **502**, it is T-15: restart the frontend.
+
+> Note `/api/v1/health` is NOT a route — use `/api/v1/health/live` or `/health` on 8001.
+> A smoke test written against `/api/v1/health` returns 404 and looks like a failed deploy.
 
 ---
 
@@ -655,6 +674,76 @@ location /api/ {
 
 After correcting `nginx.conf`, rebuild and redeploy the frontend image — the backend image
 does not need to change.
+
+---
+
+### T-15 — 502 Bad Gateway on every `/api/` call after redeploying the backend
+
+**This is the most likely thing to go wrong after any backend redeploy. Check it first.**
+
+**Symptom:** the site loads (`http://10.131.1.10:8080/` returns 200 and the SPA renders), but
+every API call returns **502 Bad Gateway** from nginx. The backend is completely healthy when
+hit directly.
+
+Distinguishing it from T-14 above: that one returns **404** with a FastAPI-shaped JSON body
+(nginx never forwards). This one returns **502** with nginx's own HTML error page.
+
+**Diagnosis — the pattern that identifies it:**
+
+```bash
+# Backend direct: healthy, routes work
+curl -s http://10.131.1.10:8001/health              # {"status":"ok","service":"oskar-app"}
+curl -s -o /dev/null -w '%{http_code}\n' \
+     http://10.131.1.10:8001/api/v1/ecn/            # 401 — route exists, auth required
+
+# Through nginx: everything 502
+curl -s -o /dev/null -w '%{http_code}\n' \
+     http://10.131.1.10:8080/api/v1/ecn/            # 502
+```
+
+Backend fine + everything proxied 502 = the proxy hop, not the app.
+
+Confirm from inside the frontend container:
+
+```bash
+sudo docker exec oskar-frontend-staging wget -qO- http://oskar-app-staging:8000/health
+```
+
+If that fails, nginx genuinely cannot reach the backend.
+
+**Cause:** nginx resolves the `proxy_pass` hostname **once, at startup**, and caches the IP.
+Rebuilding the backend gives its container a new IP on the Docker network, and the
+still-running frontend keeps proxying to the old, now-dead address.
+
+This is the residual cost of the T-14 fix: a literal hostname in `proxy_pass` (correct, and
+required) is reliable in every case *except* a backend restart. The variable-plus-resolver
+form would re-resolve, but fails far worse — silent 404s with nothing in the error log.
+
+**Fix — restart the frontend, not the backend:**
+
+```bash
+sudo docker restart oskar-frontend-staging
+```
+
+**Make it a habit:** after rebuilding `oskar-app`, always restart `oskar-frontend-staging`
+too, even when the frontend image has not changed. Restarting them in the wrong order
+reintroduces the problem — the frontend must come up *after* the backend has its final IP.
+
+```bash
+# Correct order after a backend-only redeploy
+sudo docker compose -f /opt/oskar/docker-compose.staging.yml up -d oskar-app-staging
+sudo docker restart oskar-frontend-staging
+```
+
+**Also restart the worker** after a backend rebuild. `process_outbox_entry` runs there, so a
+stale worker keeps executing the OLD adapter code even once the app container is new — which
+looks like "the fix did not deploy" when in fact only half of it did.
+
+> **Health-check note:** `/api/v1/health` is not a route. The real endpoints are
+> `/api/v1/health/live` and `/api/v1/health/ready` (the router carries a `/health` prefix and
+> is mounted under `v1_router`). The unprefixed `/health` on port 8001 is the container
+> healthcheck. Smoke tests written against `/api/v1/health` return 404 and look like a
+> deployment failure when nothing is wrong.
 
 ---
 
