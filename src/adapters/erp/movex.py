@@ -650,10 +650,27 @@ class MovexRestAdapter(ERPAdapter):
         The transaction is confirmed to exist — it was used for read-backs
         during the Aug 2026 UpdateComponent/TDAT investigation (see
         update_bom_component's docstring).
+
+        Uses GET with query params, not POST. Live-verified 2026-09-01: a POST
+        returns HTTP 400 {"success":false,"error":"Transaction is configured
+        for GET. Use the GET endpoint with query parameters."} — the mirror
+        image of get_item's POST-only trap (movex-rest-api rejects GET there).
+        Per-transaction, so neither verb can be assumed from another call.
+
+        Query-param names are UPPERCASE. This is a generic MI-transaction
+        route, so the case-sensitive MI field names apply even though the verb
+        is GET — unlike the bespoke B-1/B-2/B-3 BOM routes, which take
+        lowercase params. Live-verified 2026-09-01: lowercase returns HTTP 500
+        {"error":"Missing required fields: CONO, FACI, PRNO, STRT, MSEQ"}.
+
+        So the rule is NOT "GET means lowercase" — it is "generic MI routes
+        use uppercase MI field names regardless of verb; the hand-written BOM
+        read routes use lowercase". Confusing the two is the same class of
+        mistake that originally broke add_bom_component (I2-21).
         """
-        resp = await self._post(
+        resp = await self._get(
             "/PDS002MI/GetComponent",
-            json={
+            params={
                 "CONO": self.cono,
                 "FACI": facility,
                 "PRNO": parent_item,

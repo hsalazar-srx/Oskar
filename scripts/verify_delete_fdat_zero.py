@@ -103,21 +103,39 @@ async def _run(item: str, facility: str, strt: str, mseq: int | None, destructiv
         # ── 2. GetComponent — what key does M3 itself report? ────────────
         print("\n2. GetComponent — the fallback path, and M3's own view of the key")
         try:
-            got = await adapter._post(
-                "/PDS002MI/GetComponent",
-                json={
-                    "CONO": adapter.cono,
-                    "FACI": facility,
-                    "PRNO": item,
-                    "STRT": strt,
-                    "MSEQ": int(target["MSEQ"]),
-                },
+            # Uses the adapter method, not a hand-rolled call — it knows this
+            # transaction is GET-only (live-verified 2026-09-01: a POST returns
+            # HTTP 400 "Transaction is configured for GET").
+            body = await adapter.get_bom_component(
+                item,
+                int(target["MSEQ"]),
+                facility=facility,
+                structure_type=strt,
             )
-            body = got.json()
             print("   GetComponent (no FDAT) succeeded:")
             print("   " + _fmt(body).replace("\n", "\n   ")[:800])
-            reported = (body.get("data") or {}).get("FDAT")
-            if reported not in (None, "", 0, "0"):
+            reported = body.get("FDAT") if isinstance(body, dict) else None
+            reported_tdat = body.get("TDAT") if isinstance(body, dict) else None
+
+            # GetComponent's field parsing is BROKEN on movex-rest-api
+            # (live-verified 2026-09-01). It truncates and mis-splits values:
+            #   B-1 FDAT=20120514 TDAT=99999999
+            #   GC  FDAT=200      TDAT=1205        <- the same digits, wrong offsets
+            # and MTNO comes back None. A plausible date is 8 digits; anything
+            # shorter here is a parsing artefact, not M3's answer.
+            looks_truncated = (
+                (reported is not None and 0 < int(reported or 0) < 10000000)
+                or (reported_tdat is not None and 0 < int(reported_tdat or 0) < 10000000)
+                or body.get("MTNO") in (None, "")
+            )
+            if looks_truncated:
+                print(f"\n   >> GetComponent returned FDAT={reported!r} TDAT={reported_tdat!r} "
+                      f"MTNO={body.get('MTNO')!r}")
+                print("   >> These are TRUNCATED — its field offsets are wrong on")
+                print("   >> movex-rest-api. OPTION 2 IS NOT VIABLE: this call")
+                print("   >> cannot be trusted to report a key. Needs a fix on the")
+                print("   >> movex-rest-api side before it could be used.")
+            elif reported not in (None, "", 0, "0"):
                 print(f"\n   >> M3 reports FDAT={reported!r} for a line B-1 showed as 0.")
                 print("   >> Read and write disagree — OPTION 2 is the answer:")
                 print("   >> resolve the key via GetComponent, then delete with that value.")
