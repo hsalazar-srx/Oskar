@@ -17,6 +17,34 @@
 -- The adapter rebuilds the actual MI request at dispatch time, so the fixed
 -- code (omit a zero FDAT on Delete) applies to these existing rows with no
 -- data edit needed. Do NOT hand-edit mi_params.
+--
+-- ****************************************************************************
+-- SQL ALONE IS NOT ENOUGH. A 'pending' row is NOT polled.
+--
+-- Setting state='pending' does nothing on its own — it just sits there at
+-- attempt_count 0 forever (observed 2026-09-02). Nothing in this system polls
+-- for pending rows:
+--
+--   * The only beat task touching the outbox is sweep_stale_processing_entries
+--     (every 300s), and it reclaims rows stuck in 'processing' — not 'pending'.
+--   * Rows normally reach the worker via an explicit
+--     process_outbox_entry.apply_async(args=[id]) at the moment they are
+--     created or retried.
+--
+-- So every UPDATE below MUST be paired with a dispatch. PREFER THE ADMIN
+-- ENDPOINT, which does both halves atomically and records who did it:
+--
+--     POST /api/v1/admin/movex-outbox/{entry_id}/retry     (DC-only)
+--     GET  /api/v1/admin/movex-outbox                      (list failed/abandoned)
+--
+-- Use the SQL here only for inspection, or when the API is unavailable — and
+-- then dispatch manually (see DISPATCH below each UPDATE).
+--
+-- NOTE: the endpoint validates against _RETRYABLE_STATES (failed/abandoned).
+-- A row already sitting in 'pending' may be rejected; set it back first:
+--     UPDATE movex_outbox SET state='abandoned', attempt_count=10
+--     WHERE id = '<id>' AND state='pending';
+-- ****************************************************************************
 -- ============================================================================
 
 
@@ -56,6 +84,16 @@ SET state          = 'pending',
 WHERE id = '46d57494-4c93-4b03-8d93-1d3eb363f71f'
   AND state IN ('abandoned', 'failed');   -- guard: never touch a completed row
 
+-- DISPATCH — the UPDATE above does NOTHING without this. Run on the VM:
+--
+--   sudo docker exec oskar-worker-staging python -c "
+--   from src.tasks.movex_outbox import process_outbox_entry
+--   process_outbox_entry.apply_async(args=['46d57494-4c93-4b03-8d93-1d3eb363f71f'])
+--   print('dispatched')
+--   "
+--
+-- Or skip both steps and use the admin endpoint, which does them together.
+
 
 -- ---------------------------------------------------------------------------
 -- Q3. Watch it. Re-run every few seconds.
@@ -63,7 +101,9 @@ WHERE id = '46d57494-4c93-4b03-8d93-1d3eb363f71f'
 -- 'completed'  -> the fix works. Proceed to Q4.
 -- 'failed'     -> READ last_error. It now carries M3's real message (the
 --                 error-capture fix), so it will say WHY rather than just 422.
--- unchanged    -> the worker is not picking it up; check the beat/worker logs.
+-- unchanged    -> NO DISPATCH HAPPENED. This is the expected result if you ran
+--                 the UPDATE without the apply_async — 'pending' is not polled.
+--                 Dispatch it (see above), or use the admin retry endpoint.
 -- ---------------------------------------------------------------------------
 SELECT id, mi_transaction, state, attempt_count,
        last_error, completed_at
@@ -89,6 +129,26 @@ SET state          = 'pending',
     last_error     = NULL
 WHERE state IN ('abandoned', 'failed')
   AND ecn_id = (SELECT id FROM ecn_instances WHERE ecn_number = 'ECN-2026-D-0021');
+
+-- DISPATCH each reset row — again, the UPDATE alone does nothing.
+-- This dispatches every non-completed row for the ECN, so no ids to copy:
+--
+--   sudo docker exec oskar-worker-staging python -c "
+--   import os, psycopg2
+--   from src.tasks.movex_outbox import process_outbox_entry
+--   c = psycopg2.connect(os.environ['DATABASE_URL'].replace('+asyncpg',''))
+--   cur = c.cursor()
+--   cur.execute(\"\"\"SELECT o.id FROM movex_outbox o
+--                   JOIN ecn_instances e ON e.id = o.ecn_id
+--                   WHERE e.ecn_number = 'ECN-2026-D-0021'
+--                     AND o.state = 'pending'\"\"\")
+--   for (i,) in cur.fetchall():
+--       process_outbox_entry.apply_async(args=[str(i)])
+--       print('dispatched', i)
+--   "
+--
+-- Dispatch order does not matter: depends_on gating is enforced inside the
+-- task, so a row whose dependency has not completed re-schedules itself.
 
 
 -- ---------------------------------------------------------------------------
