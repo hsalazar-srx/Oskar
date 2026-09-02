@@ -41,6 +41,78 @@ from tenacity import (
 from src.adapters.erp.base import BOMNotFound, ERPAdapter
 
 # ---------------------------------------------------------------------------
+# HTTP error detail
+# ---------------------------------------------------------------------------
+
+# How much of an error body to inline into the exception message. The full
+# body is always kept on .response_text; this only bounds what lands in
+# last_error, so one HTML error page cannot bury the real message.
+_ERROR_BODY_MESSAGE_LIMIT = 2000
+
+
+class MovexHTTPError(httpx.HTTPStatusError):
+    """An HTTP error from movex-rest-api, carrying M3's actual message.
+
+    Why this exists (ECN-2026-D-0021, 2026-09-01): five BOM writes failed in
+    UAT recording nothing but httpx's generic
+
+        Client error '422 Unprocessable Entity' for url '.../PDS002MI/Delete'
+
+    The response body — where movex-rest-api puts M3's real message, e.g.
+    {"success": false, "error": "Sequence number ... does not exist"} — was
+    never read, because `raise_for_status()` does not read it. Ten retries per
+    row and a multi-day investigation followed, all of which the first line of
+    that body would have short-circuited.
+
+    Subclasses HTTPStatusError deliberately: every existing
+    `except httpx.HTTPStatusError` in this codebase (get_item's 404/422
+    swallow, the routers' _raise_for_erp_error, the retry predicate) keeps
+    working unchanged.
+
+    The `.status_code` / `.response_text` attribute names are load-bearing —
+    src/tasks/movex_outbox.py already reads exactly those off the exception to
+    populate ecn_movex_errors.http_status / .response_body. They resolved to
+    None for every HTTP failure until this class existed.
+    """
+
+    def __init__(self, message: str, *, request, response) -> None:
+        super().__init__(message, request=request, response=response)
+        self.status_code = response.status_code
+        self.response_text = _safe_response_text(response)
+
+
+def _safe_response_text(response: httpx.Response) -> str:
+    """Body as text, never raising — an error path must not fail on decode."""
+    try:
+        return response.text
+    except Exception:  # noqa: BLE001 — diagnostics must not mask the real error
+        return ""
+
+
+def _raise_with_body(response: httpx.Response) -> None:
+    """raise_for_status(), but with the response body in the message.
+
+    No-op for non-error statuses, matching raise_for_status's contract.
+    """
+    if response.status_code < 400:
+        return
+
+    body = _safe_response_text(response).strip()
+    if len(body) > _ERROR_BODY_MESSAGE_LIMIT:
+        body = body[:_ERROR_BODY_MESSAGE_LIMIT] + " …[truncated]"
+
+    kind = "Client error" if response.status_code < 500 else "Server error"
+    message = (
+        f"{kind} '{response.status_code} {response.reason_phrase}' "
+        f"for url '{response.request.url}'"
+    )
+    if body:
+        message += f" — response body: {body}"
+
+    raise MovexHTTPError(message, request=response.request, response=response)
+
+
+# ---------------------------------------------------------------------------
 # Resilience configuration
 # ---------------------------------------------------------------------------
 
@@ -181,7 +253,9 @@ class MovexRestAdapter(ERPAdapter):
         """GET with retry + circuit breaker."""
         async def _call() -> httpx.Response:
             resp = await self._http.get(path, **kwargs)
-            resp.raise_for_status()
+            # Not resp.raise_for_status(): that discards the body, which is
+            # where M3's actual error message lives. See MovexHTTPError.
+            _raise_with_body(resp)
             return resp
         return await _circuit_breaker.call_async(_call)
 
@@ -190,7 +264,8 @@ class MovexRestAdapter(ERPAdapter):
         """POST with retry + circuit breaker."""
         async def _call() -> httpx.Response:
             resp = await self._http.post(path, **kwargs)
-            resp.raise_for_status()
+            # Not resp.raise_for_status() — see _get above.
+            _raise_with_body(resp)
             return resp
         return await _circuit_breaker.call_async(_call)
 
