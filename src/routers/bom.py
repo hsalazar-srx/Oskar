@@ -34,6 +34,7 @@ from src.services.bom.enrich import enrich_bom_components
 from src.services.bom.explode import assemble_where_used, build_bom_tree
 from src.services.bom.export import UnsupportedExportFormat, export_bom
 from src.services.bom.models import BOMCycleError, BOMHead, BOMTreeNode, WhereUsedLine
+from src.services.bom.ref_des import enrich_ref_des
 from src.services.bom.snapshots import get_snapshot
 
 bom_router = APIRouter(prefix="/bom", tags=["bom"])
@@ -657,6 +658,7 @@ async def get_bom(
     item_number: str,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     erp: Annotated[MovexRestAdapter, Depends(_get_erp_adapter)],
+    session: Annotated[AsyncSession, Depends(get_session)],
     facility: Annotated[str, Query(max_length=5, description="Movex facility (MPDHED.FACI)")] = "D",
     structure_type: Annotated[str, Query(max_length=3, description="Movex structure type (MPDHED.STRT)")] = "001",
     bom_type: Annotated[str, Query(max_length=1, description="'M' = manufacturing BOM (default)")] = "M",
@@ -686,6 +688,11 @@ async def get_bom(
     except (RuntimeError, httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException) as exc:
         _raise_for_erp_error(exc)
         raise  # unreachable — _raise_for_erp_error always raises
+
+    # Designators live in Oskar's own bom_circuit_refs, not in M3 — M3's
+    # native BOM cannot hold them. Enriching here rather than inside
+    # get_single_level_bom keeps that function pure (no DB imports).
+    await enrich_ref_des(session, head)
 
     return _to_response(head)
 

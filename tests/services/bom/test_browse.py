@@ -13,14 +13,12 @@ when the suite actually runs. Only the production default path (as_of
 omitted) calls date.today() — see TestEffectivityFilterDefaultsToToday, which
 is written to tolerate any real "today" between now and year 9999.
 
-Ref-des / CPN-alias enrichment (2026-07-23 judgment call, see browse.py module
-docstring for full rationale): bom_circuit_refs (D4) does not exist until Slice
-E's migration 0028, and the C-1 circuit-refs contract endpoint is explicitly
-scoped "migration/backfill only" — not meant for live per-request browse
-traffic. Slice A leaves BOMLine.ref_des / customer_alias as a documented None
-no-op; test_ref_des_and_customer_alias_are_none_in_slice_a below is the
-regression guard for that decision so a future slice touching this file
-notices if it silently changes.
+Ref-des enrichment (resolved 2026-09-03): designators now come from
+src/services/bom/ref_des.py:enrich_ref_des, which reads the Oskar-owned
+bom_circuit_refs table (migration 0030). It is a separate composable step
+rather than part of get_single_level_bom, so this module stays pure and these
+tests need no database. TestRefDesAndCustomerAliasNoOp below guards that
+separation — see its docstring.
 """
 from __future__ import annotations
 
@@ -187,9 +185,18 @@ class TestEffectivityFilterDefaultsToToday:
 
 
 class TestRefDesAndCustomerAliasNoOp:
-    async def test_ref_des_and_customer_alias_are_none_in_slice_a(self):
-        """Regression guard for the documented Slice A judgment call — see
-        module docstring above and src/services/bom/browse.py."""
+    async def test_browse_alone_leaves_ref_des_and_customer_alias_none(self):
+        """browse stays PURE — it must never reach the DB itself.
+
+        ref_des is populated by src/services/bom/ref_des.py:enrich_ref_des,
+        which callers compose on top of this function. If someone later moves
+        that query in here, this test fails and the pure-function convention
+        (no DB imports, per models.py) gets a deliberate second look rather
+        than eroding silently.
+
+        customer_alias remains None everywhere — no adapter method wraps the
+        forward MMS025MI.GetAlias/LstAlias lookup yet.
+        """
         erp = FakeERPAdapter()
 
         head = await get_single_level_bom(erp, "LF100001", "D")

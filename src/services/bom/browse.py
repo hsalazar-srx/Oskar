@@ -3,20 +3,20 @@
 Merges ERPAdapter.get_bom's raw MPDHED/MPDMAT response (B-1) into BOMHead/
 BOMLine, applies the effectivity filter, and normalises ordering/padding.
 
-Ref-des / CPN-alias enrichment — documented gap (2026-07-23):
-The Iteration 2 plan (ai/tasks/oskar-iteration-2.md, Slice A) calls for BOM
-browse to "merge ERP lines + ref-des", but the Oskar-owned bom_circuit_refs
-table (D4) is not created until Slice E's migration 0028 — it does not exist
-yet, so there is nothing to read from. The C-1 circuit-refs contract endpoint
-(docs/movex-rest-api-bom-contract.md) is already stubbed and could technically
-be called today, but the contract doc explicitly scopes C-1 as "migration/
-backfill only... retired after cutover" — it is not meant to be hit on every
-live BOM browse request, and wiring a per-request dependency onto an endpoint
-documented as a one-time migration source would be the wrong architectural
-call (plus it sits outside this slice's authorised adapter-method boundary).
-Decision: BOMLine.ref_des is left None here — a documented no-op — until
-Slice E lands bom_circuit_refs and BOMBrowserPage can enrich against the real,
-Oskar-owned table.
+Ref-des enrichment — resolved 2026-09-03:
+The Slice A gap ("merge ERP lines + ref-des", deferred because
+bom_circuit_refs did not exist yet) is closed, but NOT in this module.
+bom_circuit_refs (D4) landed in migration 0030 and is read by
+src/services/bom/ref_des.py:enrich_ref_des.
+
+It lives there rather than here because this module is pure — no DB imports,
+per the models.py convention — and a per-request Postgres query inside
+get_single_level_bom would break that and force every browse test to stand up
+a database. Callers that need designators compose the two steps.
+
+C-1 is still not called on the live path: it remains migration/backfill-only
+per docs/movex-rest-api-bom-contract.md, which is what populates the
+Oskar-owned table that enrich_ref_des reads.
 
 customer_alias enrichment has the identical shape of problem: per
 lookup_by_alias's own docstring in src/adapters/erp/base.py, the correct

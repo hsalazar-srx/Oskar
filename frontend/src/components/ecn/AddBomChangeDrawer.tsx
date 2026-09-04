@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Spinner } from "@/components/ui/spinner"
+import { ChipInput } from "@/components/ui/chip-input"
 import { createEcnScopedBomChange, type BOMChangeBody } from "@/api/ecn"
 import { fetchBOM, type BOMHead, type BOMLine } from "@/api/bom"
 
@@ -53,7 +54,7 @@ interface FormState {
   old_from_date: string
   old_quantity: string
   old_operation_number: string
-  circuit_refs_new: string
+  circuit_refs_new: string[]
 }
 
 const EMPTY_FORM: FormState = {
@@ -68,7 +69,7 @@ const EMPTY_FORM: FormState = {
   old_from_date: "",
   old_quantity: "",
   old_operation_number: "",
-  circuit_refs_new: "",
+  circuit_refs_new: [],
 }
 
 /** Minimal shape of the axios errors this component reacts to. Avoids `any`
@@ -82,9 +83,24 @@ function toYyyymmdd(v: string): number | null {
   return parseInt(v.replace(/-/g, ""), 10)
 }
 
-function splitRefs(raw: string): string[] | null {
-  const refs = raw.split(",").map((r) => r.trim()).filter(Boolean)
+/** null, not [], when empty — the API distinguishes "no designators given"
+ * from "explicitly cleared to none". */
+function refsOrNull(refs: string[]): string[] | null {
   return refs.length > 0 ? refs : null
+}
+
+/** Next MSEQ for an ADD: the highest existing sequence rounded up to the next
+ * multiple of 10, mirroring the routing panel's (ops.length + 1) * 10.
+ *
+ * M3 BOMs here are sparse by design (EP00002 runs 20, 210, 460, 520), so
+ * "count + 1" would collide. Gaps are deliberate — they leave room to insert
+ * a component between two existing lines without renumbering the structure.
+ * Suggested only; the field stays editable.
+ */
+function suggestNextSequence(lines: BOMLine[]): number {
+  if (lines.length === 0) return 10
+  const max = Math.max(...lines.map((l) => l.sequence_number))
+  return Math.floor(max / 10) * 10 + 10
 }
 
 function formToBody(f: FormState): BOMChangeBody & { parent_item_number: string } {
@@ -102,7 +118,7 @@ function formToBody(f: FormState): BOMChangeBody & { parent_item_number: string 
     old_operation_number: f.old_operation_number.trim()
       ? parseInt(f.old_operation_number, 10)
       : null,
-    circuit_refs_new: splitRefs(f.circuit_refs_new),
+    circuit_refs_new: refsOrNull(f.circuit_refs_new),
   }
 }
 
@@ -191,7 +207,25 @@ export default function AddBomChangeDrawer({ ecnId, open, onClose, onSuccess }: 
       old_quantity: String(line.quantity),
       old_operation_number: String(line.operation_number),
       old_from_date: String(line.from_date),
-      circuit_refs_new: line.ref_des?.join(", ") ?? "",
+      // Seed from the line's real designators so a CHANGE starts from what is
+      // actually on the board rather than an empty field. ref_des is populated
+      // from bom_circuit_refs (Oskar-owned — M3 cannot hold designators);
+      // null means none were ever recorded for this line.
+      circuit_refs_new: line.ref_des ?? [],
+    }))
+    setApiError(null)
+  }
+
+  /** Start a fresh ADD against the browsed BOM, with the next free sequence
+   * already filled in — the number the user would otherwise have to work out
+   * by reading the list. */
+  function startAdd() {
+    const lines = bomQuery.data?.lines ?? []
+    setForm((f) => ({
+      ...EMPTY_FORM,
+      parent_item_number: f.parent_item_number,
+      change_type: "ADD",
+      sequence_number: String(suggestNextSequence(lines)),
     }))
     setApiError(null)
   }
@@ -267,6 +301,13 @@ export default function AddBomChangeDrawer({ ecnId, open, onClose, onSuccess }: 
                   <span className="text-[10px] text-neutral-400 ml-2">
                     {bomQuery.data.lines.length} line(s) · facility {bomQuery.data.facility}
                   </span>
+                  <button
+                    type="button"
+                    onClick={startAdd}
+                    className="float-right text-[11px] font-medium text-green-700 hover:bg-green-50 rounded px-2 py-0.5 transition-colors"
+                  >
+                    + Add component
+                  </button>
                 </div>
                 {/* Scroll region. The fade + "scroll for more" hint below
                     exist because a plain max-height cut a row in half at the
@@ -401,6 +442,18 @@ export default function AddBomChangeDrawer({ ecnId, open, onClose, onSuccess }: 
                   <Label className="text-xs font-medium text-neutral-600">Sequence</Label>
                   <Input type="number" value={form.sequence_number}
                          onChange={set("sequence_number")} className="h-8 text-xs font-mono" />
+                  {form.change_type === "ADD" && bomQuery.data && !form.sequence_number.trim() && (
+                    <button
+                      type="button"
+                      onClick={() => setForm((f) => ({
+                        ...f,
+                        sequence_number: String(suggestNextSequence(bomQuery.data!.lines)),
+                      }))}
+                      className="text-[10px] text-blue-600 hover:text-blue-800"
+                    >
+                      Use {suggestNextSequence(bomQuery.data.lines)}
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -432,10 +485,18 @@ export default function AddBomChangeDrawer({ ecnId, open, onClose, onSuccess }: 
             {form.change_type !== "DELETE" && (
               <div className="space-y-1">
                 <Label className="text-xs font-medium text-neutral-600">
-                  Reference designators (comma-separated)
+                  Reference designators
                 </Label>
-                <Input value={form.circuit_refs_new} onChange={set("circuit_refs_new")}
-                       className="h-8 text-xs font-mono" placeholder="R1, R7, R12" />
+                <ChipInput
+                  value={form.circuit_refs_new}
+                  onChange={(next) => setForm((f) => ({ ...f, circuit_refs_new: next }))}
+                />
+                {form.circuit_refs_new.length > 0 && (
+                  <p className="text-[10px] text-neutral-400">
+                    {form.circuit_refs_new.length} designator
+                    {form.circuit_refs_new.length === 1 ? "" : "s"}
+                  </p>
+                )}
               </div>
             )}
 

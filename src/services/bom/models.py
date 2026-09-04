@@ -17,10 +17,13 @@ from dataclasses import dataclass, field
 class BOMLine:
     """One MPDMAT component line (B-1 record), normalised for the service layer.
 
-    ref_des / customer_alias: intentionally None in Slice A — see
-    src/services/bom/browse.py module docstring for the documented judgment
-    call (bom_circuit_refs (D4) does not exist until Slice E's migration 0028;
-    C-1 is migration/backfill-only, not a live per-request source).
+    ref_des: None means "never recorded", which is deliberately distinct from
+    [] ("recorded as having no designators"). get_single_level_bom always
+    leaves it None — browse.py is pure and does not touch the DB; callers
+    that want designators compose src.services.bom.ref_des.enrich_ref_des.
+
+    customer_alias: still None everywhere — the forward item -> alias lookup
+    (MMS025MI.GetAlias/LstAlias) has no ERPAdapter method yet.
     """
 
     sequence_number: int          # MSEQ
@@ -33,8 +36,8 @@ class BOMLine:
     to_date: int                    # TDAT (YYYYMMDD; 99999999 = open-ended)
     item_type: str | None = None      # ITTY
     status: str | None = None         # STAT
-    ref_des: list[str] | None = None       # TODO Slice E: bom_circuit_refs (D4)
-    customer_alias: str | None = None      # TODO: MMS025MI.GetAlias/LstAlias forward lookup — out of Slice A/B scope
+    ref_des: list[str] | None = None       # bom_circuit_refs (D4), via ref_des.enrich_ref_des
+    customer_alias: str | None = None      # TODO: MMS025MI.GetAlias/LstAlias forward lookup — no adapter method yet
 
 
 @dataclass

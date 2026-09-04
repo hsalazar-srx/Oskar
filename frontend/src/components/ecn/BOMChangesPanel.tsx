@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Spinner } from "@/components/ui/spinner"
+import { ChipInput } from "@/components/ui/chip-input"
+import { cn } from "@/lib/utils"
 import {
   fetchBomChanges,
   createBomChange,
@@ -65,7 +67,7 @@ interface FormState {
   from_date: string
   old_from_date: string
   old_quantity: string
-  circuit_refs_new: string // comma-separated in the UI, split to array on save
+  circuit_refs_new: string[] // ChipInput owns parsing/range-expansion
 }
 
 const EMPTY_FORM: FormState = {
@@ -77,16 +79,13 @@ const EMPTY_FORM: FormState = {
   from_date: "",
   old_from_date: "",
   old_quantity: "",
-  circuit_refs_new: "",
+  circuit_refs_new: [],
 }
 
-function splitRefs(raw: string): string[] | null {
-  const refs = raw.split(",").map((r) => r.trim()).filter(Boolean)
+/** null, not [], when empty — the API distinguishes "no designators given"
+ * from "explicitly cleared to none". */
+function refsOrNull(refs: string[]): string[] | null {
   return refs.length > 0 ? refs : null
-}
-
-function joinRefs(refs: string[] | null | undefined): string {
-  return refs && refs.length > 0 ? refs.join(", ") : ""
 }
 
 function toYyyymmdd(v: string): number | null {
@@ -104,7 +103,7 @@ function formToBody(f: FormState): BOMChangeBody {
     from_date: toYyyymmdd(f.from_date),
     old_from_date: toYyyymmdd(f.old_from_date),
     old_quantity: f.old_quantity.trim() ? parseFloat(f.old_quantity) : null,
-    circuit_refs_new: splitRefs(f.circuit_refs_new),
+    circuit_refs_new: refsOrNull(f.circuit_refs_new),
   }
 }
 
@@ -118,7 +117,7 @@ function changeToForm(c: BOMChange): FormState {
     from_date: c.from_date != null ? String(c.from_date) : "",
     old_from_date: c.old_from_date != null ? String(c.old_from_date) : "",
     old_quantity: c.old_quantity != null ? String(c.old_quantity) : "",
-    circuit_refs_new: joinRefs(c.circuit_refs_new),
+    circuit_refs_new: c.circuit_refs_new ?? [],
   }
 }
 
@@ -416,12 +415,25 @@ function BOMChangeRow({
           )}
         </div>
 
-        {/* Ref-des editor summary (D4) */}
-        {(change.circuit_refs_new?.length || change.circuit_refs_old?.length) && (
+        {/* Ref-des summary (D4). Shows old → new when both are known: the row
+            checked for circuit_refs_old but only ever rendered the new side,
+            so a designator change was invisible in the list. */}
+        {(change.circuit_refs_new?.length || change.circuit_refs_old?.length) ? (
           <div className="mt-1 text-xs text-neutral-500">
-            Ref-des: <span className="font-mono text-neutral-700">{joinRefs(change.circuit_refs_new) || "—"}</span>
+            Ref-des:{" "}
+            {change.circuit_refs_old?.length ? (
+              <>
+                <span className="font-mono text-neutral-400 line-through">
+                  {change.circuit_refs_old.join(", ")}
+                </span>
+                <span className="mx-1 text-neutral-400">→</span>
+              </>
+            ) : null}
+            <span className="font-mono text-neutral-700">
+              {change.circuit_refs_new?.length ? change.circuit_refs_new.join(", ") : "—"}
+            </span>
           </div>
-        )}
+        ) : null}
       </div>
 
       {/* Actions */}
@@ -445,6 +457,27 @@ function BOMChangeRow({
         </div>
       )}
     </div>
+  )
+}
+
+/** Designator count vs. quantity.
+ *
+ * On a PCB assembly these normally match: 4 of a resistor means 4 places on
+ * the board. A mismatch is often a real mistake, but not always — panelised
+ * boards and bulk items legitimately differ — so this informs and never
+ * blocks.
+ */
+function RefDesCountHint({ refs, quantity }: { refs: string[]; quantity: string }) {
+  if (refs.length === 0) return null
+
+  const qty = parseFloat(quantity)
+  const mismatch = Number.isFinite(qty) && qty > 0 && qty !== refs.length
+
+  return (
+    <p className={cn("text-[10px]", mismatch ? "text-amber-700" : "text-neutral-400")}>
+      {refs.length} designator{refs.length === 1 ? "" : "s"}
+      {mismatch && ` — quantity is ${qty}. Check this is intended.`}
+    </p>
   )
 }
 
@@ -543,13 +576,12 @@ function BOMChangeForm({
 
       {/* Ref-des editor (D4) */}
       <div className="space-y-1">
-        <Label className="text-xs font-medium text-neutral-600">Reference designators (comma-separated)</Label>
-        <Input
+        <Label className="text-xs font-medium text-neutral-600">Reference designators</Label>
+        <ChipInput
           value={form.circuit_refs_new}
-          onChange={set("circuit_refs_new")}
-          className="h-8 text-xs font-mono"
-          placeholder="R1, R7, R12"
+          onChange={(next) => setForm({ ...form, circuit_refs_new: next })}
         />
+        <RefDesCountHint refs={form.circuit_refs_new} quantity={form.quantity} />
       </div>
 
       {apiError && <p className="text-xs text-red-600">{apiError}</p>}
