@@ -1,5 +1,11 @@
 # OSKAR Workbench Planning Module — Multi-Expert Impact Analysis
 
+> **Superseded 2026-08-27 — see [ADR-015](../../../decisions/ADR-015-workbench-planning-module-scope-deferred.md).**
+> This draft was never closed out (no ADR was written, the risk register was never updated — its
+> R-17–R-21 IDs are now occupied by unrelated risks). ADR-015 re-checks its preconditions against
+> current facts and records deferral as a real, dated decision. Read ADR-015 first; this document
+> is background only.
+
 ## Context
 
 Karen Lewin (Scanfil APAC IT, project sponsor) has added a "Workbench Planning Module" to the OSKAR Engineering Intelligence Platform deliverables. This module was **explicitly excluded** from Stage 1 on 2026-03-13 as *"too complex; deferred to later phase"* (documented in `c:/Projects/Knowledge-Management/vault/projects/sm-portal-ecn-rewrite.md` line 33).
