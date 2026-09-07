@@ -802,10 +802,12 @@ class ECNWorkflowMixin:
     async def _queue_alias_outbox(self, ecn_id: str) -> list[str]:
         rows = await self._session.execute(
             sa.text(
+                # ADR-016 — anchored on m.ecn_id. The old INNER join through
+                # ecn_items meant a standalone MPN was never queued and its
+                # alias never reached M3, with nothing reporting a failure.
                 "SELECT m.id, m.ecn_item_id, m.mpn, m.manufacturer, m.is_default "
                 "FROM ecn_mpns m "
-                "JOIN ecn_items i ON i.id = m.ecn_item_id "
-                "WHERE i.ecn_id = :ecn_id AND m.alias_written = FALSE"
+                "WHERE m.ecn_id = :ecn_id AND m.alias_written = FALSE"
             ),
             {"ecn_id": ecn_id},
         )
@@ -821,7 +823,11 @@ class ECNWorkflowMixin:
                     "ON CONFLICT (idempotency_key) DO NOTHING RETURNING id"
                 ),
                 {
-                    "id": new_id, "ecn_id": ecn_id, "item_id": str(item_id),
+                    # movex_outbox.ecn_item_id is already nullable, so a
+                    # standalone MPN needs no schema change here — but str()
+                    # on a None would write the literal string "None".
+                    "id": new_id, "ecn_id": ecn_id,
+                    "item_id": str(item_id) if item_id is not None else None,
                     "mi_tx": "MMS025MI.AddAlias",
                     "mi_params": json.dumps({"mpn": mpn, "manufacturer": manufacturer, "is_default": bool(is_default)}),
                     "ikey": idempotency_key,
@@ -850,10 +856,12 @@ class ECNWorkflowMixin:
         rows = (
             await self._session.execute(
                 sa.text(
-                    "SELECT m.mpn, m.manufacturer, m.is_default, i.item_number "
+                    # ADR-016 — item_number comes from the MPN row itself and
+                    # the anchor is m.ecn_id, so standalone MPNs reach the
+                    # master too. The old INNER join silently skipped them.
+                    "SELECT m.mpn, m.manufacturer, m.is_default, m.item_number "
                     "FROM ecn_mpns m "
-                    "JOIN ecn_items i ON i.id = m.ecn_item_id "
-                    "WHERE i.ecn_id = :ecn_id"
+                    "WHERE m.ecn_id = :ecn_id"
                 ),
                 {"ecn_id": ecn_id},
             )

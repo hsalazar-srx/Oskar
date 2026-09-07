@@ -129,9 +129,10 @@ WITH history AS (
 
     UNION ALL
 
-    -- 4. An MPN was added or changed against this item. ecn_mpns reaches its
-    --    ECN only through ecn_items (it has no ecn_id of its own), so this
-    --    branch joins through the item row.
+    -- 4. An MPN was added or changed against this item. Since ADR-016,
+    --    ecn_mpns carries its own ecn_id and item_number, so this branch no
+    --    longer joins through the item row — which would have hidden every
+    --    standalone MPN from the item's own history.
     SELECT
         e.id, e.ecn_number, e.title, e.status, e.originator_username,
         e.facility, e.created_at,
@@ -142,9 +143,8 @@ WITH history AS (
                CASE WHEN m.is_default THEN ' [default]' ELSE '' END),
         NULL::varchar
     FROM ecn_mpns m
-    JOIN ecn_items i  ON i.id = m.ecn_item_id
-    JOIN ecn_instances e ON e.id = i.ecn_id
-    WHERE i.item_number = :item_number
+    JOIN ecn_instances e ON e.id = m.ecn_id
+    WHERE m.item_number = :item_number
 )
 SELECT * FROM history
 ORDER BY created_at DESC, ecn_number DESC, change_type
@@ -156,8 +156,7 @@ SELECT
     (SELECT COUNT(*) FROM ecn_items WHERE item_number = :item_number)
   + (SELECT COUNT(*) FROM ecn_bom_changes WHERE parent_item_number = :item_number)
   + (SELECT COUNT(*) FROM ecn_bom_changes WHERE component_number = :item_number)
-  + (SELECT COUNT(*) FROM ecn_mpns m JOIN ecn_items i ON i.id = m.ecn_item_id
-     WHERE i.item_number = :item_number)
+  + (SELECT COUNT(*) FROM ecn_mpns WHERE item_number = :item_number)
 """)
 
 

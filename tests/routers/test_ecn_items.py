@@ -8,8 +8,8 @@ PATCH  /api/v1/ecn/{ecn_id}/items/{item_id}     — Update item fields
 DELETE /api/v1/ecn/{ecn_id}/items/{item_id}     — Remove item
 
 POST   /api/v1/ecn/{ecn_id}/items/{item_id}/mpns            — Add MPN
-PATCH  /api/v1/ecn/{ecn_id}/items/{item_id}/mpns/{mpn_id}  — Update MPN (extended fields)
-DELETE /api/v1/ecn/{ecn_id}/items/{item_id}/mpns/{mpn_id}  — Remove MPN
+PATCH  /api/v1/ecn/{ecn_id}/mpns/{mpn_id}  — Update MPN (ECN-scoped, ADR-016)
+DELETE /api/v1/ecn/{ecn_id}/mpns/{mpn_id}  — Remove MPN (ECN-scoped, ADR-016)
 
 MPN extended fields (migration 0007, Engineering Team 2026-04-29):
   msl_level        SMALLINT 1–6
@@ -554,10 +554,10 @@ class TestCreateMPN:
         assert resp.status_code == 401
 
 
-# ── PATCH /ecn/{ecn_id}/items/{item_id}/mpns/{mpn_id} ───────────────────────
+# ── PATCH /ecn/{ecn_id}/mpns/{mpn_id} ────────────────────────────────────────
 
 class TestUpdateMPN:
-    """PATCH /api/v1/ecn/{ecn_id}/items/{item_id}/mpns/{mpn_id} — extended fields"""
+    """PATCH /api/v1/ecn/{ecn_id}/mpns/{mpn_id} — extended fields (ADR-016)"""
 
     def test_returns_200_updated_mpn(self):
         updated = dataclasses.replace(_MPN_DETAIL, msl_level=2, lifecycle="nrnd", do_not_buy=True)
@@ -565,7 +565,7 @@ class TestUpdateMPN:
             mock.return_value = updated
             client = _make_client(_ENGINEER)
             resp = client.patch(
-                f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/mpns/{_MPN_ID}",
+                f"/api/v1/ecn/{_ECN_ID}/mpns/{_MPN_ID}",
                 json={"msl_level": 2, "lifecycle": "nrnd", "do_not_buy": True},
             )
         assert resp.status_code == 200
@@ -579,7 +579,7 @@ class TestUpdateMPN:
             mock.return_value = updated
             client = _make_client(_ENGINEER)
             resp = client.patch(
-                f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/mpns/{_MPN_ID}",
+                f"/api/v1/ecn/{_ECN_ID}/mpns/{_MPN_ID}",
                 json={"alt_mpn": "PN-ACME-002"},
             )
         assert resp.status_code == 200
@@ -595,7 +595,7 @@ class TestUpdateMPN:
             mock.return_value = updated
             client = _make_client(_ENGINEER)
             resp = client.patch(
-                f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/mpns/{_MPN_ID}",
+                f"/api/v1/ecn/{_ECN_ID}/mpns/{_MPN_ID}",
                 json={"notes": "NRND — use alt for new designs only"},
             )
         assert resp.status_code == 200
@@ -619,7 +619,7 @@ class TestUpdateMPN:
             mock.return_value = updated
             client = _make_client(_ENGINEER)
             resp = client.patch(
-                f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/mpns/{_MPN_ID}",
+                f"/api/v1/ecn/{_ECN_ID}/mpns/{_MPN_ID}",
                 json={"lead_time_weeks": 12},
             )
         assert resp.status_code == 200
@@ -631,7 +631,7 @@ class TestUpdateMPN:
             mock.side_effect = ECNNotFound("mpn not found")
             client = _make_client(_ENGINEER)
             resp = client.patch(
-                f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/mpns/no-such",
+                f"/api/v1/ecn/{_ECN_ID}/mpns/no-such",
                 json={"msl_level": 2},
             )
         assert resp.status_code == 404
@@ -639,7 +639,7 @@ class TestUpdateMPN:
     def test_invalid_msl_level_returns_422(self):
         client = _make_client(_ENGINEER)
         resp = client.patch(
-            f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/mpns/{_MPN_ID}",
+            f"/api/v1/ecn/{_ECN_ID}/mpns/{_MPN_ID}",
             json={"msl_level": 0},  # must be 1–6
         )
         assert resp.status_code == 422
@@ -649,7 +649,7 @@ class TestUpdateMPN:
             mock.return_value = _MPN_DETAIL
             client = _make_client(_ENGINEER)
             client.patch(
-                f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/mpns/{_MPN_ID}",
+                f"/api/v1/ecn/{_ECN_ID}/mpns/{_MPN_ID}",
                 json={"lifecycle": "active"},
             )
         mock.assert_awaited_once()
@@ -666,7 +666,7 @@ class TestDeleteMPN:
             mock.return_value = None
             client = _make_client(_ENGINEER)
             resp = client.delete(
-                f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/mpns/{_MPN_ID}"
+                f"/api/v1/ecn/{_ECN_ID}/mpns/{_MPN_ID}"
             )
         assert resp.status_code == 204
 
@@ -676,6 +676,6 @@ class TestDeleteMPN:
             mock.side_effect = ECNNotFound("mpn not found")
             client = _make_client(_ENGINEER)
             resp = client.delete(
-                f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/mpns/no-such"
+                f"/api/v1/ecn/{_ECN_ID}/mpns/no-such"
             )
         assert resp.status_code == 404

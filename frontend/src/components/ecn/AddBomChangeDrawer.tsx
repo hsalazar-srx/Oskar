@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Spinner } from "@/components/ui/spinner"
 import { ChipInput } from "@/components/ui/chip-input"
-import { createEcnScopedBomChange, type BOMChangeBody } from "@/api/ecn"
+import { createBomChange, type BOMChangeBody } from "@/api/ecn"
 import { fetchBOM, type BOMHead, type BOMLine } from "@/api/bom"
 
 /**
@@ -160,7 +160,7 @@ export default function AddBomChangeDrawer({ ecnId, open, onClose, onSuccess }: 
 
   const createMut = useMutation({
     mutationFn: (body: BOMChangeBody & { parent_item_number: string }) =>
-      createEcnScopedBomChange(ecnId, body),
+      createBomChange(ecnId, null, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["ecn-bom-changes-all", ecnId] })
       setForm({ ...EMPTY_FORM, parent_item_number: form.parent_item_number })

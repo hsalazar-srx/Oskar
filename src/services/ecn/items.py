@@ -23,6 +23,14 @@ from src.workflow.machine import ECNStatus
 
 VALID_MOUNTING_TYPES = {"TH", "SMD", "MECHANICAL", "OTHER"}
 
+# Column order is load-bearing: _row_to_mpn reads by index, and item_number
+# must stay at position 16 so the aggregate query can append line_number as 17.
+_MPN_COLUMNS = (
+    "id, ecn_item_id, mpn, manufacturer, is_default, alias_written, "
+    "msl_level, lifecycle, lead_time_weeks, eol_date, packaging_type, "
+    "do_not_buy, alt_mpn, notes, supplier_data_at, created_at, item_number"
+)
+
 
 class ECNItemsMixin:
     """Item and MPN CRUD operations mixed into ECNService."""
@@ -55,7 +63,9 @@ class ECNItemsMixin:
         eol_raw = row[9]
         return ECNMPNDetail(
             id=str(row[0]),
-            ecn_item_id=str(row[1]),
+            # str() only when there is a value — ecn_item_id is nullable since
+            # ADR-016, and str(None) would hand callers the string "None".
+            ecn_item_id=str(row[1]) if row[1] is not None else None,
             mpn=row[2],
             manufacturer=row[3],
             is_default=bool(row[4]),
@@ -70,6 +80,11 @@ class ECNItemsMixin:
             notes=row[13],
             supplier_data_at=row[14],
             created_at=row[15],
+            # item_number is column 16 on every MPN select (a real column
+            # since 0034). line_number only exists on the aggregate query,
+            # which appends it as column 17.
+            item_number=row[16] if len(row) > 16 else None,
+            line_number=row[17] if len(row) > 17 else None,
         )
 
     def _row_to_item(self, row: Any, mpns: list[ECNMPNDetail]) -> ECNItemDetail:
@@ -103,9 +118,7 @@ class ECNItemsMixin:
     async def _fetch_mpns(self, item_id: str) -> list[ECNMPNDetail]:
         rows = await self._session.execute(
             sa.text(
-                "SELECT id, ecn_item_id, mpn, manufacturer, is_default, alias_written, "
-                "msl_level, lifecycle, lead_time_weeks, eol_date, packaging_type, "
-                "do_not_buy, alt_mpn, notes, supplier_data_at, created_at "
+                f"SELECT {_MPN_COLUMNS} "
                 "FROM ecn_mpns WHERE ecn_item_id = :item_id ORDER BY is_default DESC, created_at"
             ),
             {"item_id": item_id},
@@ -114,12 +127,7 @@ class ECNItemsMixin:
 
     async def _get_mpn(self, mpn_id: str) -> ECNMPNDetail:
         row = await self._session.execute(
-            sa.text(
-                "SELECT id, ecn_item_id, mpn, manufacturer, is_default, alias_written, "
-                "msl_level, lifecycle, lead_time_weeks, eol_date, packaging_type, "
-                "do_not_buy, alt_mpn, notes, supplier_data_at, created_at "
-                "FROM ecn_mpns WHERE id = :mpn_id"
-            ),
+            sa.text(f"SELECT {_MPN_COLUMNS} FROM ecn_mpns WHERE id = :mpn_id"),
             {"mpn_id": mpn_id},
         )
         r = row.first()
@@ -396,8 +404,9 @@ class ECNItemsMixin:
     async def create_mpn(
         self,
         ecn_id: str,
-        item_id: str,
+        item_id: str | None,
         *,
+        item_number: str | None = None,
         mpn: str,
         manufacturer: str | None = None,
         is_default: bool = False,
@@ -410,26 +419,58 @@ class ECNItemsMixin:
         alt_mpn: str | None = None,
         notes: str | None = None,
     ) -> ECNMPNDetail:
+        """Create an MPN change, with or without an item row (ADR-016).
+
+        item_id given  — the item must be on this ECN; item_number is taken
+                         from it, and ecn_item_id records the link.
+        item_id None   — item_number is required and stored directly, the way
+                         Stargile's ZECNMPNI carries CMITNO in its own key.
+        """
         await self._require_draft(ecn_id)
-        item_row = await self._session.execute(
-            sa.text("SELECT id FROM ecn_items WHERE id = :item_id AND ecn_id = :ecn_id"),
-            {"item_id": item_id, "ecn_id": ecn_id},
-        )
-        if not item_row.first():
-            raise ECNNotFound(item_id)
+
+        if item_id is not None:
+            item_row = await self._session.execute(
+                sa.text(
+                    "SELECT item_number FROM ecn_items "
+                    "WHERE id = :item_id AND ecn_id = :ecn_id"
+                ),
+                {"item_id": item_id, "ecn_id": ecn_id},
+            )
+            row = item_row.first()
+            if not row:
+                raise ECNNotFound(item_id)
+            # The item is the authority when it is named — an item_number
+            # argument that disagrees with it would silently split the row's
+            # identity from the item it points at.
+            item_number = row[0]
+        else:
+            if not item_number or not item_number.strip():
+                raise ECNValidationError(
+                    "item_number is required when no item_id is given — a "
+                    "standalone MPN change still has to name its item."
+                )
+            item_number = item_number.strip().upper()
+            ecn_row = await self._session.execute(
+                sa.text("SELECT id FROM ecn_instances WHERE id = :ecn_id"),
+                {"ecn_id": ecn_id},
+            )
+            if not ecn_row.first():
+                raise ECNNotFound(ecn_id)
 
         mpn_id = str(uuid.uuid4())
         await self._session.execute(
             sa.text(
                 "INSERT INTO ecn_mpns "
-                "(id, ecn_item_id, mpn, manufacturer, is_default, msl_level, lifecycle, "
-                "eol_date, lead_time_weeks, packaging_type, do_not_buy, alt_mpn, notes) "
-                "VALUES (:id, :item_id, :mpn, :manufacturer, :is_default, :msl_level, "
-                ":lifecycle, :eol_date, :lead_time_weeks, :packaging_type, :do_not_buy, "
-                ":alt_mpn, :notes)"
+                "(id, ecn_id, ecn_item_id, item_number, mpn, manufacturer, is_default, "
+                "msl_level, lifecycle, eol_date, lead_time_weeks, packaging_type, "
+                "do_not_buy, alt_mpn, notes) "
+                "VALUES (:id, :ecn_id, :item_id, :item_number, :mpn, :manufacturer, "
+                ":is_default, :msl_level, :lifecycle, :eol_date, :lead_time_weeks, "
+                ":packaging_type, :do_not_buy, :alt_mpn, :notes)"
             ),
             {
-                "id": mpn_id, "item_id": item_id, "mpn": mpn,
+                "id": mpn_id, "ecn_id": ecn_id, "item_id": item_id,
+                "item_number": item_number, "mpn": mpn,
                 "manufacturer": manufacturer, "is_default": is_default,
                 "msl_level": msl_level, "lifecycle": lifecycle, "eol_date": eol_date,
                 "lead_time_weeks": lead_time_weeks, "packaging_type": packaging_type,
@@ -442,9 +483,10 @@ class ECNItemsMixin:
         await self._require_draft(ecn_id)
         row = await self._session.execute(
             sa.text(
-                "SELECT m.id FROM ecn_mpns m "
-                "JOIN ecn_items i ON i.id = m.ecn_item_id "
-                "WHERE m.id = :mpn_id AND i.ecn_id = :ecn_id"
+                # ADR-016 — anchored on ecn_id directly. The old join through
+                # ecn_items was an INNER join, so a standalone MPN would fail
+                # this ownership check and read as "not found".
+                "SELECT id FROM ecn_mpns WHERE id = :mpn_id AND ecn_id = :ecn_id"
             ),
             {"mpn_id": mpn_id, "ecn_id": ecn_id},
         )
@@ -467,9 +509,10 @@ class ECNItemsMixin:
         await self._require_draft(ecn_id)
         row = await self._session.execute(
             sa.text(
-                "SELECT m.id FROM ecn_mpns m "
-                "JOIN ecn_items i ON i.id = m.ecn_item_id "
-                "WHERE m.id = :mpn_id AND i.ecn_id = :ecn_id"
+                # ADR-016 — anchored on ecn_id directly. The old join through
+                # ecn_items was an INNER join, so a standalone MPN would fail
+                # this ownership check and read as "not found".
+                "SELECT id FROM ecn_mpns WHERE id = :mpn_id AND ecn_id = :ecn_id"
             ),
             {"mpn_id": mpn_id, "ecn_id": ecn_id},
         )
@@ -535,20 +578,22 @@ class ECNItemsMixin:
         created_ids: list[str] = []
         for idx, row in enumerate(rows, start=1):
             item_number = row["item_number"]
+            # ADR-016 — an item that is not on this ECN is no longer an error.
+            # The row stands alone with its item_number, exactly as ADR-014
+            # did for BOM-change upload. item_id stays None and the row is
+            # linked only when the item happens to be present.
             item_id = item_by_number.get(item_number)
-            if item_id is None:
-                raise ECNValidationError(
-                    f"Row {idx}: item_number '{item_number}' was not found on this "
-                    "ECN — add it via item upload first"
-                )
             mpn_id = str(uuid.uuid4())
             await self._session.execute(
                 sa.text(
-                    "INSERT INTO ecn_mpns (id, ecn_item_id, mpn, manufacturer, is_default) "
-                    "VALUES (:id, :item_id, :mpn, :manufacturer, :is_default)"
+                    "INSERT INTO ecn_mpns "
+                    "(id, ecn_id, ecn_item_id, item_number, mpn, manufacturer, is_default) "
+                    "VALUES (:id, :ecn_id, :item_id, :item_number, :mpn, :manufacturer, "
+                    ":is_default)"
                 ),
                 {
-                    "id": mpn_id, "item_id": item_id, "mpn": row["mpn"],
+                    "id": mpn_id, "ecn_id": ecn_id, "item_id": item_id,
+                    "item_number": item_number, "mpn": row["mpn"],
                     "manufacturer": row.get("manufacturer"),
                     "is_default": bool(row.get("is_default", False)),
                 },
@@ -570,16 +615,22 @@ class ECNItemsMixin:
         if not ecn_row.first():
             raise ECNNotFound(ecn_id)
 
+        # ADR-016 — anchored on m.ecn_id with a LEFT JOIN. The old INNER join
+        # through ecn_items dropped every standalone MPN from this list
+        # silently. item_number comes from the row itself; line_number is only
+        # meaningful when there is a linked item, so it is NULL otherwise and
+        # those rows sort last.
         rows = await self._session.execute(
             sa.text(
                 "SELECT m.id, m.ecn_item_id, m.mpn, m.manufacturer, m.is_default, "
                 "m.alias_written, m.msl_level, m.lifecycle, m.lead_time_weeks, "
                 "m.eol_date, m.packaging_type, m.do_not_buy, m.alt_mpn, m.notes, "
-                "m.supplier_data_at, m.created_at, i.item_number, i.line_number "
+                "m.supplier_data_at, m.created_at, m.item_number, i.line_number "
                 "FROM ecn_mpns m "
-                "JOIN ecn_items i ON i.id = m.ecn_item_id "
-                "WHERE i.ecn_id = :ecn_id "
-                "ORDER BY i.line_number, m.is_default DESC, m.created_at"
+                "LEFT JOIN ecn_items i ON i.id = m.ecn_item_id "
+                "WHERE m.ecn_id = :ecn_id "
+                "ORDER BY i.line_number NULLS LAST, m.item_number, "
+                "m.is_default DESC, m.created_at"
             ),
             {"ecn_id": ecn_id},
         )

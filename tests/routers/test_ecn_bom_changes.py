@@ -277,7 +277,7 @@ class TestUpdateBomChange:
         updated = _make_change(quantity=8.0)
         with patch.object(ECNService, "update_bom_change", new=AsyncMock(return_value=updated)):
             resp = client.patch(
-                f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/bom-changes/{_CHANGE_ID}",
+                f"/api/v1/ecn/{_ECN_ID}/bom-changes/{_CHANGE_ID}",
                 json={"quantity": 8.0},
             )
         assert resp.status_code == 200
@@ -290,7 +290,7 @@ class TestUpdateBomChange:
             new=AsyncMock(side_effect=ECNNotFound(_CHANGE_ID)),
         ):
             resp = client.patch(
-                f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/bom-changes/{_CHANGE_ID}",
+                f"/api/v1/ecn/{_ECN_ID}/bom-changes/{_CHANGE_ID}",
                 json={"quantity": 8.0},
             )
         assert resp.status_code == 404
@@ -304,7 +304,7 @@ class TestUpdateBomChange:
             )),
         ):
             resp = client.patch(
-                f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/bom-changes/{_CHANGE_ID}",
+                f"/api/v1/ecn/{_ECN_ID}/bom-changes/{_CHANGE_ID}",
                 json={"quantity": 8.0},
             )
         assert resp.status_code == 422
@@ -316,7 +316,7 @@ class TestUpdateBomChange:
         updated = _make_change(quantity=9.0)
         with patch.object(ECNService, "update_bom_change", new=AsyncMock(return_value=updated)):
             resp = client.patch(
-                f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/bom-changes/{_CHANGE_ID}",
+                f"/api/v1/ecn/{_ECN_ID}/bom-changes/{_CHANGE_ID}",
                 json={"quantity": 9.0, "actor_role": "DC"},
             )
         assert resp.status_code == 200
@@ -330,7 +330,7 @@ class TestDeleteBomChange:
     def test_delete_returns_204(self, client):
         with patch.object(ECNService, "delete_bom_change", new=AsyncMock(return_value=None)):
             resp = client.delete(
-                f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/bom-changes/{_CHANGE_ID}"
+                f"/api/v1/ecn/{_ECN_ID}/bom-changes/{_CHANGE_ID}"
             )
         assert resp.status_code == 204
 
@@ -341,7 +341,7 @@ class TestDeleteBomChange:
             new=AsyncMock(side_effect=ECNNotFound(_CHANGE_ID)),
         ):
             resp = client.delete(
-                f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/bom-changes/{_CHANGE_ID}"
+                f"/api/v1/ecn/{_ECN_ID}/bom-changes/{_CHANGE_ID}"
             )
         assert resp.status_code == 404
 

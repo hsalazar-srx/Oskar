@@ -9,9 +9,14 @@ DELETE /ecn/{ecn_id}/items/{item_id}                   Remove item
 
 POST   /ecn/{ecn_id}/items/bulk                        Bulk upload items from .xlsx/.csv
 
-POST   /ecn/{ecn_id}/items/{item_id}/mpns              Add MPN
-PATCH  /ecn/{ecn_id}/items/{item_id}/mpns/{mpn_id}    Update MPN
-DELETE /ecn/{ecn_id}/items/{item_id}/mpns/{mpn_id}    Remove MPN
+POST   /ecn/{ecn_id}/items/{item_id}/mpns              Add MPN to an item on the ECN
+POST   /ecn/{ecn_id}/mpns                              Add MPN naming its item directly
+                                                         (ADR-016 — no item row needed)
+PATCH  /ecn/{ecn_id}/mpns/{mpn_id}                     Update MPN
+DELETE /ecn/{ecn_id}/mpns/{mpn_id}                     Remove MPN
+
+  Edit/delete are ECN-scoped only: an MPN id is unique on its own, and the
+  item-scoped versions took an {item_id} they never read.
 
 POST   /ecn/{ecn_id}/mpns/bulk                         Bulk upload MPNs from .xlsx/.csv
                                                          (CAD BOM export shape — C P/N +
@@ -44,6 +49,7 @@ from src.routers.ecn_schemas import (
     BulkItemRow,
     BulkMPNRow,
     CreateItemBody,
+    CreateStandaloneMPNBody,
     CreateMPNBody,
     ECNItemOut,
     MPNOut,
@@ -369,6 +375,89 @@ async def export_mpns(
     return _xlsx_response(xlsx, f"{ecn_number}-mpns.xlsx")
 
 
+# ── ADR-016: ECN-scoped MPN routes ───────────────────────────────────────────
+# PATCH and DELETE live HERE ONLY, not under /items/{item_id}. update_mpn and
+# delete_mpn have only ever taken (ecn_id, mpn_id) — an MPN id is already
+# unique, so the old {item_id} path segment was parsed and discarded. Keeping
+# an item-scoped copy would mean two URLs running byte-identical code, and one
+# of them would be lying about what identifies the row.
+#
+# POST keeps both forms because they genuinely differ: the item-scoped one
+# derives item_number from the item, this one takes it in the body.
+#
+# Route order matters: /mpns/{mpn_id} must not capture "export" or "bulk" as
+# an mpn_id. Those are GET/POST on /mpns/export and /mpns/bulk and are
+# declared earlier in this module, so they win — the same ordering care taken
+# for the bulk-upload route.
+
+@ecn_items_router.post(
+    "/{ecn_id}/mpns",
+    response_model=MPNOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Add an MPN change with no item on the ECN (ADR-016)",
+)
+async def create_standalone_mpn(
+    ecn_id: str,
+    body: CreateStandaloneMPNBody,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> MPNOut:
+    svc = ECNService(session)
+    try:
+        m = await svc.create_mpn(ecn_id, None, **body.model_dump())
+    except ECNNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ECN not found")
+    except ECNValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    return mpn_out(m)
+
+
+@ecn_items_router.patch(
+    "/{ecn_id}/mpns/{mpn_id}",
+    response_model=MPNOut,
+    summary="Update any MPN on this ECN, with or without an item (ADR-016)",
+)
+async def update_mpn(
+    ecn_id: str,
+    mpn_id: str,
+    body: UpdateMPNBody,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> MPNOut:
+    svc = ECNService(session)
+    try:
+        m = await svc.update_mpn(
+            ecn_id, mpn_id,
+            **{k: v for k, v in body.model_dump().items() if v is not None},
+        )
+    except ECNNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MPN not found")
+    except ECNValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    return mpn_out(m)
+
+
+@ecn_items_router.delete(
+    "/{ecn_id}/mpns/{mpn_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+    summary="Delete any MPN on this ECN, with or without an item (ADR-016)",
+)
+async def delete_mpn(
+    ecn_id: str,
+    mpn_id: str,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> None:
+    svc = ECNService(session)
+    try:
+        await svc.delete_mpn(ecn_id, mpn_id)
+    except ECNNotFound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MPN not found")
+    except ECNValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+
+
 @ecn_items_router.post(
     "/{ecn_id}/items",
     response_model=ECNItemOut,
@@ -495,45 +584,6 @@ async def create_mpn(
     return mpn_out(m)
 
 
-@ecn_items_router.patch(
-    "/{ecn_id}/items/{item_id}/mpns/{mpn_id}",
-    response_model=MPNOut,
-)
-async def update_mpn(
-    ecn_id: str,
-    item_id: str,
-    mpn_id: str,
-    body: UpdateMPNBody,
-    user: Annotated[CurrentUser, Depends(get_current_user)],
-    session: Annotated[AsyncSession, Depends(get_session)],
-) -> MPNOut:
-    svc = ECNService(session)
-    try:
-        m = await svc.update_mpn(
-            ecn_id, mpn_id,
-            **{k: v for k, v in body.model_dump().items() if v is not None},
-        )
-    except ECNNotFound:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MPN not found")
-    except ECNValidationError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
-    return mpn_out(m)
-
-
-@ecn_items_router.delete(
-    "/{ecn_id}/items/{item_id}/mpns/{mpn_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    response_model=None,
-)
-async def delete_mpn(
-    ecn_id: str,
-    item_id: str,
-    mpn_id: str,
-    user: Annotated[CurrentUser, Depends(get_current_user)],
-    session: Annotated[AsyncSession, Depends(get_session)],
-) -> None:
-    svc = ECNService(session)
-    try:
-        await svc.delete_mpn(ecn_id, mpn_id)
-    except ECNNotFound:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MPN not found")
+# PATCH and DELETE for MPNs are ECN-scoped only — see the ADR-016 block above.
+# The item-scoped versions that used to live here took an {item_id} they never
+# read, so they were removed rather than kept as duplicates.

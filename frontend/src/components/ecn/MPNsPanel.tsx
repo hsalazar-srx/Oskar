@@ -116,7 +116,7 @@ export default function MPNsPanel({ ecnId, itemId, itemNumber, readOnly = false 
   })
 
   const updateMut = useMutation({
-    mutationFn: ({ id, body }: { id: string; body: Partial<MPNBody> }) => updateMPN(ecnId, itemId, id, body),
+    mutationFn: ({ id, body }: { id: string; body: Partial<MPNBody> }) => updateMPN(ecnId, id, body),
     onSuccess: () => { invalidate(); setEditingId(null); setForm(EMPTY_MPN); setApiError(null) },
     onError: (err: any) => {
       const d = err?.response?.data?.detail
@@ -125,7 +125,7 @@ export default function MPNsPanel({ ecnId, itemId, itemNumber, readOnly = false 
   })
 
   const deleteMut = useMutation({
-    mutationFn: (id: string) => deleteMPN(ecnId, itemId, id),
+    mutationFn: (id: string) => deleteMPN(ecnId, id),
     onSuccess: () => { invalidate(); setConfirmDeleteId(null) },
   })
 

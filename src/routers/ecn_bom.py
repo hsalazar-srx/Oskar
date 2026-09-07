@@ -510,13 +510,25 @@ async def bulk_create_bom_changes(
     return [bom_change_out(c) for c in changes]
 
 
+# ── BOM change edit/delete — ECN-scoped (closes the ADR-014 gap) ─────────────
+# ADR-014 shipped POST /{ecn_id}/bom-changes but left PATCH and DELETE only
+# under /items/{item_id}/..., so a BOM-only change — the very thing that ADR
+# made possible — could be created and then never edited or removed: its
+# ecn_item_id is NULL, so no item_id in the URL reaches it.
+#
+# The service already supported this. _get_bom_change has ignored item_id
+# since ADR-014 (see its comment: "(ecn_id, change_id) already identifies the
+# row uniquely"); only the routes still demanded one. So these replace the
+# item-scoped pair rather than sitting beside it — a duplicate would run
+# byte-identical code behind a path segment nothing reads.
+
 @ecn_bom_router.patch(
-    "/{ecn_id}/items/{item_id}/bom-changes/{change_id}",
+    "/{ecn_id}/bom-changes/{change_id}",
     response_model=BOMChangeOut,
+    summary="Update a BOM change, with or without an item on the ECN",
 )
 async def update_bom_change(
     ecn_id: str,
-    item_id: str,
     change_id: str,
     body: BOMChangePatchBody,
     user: Annotated[CurrentUser, Depends(get_current_user)],
@@ -526,7 +538,7 @@ async def update_bom_change(
     fields = body.model_dump(exclude_none=True, exclude={"actor_role"})
     try:
         change = await svc.update_bom_change(
-            ecn_id, item_id, change_id, actor_role=body.actor_role, **fields
+            ecn_id, None, change_id, actor_role=body.actor_role, **fields
         )
     except ECNNotFound:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BOM change not found")
@@ -536,13 +548,13 @@ async def update_bom_change(
 
 
 @ecn_bom_router.delete(
-    "/{ecn_id}/items/{item_id}/bom-changes/{change_id}",
+    "/{ecn_id}/bom-changes/{change_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_model=None,
+    summary="Delete a BOM change, with or without an item on the ECN",
 )
 async def delete_bom_change(
     ecn_id: str,
-    item_id: str,
     change_id: str,
     user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
@@ -550,7 +562,7 @@ async def delete_bom_change(
 ) -> None:
     svc = ECNService(session)
     try:
-        await svc.delete_bom_change(ecn_id, item_id, change_id, actor_role=actor_role)
+        await svc.delete_bom_change(ecn_id, None, change_id, actor_role=actor_role)
     except ECNNotFound:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BOM change not found")
     except ECNValidationError as exc:

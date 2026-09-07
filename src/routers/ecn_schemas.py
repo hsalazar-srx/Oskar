@@ -236,6 +236,42 @@ class UpdateItemBody(BaseModel):
         return v
 
 
+class CreateStandaloneMPNBody(BaseModel):
+    """ADR-016 — create an MPN change with no item row on the ECN.
+
+    Same fields as CreateMPNBody plus item_number, which the item-scoped path
+    derives from the item instead. Kept as a separate model rather than making
+    item_number optional on CreateMPNBody: on the item-scoped route it would
+    be a field that is silently ignored, which is worse than not offering it.
+    """
+    item_number: str = Field(..., min_length=1, max_length=15)
+    mpn: str = Field(..., min_length=1, max_length=30)
+    manufacturer: str | None = Field(None, max_length=60)
+    is_default: bool = False
+    msl_level: int | None = Field(None, ge=1, le=6)
+    lifecycle: str | None = None
+    eol_date: str | None = None
+    lead_time_weeks: int | None = Field(None, ge=0)
+    packaging_type: str | None = None
+    do_not_buy: bool = False
+    alt_mpn: str | None = Field(None, max_length=100)
+    notes: str | None = None
+
+    @field_validator("lifecycle")
+    @classmethod
+    def _validate_lifecycle(cls, v: str | None) -> str | None:
+        if v is not None and v not in _LIFECYCLE_VALUES:
+            raise ValueError(f"lifecycle must be one of {_LIFECYCLE_VALUES}")
+        return v
+
+    @field_validator("packaging_type")
+    @classmethod
+    def _validate_packaging(cls, v: str | None) -> str | None:
+        if v is not None and v not in _PACKAGING_VALUES:
+            raise ValueError(f"packaging_type must be one of {_PACKAGING_VALUES}")
+        return v
+
+
 class CreateMPNBody(BaseModel):
     mpn: str = Field(..., min_length=1, max_length=30)
     manufacturer: str | None = Field(None, max_length=60)
@@ -613,7 +649,10 @@ class RoleAssignmentResultOut(BaseModel):
 
 class MPNOut(BaseModel):
     id: str
-    ecn_item_id: str
+    # Nullable since ADR-016 — a standalone MPN change has no item row. The
+    # frontend uses this to decide whether a row offers "Manage item", the
+    # same way BOMChangeOut.ecn_item_id already does.
+    ecn_item_id: str | None
     mpn: str
     manufacturer: str | None
     is_default: bool
@@ -628,7 +667,9 @@ class MPNOut(BaseModel):
     notes: str | None
     supplier_data_at: datetime | None
     created_at: datetime
-    # Populated only in the ECN-wide aggregate list (GET /ecn/{ecn_id}/mpns)
+    # item_number is a real column on the row since ADR-016, so it is always
+    # populated. line_number comes from the linked item and is None for a
+    # standalone MPN.
     item_number: str | None = None
     line_number: int | None = None
 

@@ -110,9 +110,14 @@ class ApprovalStep:
 
 @dataclass
 class ECNMPNDetail:
-    """One row from ecn_mpns, including extended fields from migrations 0007 and 0011."""
+    """One row from ecn_mpns, including extended fields from migrations 0007 and 0011.
+
+    ecn_item_id is nullable since ADR-016/migration 0034 — a standalone MPN
+    change carries no item row, mirroring Stargile's ZECNMPNI, whose primary
+    key holds CMITNO directly rather than pointing at the items table.
+    """
     id: str
-    ecn_item_id: str
+    ecn_item_id: str | None
     mpn: str
     manufacturer: str | None
     is_default: bool
@@ -127,8 +132,10 @@ class ECNMPNDetail:
     notes: str | None
     supplier_data_at: datetime | None
     created_at: datetime
-    # Populated only by list_all_mpns (ECN-wide aggregate view) — None on the
-    # per-item paths (_fetch_mpns/_get_mpn), which already scope by item.
+    # item_number is a real column on ecn_mpns since ADR-016/0034, so every
+    # read path populates it — it is how a standalone MPN names its item at
+    # all. line_number still comes from the item row, so it stays None when
+    # there is no linked item.
     item_number: str | None = None
     line_number: int | None = None
 

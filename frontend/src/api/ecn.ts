@@ -337,55 +337,52 @@ export async function fetchAllBomChanges(ecnId: string): Promise<BOMChange[]> {
   return data
 }
 
-export async function createBomChange(
-  ecnId: string, itemId: string, body: BOMChangeBody, actorRole?: string,
-): Promise<BOMChange> {
-  const { data } = await axiosInstance.post(
-    `/api/v1/ecn/${ecnId}/items/${itemId}/bom-changes`,
-    body,
-    { params: actorRole ? { actor_role: actorRole } : undefined },
-  )
-  return data
-}
-
-/** ADR-014 — POST /api/v1/ecn/{ecnId}/bom-changes.
+/**
+ * Create a BOM change (ADR-014).
  *
- * Creates a BOM change with NO item on the ECN: the parent assembly is named
- * directly (parent_item_number, Stargile's BMPRNO) rather than resolved
- * through an ecn_items row. Use for a BOM-only ECN — one that revises a
+ * Pass an itemId when the parent assembly is already an item on the ECN — it
+ * supplies the parent item number. Pass null and give `parent_item_number` in
+ * the body instead (Stargile's BMPRNO), for a BOM-only ECN that revises a
  * structure without any item-master change.
  *
- * The backend validates that the parent exists in Movex before writing, so a
- * 422 here usually means the parent item number is wrong.
+ * With no item, the backend validates the parent exists in Movex before
+ * writing, so a 422 usually means the parent item number is wrong.
  */
-export async function createEcnScopedBomChange(
+export async function createBomChange(
   ecnId: string,
-  body: BOMChangeBody & { parent_item_number: string },
+  itemId: string | null,
+  body: BOMChangeBody | (BOMChangeBody & { parent_item_number: string }),
   actorRole?: string,
 ): Promise<BOMChange> {
+  const url = itemId
+    ? `/api/v1/ecn/${ecnId}/items/${itemId}/bom-changes`
+    : `/api/v1/ecn/${ecnId}/bom-changes`
   const { data } = await axiosInstance.post(
-    `/api/v1/ecn/${ecnId}/bom-changes`,
+    url,
     body,
     { params: actorRole ? { actor_role: actorRole } : undefined },
   )
   return data
 }
 
+/** ECN-scoped. A BOM change created with no item on the ECN (ADR-014) has a
+ * NULL ecn_item_id, so no itemId in the URL could ever reach it — it could be
+ * created and then never edited or removed. These routes close that. */
 export async function updateBomChange(
-  ecnId: string, itemId: string, changeId: string,
+  ecnId: string, changeId: string,
   body: Partial<BOMChangeBody> & { actor_role?: string },
 ): Promise<BOMChange> {
   const { data } = await axiosInstance.patch(
-    `/api/v1/ecn/${ecnId}/items/${itemId}/bom-changes/${changeId}`, body,
+    `/api/v1/ecn/${ecnId}/bom-changes/${changeId}`, body,
   )
   return data
 }
 
 export async function deleteBomChange(
-  ecnId: string, itemId: string, changeId: string, actorRole?: string,
+  ecnId: string, changeId: string, actorRole?: string,
 ): Promise<void> {
   await axiosInstance.delete(
-    `/api/v1/ecn/${ecnId}/items/${itemId}/bom-changes/${changeId}`,
+    `/api/v1/ecn/${ecnId}/bom-changes/${changeId}`,
     { params: actorRole ? { actor_role: actorRole } : undefined },
   )
 }
@@ -459,23 +456,42 @@ export async function fetchAllMPNs(ecnId: string): Promise<MPN[]> {
   return data
 }
 
-export async function createMPN(ecnId: string, itemId: string, body: MPNBody): Promise<MPN> {
-  const { data } = await axiosInstance.post(`/api/v1/ecn/${ecnId}/items/${itemId}/mpns`, body)
+/**
+ * Create an MPN change (ADR-016).
+ *
+ * Pass an itemId when the MPN belongs to an item already on the ECN — the
+ * item supplies the item number. Pass null and give `item_number` in the body
+ * instead, for an MPN change on an ECN that carries no item row at all.
+ *
+ * One function rather than two: the only difference is where the item number
+ * comes from, which the arguments already say.
+ */
+export async function createMPN(
+  ecnId: string,
+  itemId: string | null,
+  body: MPNBody | (MPNBody & { item_number: string }),
+): Promise<MPN> {
+  const url = itemId
+    ? `/api/v1/ecn/${ecnId}/items/${itemId}/mpns`
+    : `/api/v1/ecn/${ecnId}/mpns`
+  const { data } = await axiosInstance.post(url, body)
   return data
 }
 
+/** ADR-016 — ECN-scoped. An MPN id is unique on its own, so these no longer
+ * take an itemId: the old routes parsed one and never read it, and a
+ * standalone MPN has no item to name. */
 export async function updateMPN(
   ecnId: string,
-  itemId: string,
   mpnId: string,
   body: Partial<MPNBody>,
 ): Promise<MPN> {
-  const { data } = await axiosInstance.patch(`/api/v1/ecn/${ecnId}/items/${itemId}/mpns/${mpnId}`, body)
+  const { data } = await axiosInstance.patch(`/api/v1/ecn/${ecnId}/mpns/${mpnId}`, body)
   return data
 }
 
-export async function deleteMPN(ecnId: string, itemId: string, mpnId: string): Promise<void> {
-  await axiosInstance.delete(`/api/v1/ecn/${ecnId}/items/${itemId}/mpns/${mpnId}`)
+export async function deleteMPN(ecnId: string, mpnId: string): Promise<void> {
+  await axiosInstance.delete(`/api/v1/ecn/${ecnId}/mpns/${mpnId}`)
 }
 
 /**

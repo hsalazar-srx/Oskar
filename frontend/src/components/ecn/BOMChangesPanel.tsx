@@ -175,7 +175,7 @@ export default function BOMChangesPanel({
 
   const updateMut = useMutation({
     mutationFn: ({ id, body }: { id: string; body: Partial<BOMChangeBody> }) =>
-      updateBomChange(ecnId, itemId, id, body),
+      updateBomChange(ecnId, id, body),
     onSuccess: () => { invalidate(); setEditingId(null); setForm(EMPTY_FORM); setApiError(null) },
     onError: (err: any) => {
       const detail = err?.response?.data?.detail
