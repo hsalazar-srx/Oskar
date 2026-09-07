@@ -9,6 +9,7 @@ import { ItemUploadDrawer } from "@/components/ecn/ItemUploadDrawer"
 import { RoutingUploadDrawer } from "@/components/ecn/RoutingUploadDrawer"
 import { BOMChangesUploadDrawer } from "@/components/ecn/BOMChangesUploadDrawer"
 import AddBomChangeDrawer from "@/components/ecn/AddBomChangeDrawer"
+import AddMpnDrawer from "@/components/ecn/AddMpnDrawer"
 import { MPNUploadDrawer } from "@/components/ecn/MPNUploadDrawer"
 import { exportItems, exportRoutingOps, exportBomChanges, exportMPNs } from "@/api/ecn"
 
@@ -43,6 +44,7 @@ export default function ECNEntityTabsSection({
   const [bomUploadOpen, setBomUploadOpen] = useState(false)
   const [addBomChangeOpen, setAddBomChangeOpen] = useState(false)
   const [mpnUploadOpen, setMpnUploadOpen] = useState(false)
+  const [addMpnOpen, setAddMpnOpen] = useState(false)
 
   function manageItem(itemId: string, entityTab: "routing" | "bom" | "mpns") {
     onSelectItem(itemId, entityTab)
@@ -92,6 +94,14 @@ export default function ECNEntityTabsSection({
             <>
               <ExportButton canExport={canExport} label="↓ Export" onExport={() => exportMPNs(ecnId, ecnNumber)} />
               <UploadButton canUpload={canUpload} label="↑ Upload MPNs" onClick={() => setMpnUploadOpen(true)} />
+              {/* ADR-016 — author an MPN change with no item on the ECN.
+                  Gated on canUpload, the same "can still edit this ECN"
+                  permission the BOM add button uses. */}
+              {canUpload && (
+                <Button size="sm" variant="outline" onClick={() => setAddMpnOpen(true)}>
+                  + Add MPN
+                </Button>
+              )}
             </>
           )}
         </div>
@@ -106,7 +116,11 @@ export default function ECNEntityTabsSection({
           <BOMChangesTabContent ecnId={ecnId} onManageItem={(id) => manageItem(id, "bom")} />
         )}
         {tab === "mpns" && (
-          <MPNsTabContent ecnId={ecnId} onManageItem={(id) => manageItem(id, "mpns")} />
+          <MPNsTabContent
+            ecnId={ecnId}
+            onManageItem={(id) => manageItem(id, "mpns")}
+            onAddMpn={canUpload ? () => setAddMpnOpen(true) : undefined}
+          />
         )}
       </div>
 
@@ -143,6 +157,13 @@ export default function ECNEntityTabsSection({
         ecnId={ecnId}
         open={mpnUploadOpen}
         onClose={() => setMpnUploadOpen(false)}
+        onSuccess={onItemsChanged}
+      />
+
+      <AddMpnDrawer
+        ecnId={ecnId}
+        open={addMpnOpen}
+        onClose={() => setAddMpnOpen(false)}
         onSuccess={onItemsChanged}
       />
     </div>

@@ -634,13 +634,10 @@ class ECNItemsMixin:
             ),
             {"ecn_id": ecn_id},
         )
-        result = []
-        for row in rows:
-            mpn = self._row_to_mpn(row)
-            mpn.item_number = row[16]
-            mpn.line_number = row[17]
-            result.append(mpn)
-        return result
+        # _row_to_mpn reads item_number (16) and line_number (17) itself — the
+        # column order here matches _MPN_COLUMNS plus the appended
+        # i.line_number, so no post-hoc assignment is needed.
+        return [self._row_to_mpn(r) for r in rows]
 
     # ── Routing operations CRUD (S2-23) ───────────────────────────────────────
 

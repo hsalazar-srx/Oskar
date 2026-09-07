@@ -411,7 +411,9 @@ export async function bulkCreateBomChanges(ecnId: string, file: File): Promise<B
 
 export interface MPN {
   id: string
-  ecn_item_id: string
+  /** null for a standalone MPN change (ADR-016) — no item row on the ECN.
+   * Same shape as BOMChange.ecn_item_id since ADR-014. */
+  ecn_item_id: string | null
   mpn: string
   manufacturer: string | null
   is_default: boolean
@@ -426,7 +428,8 @@ export interface MPN {
   notes: string | null
   supplier_data_at: string | null
   created_at: string
-  // Populated only by fetchAllMPNs (ECN-wide aggregate view)
+  /** item_number is a real column on the row since ADR-016, so it is always
+   * present. line_number comes from the linked item — null when standalone. */
   item_number?: string | null
   line_number?: number | null
 }
