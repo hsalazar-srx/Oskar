@@ -918,15 +918,18 @@ class ECNWorkflowMixin:
         description field, which is why the value was dropped. setup_time
         genuinely has no AddOperation field and remains local-only.
         """
+        # ADR-016 — anchored on r.ecn_id, with item_number read from the row
+        # and the facility from the ECN. The old INNER join through ecn_items
+        # meant a standalone routing operation was never queued and never
+        # reached M3, with nothing reporting a failure.
         rows = await self._session.execute(
             sa.text(
-                "SELECT r.id, r.ecn_item_id, i.item_number, e.facility, "
+                "SELECT r.id, r.ecn_item_id, r.item_number, e.facility, "
                 "r.operation_number, r.work_centre, r.run_time, r.change_type, "
                 "r.operation_description "
                 "FROM ecn_routing_operations r "
-                "JOIN ecn_items i ON i.id = r.ecn_item_id "
-                "JOIN ecn_instances e ON e.id = i.ecn_id "
-                "WHERE i.ecn_id = :ecn_id"
+                "JOIN ecn_instances e ON e.id = r.ecn_id "
+                "WHERE r.ecn_id = :ecn_id"
             ),
             {"ecn_id": ecn_id},
         )

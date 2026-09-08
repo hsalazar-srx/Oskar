@@ -218,16 +218,16 @@ class ECNBomChangesMixin:
                 "circuit_refs_new": json.dumps(req.circuit_refs_new) if req.circuit_refs_new is not None else None,
             },
         )
-        return await self._get_bom_change(ecn_id, item_id, change_id)
+        return await self._get_bom_change(ecn_id, change_id)
 
     async def _get_bom_change(
-        self, ecn_id: str, item_id: str | None, change_id: str
+        self, ecn_id: str, change_id: str
     ) -> BOMChangeResponse:
-        # ADR-014 — anchored on ecn_id directly, no JOIN through ecn_items.
-        # item_id is kept in the signature so existing item-scoped callers
-        # read naturally, but it is no longer part of the WHERE clause: a
-        # BOM-only change has no item to scope by, and (ecn_id, change_id)
-        # already identifies the row uniquely.
+        # ADR-014 — anchored on ecn_id directly, no JOIN through ecn_items:
+        # a BOM-only change has no item to scope by, and (ecn_id,
+        # change_id) already identifies the row uniquely. ADR-016 dropped
+        # the vestigial item_id argument, which every caller passed and
+        # nothing read.
         row = await self._session.execute(
             sa.text(
                 f"SELECT {self._SELECT_COLUMNS} "
@@ -302,14 +302,13 @@ class ECNBomChangesMixin:
     async def update_bom_change(
         self,
         ecn_id: str,
-        item_id: str,
         change_id: str,
         *,
         actor_role: str | None = None,
         **fields: Any,
     ) -> BOMChangeResponse:
         await self._require_bom_change_editable(ecn_id, actor_role)
-        current = await self._get_bom_change(ecn_id, item_id, change_id)
+        current = await self._get_bom_change(ecn_id, change_id)
 
         new_change_type = fields.get("change_type", current.change_type)
         new_old_from_date = fields.get("old_from_date", current.old_from_date)
@@ -341,18 +340,17 @@ class ECNBomChangesMixin:
                 ),
                 params,
             )
-        return await self._get_bom_change(ecn_id, item_id, change_id)
+        return await self._get_bom_change(ecn_id, change_id)
 
     async def delete_bom_change(
         self,
         ecn_id: str,
-        item_id: str,
         change_id: str,
         *,
         actor_role: str | None = None,
     ) -> None:
         await self._require_bom_change_editable(ecn_id, actor_role)
-        await self._get_bom_change(ecn_id, item_id, change_id)
+        await self._get_bom_change(ecn_id, change_id)
         await self._session.execute(
             sa.text("DELETE FROM ecn_bom_changes WHERE id = :change_id"),
             {"change_id": change_id},
@@ -474,7 +472,7 @@ class ECNBomChangesMixin:
 
         result: list[BOMChangeResponse] = []
         for item_id, change_id in created:
-            change = await self._get_bom_change(ecn_id, item_id, change_id)
+            change = await self._get_bom_change(ecn_id, change_id)
             # parent_item_number is authoritative for the aggregate view's
             # label, whether or not the row also links to an item row.
             change.item_number = change.parent_item_number

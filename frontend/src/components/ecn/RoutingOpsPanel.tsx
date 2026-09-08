@@ -119,7 +119,7 @@ export default function RoutingOpsPanel({ ecnId, itemId, itemNumber, readOnly = 
 
   const updateMut = useMutation({
     mutationFn: ({ id, body }: { id: string; body: Partial<Omit<RoutingOpBody, "operation_number">> }) =>
-      updateRoutingOp(ecnId, itemId, id, body),
+      updateRoutingOp(ecnId, id, body),
     onSuccess: () => { invalidate(); setEditingId(null); setForm(EMPTY_FORM); setApiError(null) },
     onError: (err: any) => {
       const detail = err?.response?.data?.detail
@@ -128,7 +128,7 @@ export default function RoutingOpsPanel({ ecnId, itemId, itemNumber, readOnly = 
   })
 
   const deleteMut = useMutation({
-    mutationFn: (id: string) => deleteRoutingOp(ecnId, itemId, id),
+    mutationFn: (id: string) => deleteRoutingOp(ecnId, id),
     onSuccess: () => { invalidate(); setConfirmDeleteId(null) },
   })
 

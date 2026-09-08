@@ -138,7 +138,7 @@ class TestUpdateBomChange:
         change = await svc.create_bom_change(
             ecn_id, item_id, BOMChangeRequest(change_type="ADD", component_number="LF200010", quantity=4.0)
         )
-        updated = await svc.update_bom_change(ecn_id, item_id, change.id, quantity=8.0)
+        updated = await svc.update_bom_change(ecn_id, change.id, quantity=8.0)
         assert updated.quantity == pytest.approx(8.0)
 
     async def test_update_not_found_raises(self, db_session: AsyncSession):
@@ -146,7 +146,7 @@ class TestUpdateBomChange:
         ecn_id, item_id = await _make_ecn_with_item(db_session)
         with pytest.raises(ECNNotFound):
             await svc.update_bom_change(
-                ecn_id, item_id, "00000000-0000-0000-0000-000000000000", quantity=1.0
+                ecn_id, "00000000-0000-0000-0000-000000000000", quantity=1.0
             )
 
 
@@ -157,7 +157,7 @@ class TestDeleteBomChange:
         change = await svc.create_bom_change(
             ecn_id, item_id, BOMChangeRequest(change_type="ADD", component_number="LF200010")
         )
-        await svc.delete_bom_change(ecn_id, item_id, change.id)
+        await svc.delete_bom_change(ecn_id, change.id)
         changes = await svc.list_bom_changes(ecn_id, item_id)
         assert changes == []
 
@@ -166,7 +166,7 @@ class TestDeleteBomChange:
         ecn_id, item_id = await _make_ecn_with_item(db_session)
         with pytest.raises(ECNNotFound):
             await svc.delete_bom_change(
-                ecn_id, item_id, "00000000-0000-0000-0000-000000000000"
+                ecn_id, "00000000-0000-0000-0000-000000000000"
             )
 
 
@@ -186,7 +186,7 @@ class TestEditLockAtDcApproved:
             {"status": int(ECNStatus.DC_APPROVED), "id": ecn_id},
         )
         with pytest.raises(ECNValidationError, match="DC_APPROVED"):
-            await svc.update_bom_change(ecn_id, item_id, change.id, quantity=9.0)
+            await svc.update_bom_change(ecn_id, change.id, quantity=9.0)
 
     async def test_edit_allowed_at_dc_approved_with_dc_role(self, db_session: AsyncSession):
         svc = ECNService(db_session)
@@ -200,7 +200,7 @@ class TestEditLockAtDcApproved:
             {"status": int(ECNStatus.DC_APPROVED), "id": ecn_id},
         )
         updated = await svc.update_bom_change(
-            ecn_id, item_id, change.id, actor_role="DC", quantity=9.0
+            ecn_id, change.id, actor_role="DC", quantity=9.0
         )
         assert updated.quantity == pytest.approx(9.0)
 
@@ -212,7 +212,7 @@ class TestEditLockAtDcApproved:
         change = await svc.create_bom_change(
             ecn_id, item_id, BOMChangeRequest(change_type="ADD", component_number="LF200010")
         )
-        updated = await svc.update_bom_change(ecn_id, item_id, change.id, quantity=5.0)
+        updated = await svc.update_bom_change(ecn_id, change.id, quantity=5.0)
         assert updated.quantity == pytest.approx(5.0)
 
     async def test_create_blocked_at_dc_approved_without_dc_role(self, db_session: AsyncSession):
@@ -241,4 +241,4 @@ class TestEditLockAtDcApproved:
             {"status": int(ECNStatus.APPROVED), "id": ecn_id},
         )
         with pytest.raises(ECNValidationError, match="DC_APPROVED"):
-            await svc.delete_bom_change(ecn_id, item_id, change.id)
+            await svc.delete_bom_change(ecn_id, change.id)

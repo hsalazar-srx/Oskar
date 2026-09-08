@@ -1,7 +1,7 @@
 # ADR-016 — Standalone MPN (and Routing) Changes
 
-**Status:** Accepted — MPN **implemented and verified 2026-09-07**; routing decoupling
-approved, migration 0035 not yet written
+**Status:** Accepted — MPN **implemented and verified 2026-09-07**; routing **implemented and
+verified 2026-09-08** (migration 0035)
 **Date:** 2026-09-07
 **Owner:** Lead Engineer
 **Raised by:** End user, during ECN authoring UX review
@@ -216,16 +216,64 @@ identifies the row uniquely"*); only the routes still demanded one. `PATCH`/`DEL
 service tests pass individually; the file cannot run in one invocation because of I2-18's
 fixture bug on consecutive ECN-creating tests, which is pre-existing and unrelated.
 
+---
+
+## Implementation record — routing (2026-09-08)
+
+**Migration `0035_ecn_routing_standalone.py`.** Same shape as 0034, with two differences that
+were confirmed against the live schema rather than assumed:
+
+1. **`uq_routing_item_opno` is a table CONSTRAINT** (`pg_constraint.contype='u'`), not a bare
+   index — `DROP INDEX` fails on it. Dropped with `DROP CONSTRAINT` and rebuilt as
+   `uq_routing_ecn_item_opno` on `(ecn_id, item_number, operation_number)`, renamed so the
+   name states what it keys on. 0034's indexes were plain indexes, so that migration never
+   met this.
+2. **The FK was `ON DELETE CASCADE`**, where 0034's was RESTRICT. Moving it to SET NULL is a
+   real behaviour change: deleting an item used to *destroy* its routing operations, and now
+   leaves them with their `item_number` intact.
+   `TestDeletingAnItemKeepsItsRoutingOps` asserts this directly, because a silently-restored
+   CASCADE would be easy to miss and destroys data rather than merely hiding it.
+
+Verified upgrade → downgrade → re-upgrade; the downgrade restored the original constraint and
+CASCADE exactly. 12/12 migration tests pass.
+
+**Four INNER JOINs fixed**, the same class as 0034's six: `_get_routing_op`,
+`list_all_routing_operations` (now a LEFT JOIN), `_count_ecn_content`, and
+`_queue_routing_operations_outbox`. The last is the one that mattered — a standalone routing
+operation would never have been queued, so it would never have reached M3, with nothing
+reporting a failure.
+
+**`_count_ecn_content` no longer joins at all.** Every content type now carries its own
+`ecn_id`, so all four counts are anchored directly. That closes the last place where the
+submit guard could under-count.
+
+### The vestigial `item_id`, removed
+
+Raised in review while checking that routing matched MPN and BOM. The *routes* matched, but
+the service layer did not:
+
+| | before |
+|---|---|
+| MPN | `update_mpn(ecn_id, mpn_id)` |
+| BOM | `update_bom_change(ecn_id, item_id, change_id)` — took it, ignored it |
+| Routing | `update_routing_operation(ecn_id, item_id, op_id)` — same |
+
+`_get_bom_change` had ignored `item_id` since ADR-014 and said so in a comment; the parameter
+survived only because nothing forced the question. Every caller now passed `None` into it,
+which is the point at which a parameter has stopped earning its place. Dropped from
+`_get_bom_change`, `update_bom_change`, `delete_bom_change`, `_get_routing_op`,
+`update_routing_operation` and `delete_routing_operation`, so all three services read the
+same way.
+
+**Test results:** 1419 passed, 5 skipped. Routing integration tests pass individually
+(I2-18's fixture bug prevents running the file in one invocation). Frontend tsc, eslint and
+production build clean.
+
 ### Still to do
 
-- **Migration 0035** — the same treatment for `ecn_routing_operations`. Note
-  `uq_routing_item_opno` is a table **constraint** (`contype='u'`), not a bare index, so it
-  needs `DROP CONSTRAINT` rather than `DROP INDEX`. `_count_ecn_content` still counts routing
-  through `ecn_items` and must be updated in the same change.
-- `_row_to_routing_op` does an unguarded `str(row[1])` on `ecn_item_id`
-  (`src/services/ecn/items.py:650`). Correct today — the column is still NOT NULL — and
-  exactly the line 0035 will break.
-- Frontend "+ Add MPN" button on the ECN-wide tab. The API and service are ready.
+- Frontend "+ Add routing operation" button on the ECN-wide tab, and an AddRoutingOpDrawer.
+  The API, service and types are ready; `RoutingTabContent` already carries the
+  "Routing only" badge and hides "Manage" for standalone rows.
 
 ---
 

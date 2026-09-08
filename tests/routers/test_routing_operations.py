@@ -7,8 +7,8 @@ Routing operations are engineer-authored deltas that say:
 Endpoints:
   POST   /api/v1/ecn/{ecn_id}/items/{item_id}/routing        — Add op
   GET    /api/v1/ecn/{ecn_id}/items/{item_id}/routing        — List ops
-  PATCH  /api/v1/ecn/{ecn_id}/items/{item_id}/routing/{op_id} — Update op
-  DELETE /api/v1/ecn/{ecn_id}/items/{item_id}/routing/{op_id} — Remove op
+  PATCH  /api/v1/ecn/{ecn_id}/routing/{op_id}  (ECN-scoped, ADR-016) — Update op
+  DELETE /api/v1/ecn/{ecn_id}/routing/{op_id}  (ECN-scoped, ADR-016) — Remove op
 
 Outbox (S2-22):
   At the DC_APPROVED gate _queue_routing_operations_outbox() is called.
@@ -219,7 +219,7 @@ class TestUpdateRoutingOperation:
         updated = _make_op(run_time=6.0)
         with patch.object(ECNService, "update_routing_operation", new=AsyncMock(return_value=updated)):
             resp = client.patch(
-                f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/routing/{_OP_ID}",
+                f"/api/v1/ecn/{_ECN_ID}/routing/{_OP_ID}",
                 json={"run_time": 6.0},
             )
         assert resp.status_code == 200
@@ -227,7 +227,7 @@ class TestUpdateRoutingOperation:
 
     def test_update_description_too_long_returns_422(self, client):
         resp = client.patch(
-            f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/routing/{_OP_ID}",
+            f"/api/v1/ecn/{_ECN_ID}/routing/{_OP_ID}",
             json={"operation_description": "X" * 31},
         )
         assert resp.status_code == 422
@@ -239,7 +239,7 @@ class TestUpdateRoutingOperation:
             new=AsyncMock(side_effect=ECNNotFound(_OP_ID))
         ):
             resp = client.patch(
-                f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/routing/{_OP_ID}",
+                f"/api/v1/ecn/{_ECN_ID}/routing/{_OP_ID}",
                 json={"run_time": 1.0},
             )
         assert resp.status_code == 404
@@ -253,7 +253,7 @@ class TestDeleteRoutingOperation:
     def test_delete_returns_204(self, client):
         with patch.object(ECNService, "delete_routing_operation", new=AsyncMock(return_value=None)):
             resp = client.delete(
-                f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/routing/{_OP_ID}"
+                f"/api/v1/ecn/{_ECN_ID}/routing/{_OP_ID}"
             )
         assert resp.status_code == 204
 
@@ -264,7 +264,7 @@ class TestDeleteRoutingOperation:
             new=AsyncMock(side_effect=ECNNotFound(_OP_ID))
         ):
             resp = client.delete(
-                f"/api/v1/ecn/{_ECN_ID}/items/{_ITEM_ID}/routing/{_OP_ID}"
+                f"/api/v1/ecn/{_ECN_ID}/routing/{_OP_ID}"
             )
         assert resp.status_code == 404
 

@@ -31,6 +31,14 @@ _MPN_COLUMNS = (
     "do_not_buy, alt_mpn, notes, supplier_data_at, created_at, item_number"
 )
 
+# Same contract for routing: _row_to_routing_op reads by index, item_number is
+# position 11, and the aggregate query appends line_number as 12.
+_ROUTING_COLUMNS = (
+    "id, ecn_item_id, operation_number, operation_description, "
+    "work_centre, run_time, setup_time, change_type, movex_snapshot, "
+    "created_at, updated_at, item_number"
+)
+
 
 class ECNItemsMixin:
     """Item and MPN CRUD operations mixed into ECNService."""
@@ -644,7 +652,9 @@ class ECNItemsMixin:
     def _row_to_routing_op(self, row: Any) -> RoutingOperationResponse:
         return RoutingOperationResponse(
             id=str(row[0]),
-            ecn_item_id=str(row[1]),
+            # str() only when there is a value — ecn_item_id is nullable since
+            # ADR-016, and str(None) would hand callers the string "None".
+            ecn_item_id=str(row[1]) if row[1] is not None else None,
             operation_number=row[2],
             operation_description=row[3],
             work_centre=row[4],
@@ -654,33 +664,74 @@ class ECNItemsMixin:
             movex_snapshot=row[8],
             created_at=row[9],
             updated_at=row[10],
+            # item_number is column 11 on every routing select (a real column
+            # since 0035). line_number only exists on the aggregate query,
+            # which appends it as column 12.
+            item_number=row[11] if len(row) > 11 else None,
+            line_number=row[12] if len(row) > 12 else None,
         )
 
     async def create_routing_operation(
         self,
         ecn_id: str,
-        item_id: str,
+        item_id: str | None,
         req: RoutingOperationRequest,
+        *,
+        item_number: str | None = None,
     ) -> RoutingOperationResponse:
+        """Create a routing operation, with or without an item row (ADR-016).
+
+        item_id given  — the item must be on this ECN; item_number is taken
+                         from it, and ecn_item_id records the link.
+        item_id None   — item_number is required and stored directly, the way
+                         Stargile's ZECNROUT carries its own RTPRNO.
+        """
         await self._require_draft(ecn_id)
         if req.change_type not in VALID_CHANGE_TYPES:
             raise ECNValidationError(
                 f"change_type must be one of {sorted(VALID_CHANGE_TYPES)}, got '{req.change_type}'"
             )
-        item_row = await self._session.execute(
-            sa.text("SELECT id FROM ecn_items WHERE id = :item_id AND ecn_id = :ecn_id"),
-            {"item_id": item_id, "ecn_id": ecn_id},
-        )
-        if not item_row.first():
-            raise ECNNotFound(item_id)
 
-        # Check for duplicate operation_number on this item
+        if item_id is not None:
+            item_row = await self._session.execute(
+                sa.text(
+                    "SELECT item_number FROM ecn_items "
+                    "WHERE id = :item_id AND ecn_id = :ecn_id"
+                ),
+                {"item_id": item_id, "ecn_id": ecn_id},
+            )
+            row = item_row.first()
+            if not row:
+                raise ECNNotFound(item_id)
+            # The item is the authority when it is named — an item_number
+            # argument that disagreed with it would split the row's identity
+            # from the item it points at.
+            item_number = row[0]
+        else:
+            if not item_number or not item_number.strip():
+                raise ECNValidationError(
+                    "item_number is required when no item_id is given — a "
+                    "standalone routing change still has to name its product."
+                )
+            item_number = item_number.strip().upper()
+            ecn_row = await self._session.execute(
+                sa.text("SELECT id FROM ecn_instances WHERE id = :ecn_id"),
+                {"ecn_id": ecn_id},
+            )
+            if not ecn_row.first():
+                raise ECNNotFound(ecn_id)
+
+        # Duplicate operation_number check, scoped the same way the
+        # uq_routing_ecn_item_opno constraint is (ecn_id, item_number, opno) —
+        # scoping it by ecn_item_id would miss a clash between a linked row and
+        # a standalone one naming the same item.
         dup = await self._session.execute(
             sa.text(
                 "SELECT id FROM ecn_routing_operations "
-                "WHERE ecn_item_id = :item_id AND operation_number = :opno"
+                "WHERE ecn_id = :ecn_id AND item_number = :item_number "
+                "  AND operation_number = :opno"
             ),
-            {"item_id": item_id, "opno": req.operation_number},
+            {"ecn_id": ecn_id, "item_number": item_number, "opno": req.operation_number},
         )
         if dup.first():
             from datetime import datetime, timezone
@@ -690,32 +741,35 @@ class ECNItemsMixin:
         await self._session.execute(
             sa.text(
                 "INSERT INTO ecn_routing_operations "
-                "(id, ecn_item_id, operation_number, operation_description, "
-                "work_centre, run_time, setup_time, change_type) "
-                "VALUES (:id, :item_id, :opno, :opds, :plgr, :piti, :seti, :change_type)"
+                "(id, ecn_id, ecn_item_id, item_number, operation_number, "
+                "operation_description, work_centre, run_time, setup_time, change_type) "
+                "VALUES (:id, :ecn_id, :item_id, :item_number, :opno, :opds, :plgr, "
+                ":piti, :seti, :change_type)"
             ),
             {
-                "id": op_id, "item_id": item_id, "opno": req.operation_number,
+                "id": op_id, "ecn_id": ecn_id, "item_id": item_id,
+                "item_number": item_number, "opno": req.operation_number,
                 "opds": req.operation_description, "plgr": req.work_centre,
                 "piti": req.run_time, "seti": req.setup_time, "change_type": req.change_type,
             },
         )
-        return await self._get_routing_op(ecn_id, item_id, op_id)
+        return await self._get_routing_op(ecn_id, op_id)
 
     async def _get_routing_op(
-        self, ecn_id: str, item_id: str, op_id: str
+        self, ecn_id: str, op_id: str
     ) -> RoutingOperationResponse:
-        """Fetch one routing op, verifying it belongs to item_id which belongs to ecn_id."""
+        """Fetch one routing op, verifying it belongs to this ECN.
+
+        (ecn_id, op_id) identifies the row uniquely — a standalone routing
+        change has no item to scope by, so item_id was dropped from this
+        signature entirely rather than kept and ignored (ADR-016).
+        """
         row = await self._session.execute(
             sa.text(
-                "SELECT r.id, r.ecn_item_id, r.operation_number, r.operation_description, "
-                "r.work_centre, r.run_time, r.setup_time, r.change_type, r.movex_snapshot, "
-                "r.created_at, r.updated_at "
-                "FROM ecn_routing_operations r "
-                "JOIN ecn_items i ON i.id = r.ecn_item_id "
-                "WHERE r.id = :op_id AND r.ecn_item_id = :item_id AND i.ecn_id = :ecn_id"
+                f"SELECT {_ROUTING_COLUMNS} FROM ecn_routing_operations "
+                "WHERE id = :op_id AND ecn_id = :ecn_id"
             ),
-            {"op_id": op_id, "item_id": item_id, "ecn_id": ecn_id},
+            {"op_id": op_id, "ecn_id": ecn_id},
         )
         r = row.first()
         if not r:
@@ -733,9 +787,7 @@ class ECNItemsMixin:
             raise ECNNotFound(item_id)
         rows = await self._session.execute(
             sa.text(
-                "SELECT id, ecn_item_id, operation_number, operation_description, "
-                "work_centre, run_time, setup_time, change_type, movex_snapshot, "
-                "created_at, updated_at "
+                f"SELECT {_ROUTING_COLUMNS} "
                 "FROM ecn_routing_operations WHERE ecn_item_id = :item_id "
                 "ORDER BY operation_number"
             ),
@@ -744,10 +796,12 @@ class ECNItemsMixin:
         return [self._row_to_routing_op(r) for r in rows]
 
     async def update_routing_operation(
-        self, ecn_id: str, item_id: str, op_id: str, **fields: Any
+        self, ecn_id: str, op_id: str, **fields: Any
     ) -> RoutingOperationResponse:
+        """An operation id is unique on its own — no item_id needed
+        (ADR-016), matching update_mpn."""
         await self._require_draft(ecn_id)
-        await self._get_routing_op(ecn_id, item_id, op_id)
+        await self._get_routing_op(ecn_id, op_id)
         allowed = {"operation_description", "work_centre", "run_time", "setup_time", "change_type"}
         updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
         if updates:
@@ -758,13 +812,11 @@ class ECNItemsMixin:
                 ),
                 {**updates, "op_id": op_id},
             )
-        return await self._get_routing_op(ecn_id, item_id, op_id)
+        return await self._get_routing_op(ecn_id, op_id)
 
-    async def delete_routing_operation(
-        self, ecn_id: str, item_id: str, op_id: str
-    ) -> None:
+    async def delete_routing_operation(self, ecn_id: str, op_id: str) -> None:
         await self._require_draft(ecn_id)
-        await self._get_routing_op(ecn_id, item_id, op_id)
+        await self._get_routing_op(ecn_id, op_id)
         await self._session.execute(
             sa.text("DELETE FROM ecn_routing_operations WHERE id = :op_id"),
             {"op_id": op_id},
@@ -828,22 +880,23 @@ class ECNItemsMixin:
         created_ids: list[str] = []
         for idx, row in enumerate(rows, start=1):
             item_number = row["item_number"]
+            # ADR-016 — an item that is not on this ECN is no longer an error.
+            # The row stands alone with its item_number, exactly as ADR-014 did
+            # for BOM-change upload and 0034 did for MPNs. item_id stays None
+            # and the row is linked only when the item happens to be present.
             item_id = item_by_number.get(item_number)
-            if item_id is None:
-                raise ECNValidationError(
-                    f"Row {idx}: item_number '{item_number}' was not found on this "
-                    "ECN — add it via item upload first"
-                )
             op_id = str(uuid.uuid4())
             await self._session.execute(
                 sa.text(
                     "INSERT INTO ecn_routing_operations "
-                    "(id, ecn_item_id, operation_number, operation_description, "
-                    "work_centre, run_time, setup_time, change_type) "
-                    "VALUES (:id, :item_id, :opno, :opds, :plgr, :piti, :seti, :change_type)"
+                    "(id, ecn_id, ecn_item_id, item_number, operation_number, "
+                    "operation_description, work_centre, run_time, setup_time, change_type) "
+                    "VALUES (:id, :ecn_id, :item_id, :item_number, :opno, :opds, :plgr, "
+                    ":piti, :seti, :change_type)"
                 ),
                 {
-                    "id": op_id, "item_id": item_id, "opno": row["operation_number"],
+                    "id": op_id, "ecn_id": ecn_id, "item_id": item_id,
+                    "item_number": item_number, "opno": row["operation_number"],
                     "opds": row["operation_description"], "plgr": row["work_centre"],
                     "piti": row["run_time"], "seti": row.get("setup_time"),
                     "change_type": row["change_type"],
@@ -855,10 +908,7 @@ class ECNItemsMixin:
         for op_id in created_ids:
             row_data = await self._session.execute(
                 sa.text(
-                    "SELECT id, ecn_item_id, operation_number, operation_description, "
-                    "work_centre, run_time, setup_time, change_type, movex_snapshot, "
-                    "created_at, updated_at "
-                    "FROM ecn_routing_operations WHERE id = :op_id"
+                    f"SELECT {_ROUTING_COLUMNS} FROM ecn_routing_operations WHERE id = :op_id"
                 ),
                 {"op_id": op_id},
             )
@@ -879,22 +929,24 @@ class ECNItemsMixin:
         if not ecn_row.first():
             raise ECNNotFound(ecn_id)
 
+        # ADR-016 — anchored on r.ecn_id with a LEFT JOIN. The old INNER join
+        # through ecn_items dropped every standalone routing operation from
+        # this list silently. item_number comes from the row itself;
+        # line_number only exists when there is a linked item, so those rows
+        # sort last.
         rows = await self._session.execute(
             sa.text(
                 "SELECT r.id, r.ecn_item_id, r.operation_number, r.operation_description, "
                 "r.work_centre, r.run_time, r.setup_time, r.change_type, r.movex_snapshot, "
-                "r.created_at, r.updated_at, i.item_number, i.line_number "
+                "r.created_at, r.updated_at, r.item_number, i.line_number "
                 "FROM ecn_routing_operations r "
-                "JOIN ecn_items i ON i.id = r.ecn_item_id "
-                "WHERE i.ecn_id = :ecn_id "
-                "ORDER BY i.line_number, r.operation_number"
+                "LEFT JOIN ecn_items i ON i.id = r.ecn_item_id "
+                "WHERE r.ecn_id = :ecn_id "
+                "ORDER BY i.line_number NULLS LAST, r.item_number, r.operation_number"
             ),
             {"ecn_id": ecn_id},
         )
-        result = []
-        for row in rows:
-            op = self._row_to_routing_op(row)
-            op.item_number = row[11]
-            op.line_number = row[12]
-            result.append(op)
-        return result
+        # _row_to_routing_op reads item_number (11) and line_number (12) by
+        # index — the column order above matches _ROUTING_COLUMNS plus the
+        # appended i.line_number.
+        return [self._row_to_routing_op(r) for r in rows]

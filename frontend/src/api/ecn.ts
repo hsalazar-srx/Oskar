@@ -200,7 +200,9 @@ export async function bulkCreateItems(ecnId: string, file: File) {
 
 export interface RoutingOp {
   id: string
-  ecn_item_id: string
+  /** null for a standalone routing change (ADR-016) — no item row on the
+   * ECN. Same shape as BOMChange.ecn_item_id and MPN.ecn_item_id. */
+  ecn_item_id: string | null
   operation_number: number
   operation_description: string
   work_centre: string
@@ -235,23 +237,42 @@ export async function fetchAllRoutingOps(ecnId: string): Promise<RoutingOp[]> {
   return data
 }
 
-export async function createRoutingOp(ecnId: string, itemId: string, body: RoutingOpBody): Promise<RoutingOp> {
-  const { data } = await axiosInstance.post(`/api/v1/ecn/${ecnId}/items/${itemId}/routing`, body)
+/**
+ * Create a routing operation (ADR-016).
+ *
+ * Pass an itemId when the operation belongs to an item already on the ECN —
+ * the item supplies the item number. Pass null and give `item_number` in the
+ * body instead (Stargile's RTPRNO), for a routing-only change on an ECN that
+ * carries no item row.
+ *
+ * Same shape as createBomChange and createMPN.
+ */
+export async function createRoutingOp(
+  ecnId: string,
+  itemId: string | null,
+  body: RoutingOpBody | (RoutingOpBody & { item_number: string }),
+): Promise<RoutingOp> {
+  const url = itemId
+    ? `/api/v1/ecn/${ecnId}/items/${itemId}/routing`
+    : `/api/v1/ecn/${ecnId}/routing`
+  const { data } = await axiosInstance.post(url, body)
   return data
 }
 
+/** ADR-016 — ECN-scoped. An operation id is unique on its own, so these no
+ * longer take an itemId: the old routes parsed one and never read it, and a
+ * standalone routing change has no item to name. */
 export async function updateRoutingOp(
   ecnId: string,
-  itemId: string,
   opId: string,
   body: Partial<Omit<RoutingOpBody, "operation_number">>,
 ): Promise<RoutingOp> {
-  const { data } = await axiosInstance.patch(`/api/v1/ecn/${ecnId}/items/${itemId}/routing/${opId}`, body)
+  const { data } = await axiosInstance.patch(`/api/v1/ecn/${ecnId}/routing/${opId}`, body)
   return data
 }
 
-export async function deleteRoutingOp(ecnId: string, itemId: string, opId: string): Promise<void> {
-  await axiosInstance.delete(`/api/v1/ecn/${ecnId}/items/${itemId}/routing/${opId}`)
+export async function deleteRoutingOp(ecnId: string, opId: string): Promise<void> {
+  await axiosInstance.delete(`/api/v1/ecn/${ecnId}/routing/${opId}`)
 }
 
 /**

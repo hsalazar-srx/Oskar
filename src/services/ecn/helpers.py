@@ -144,19 +144,15 @@ async def _count_ecn_content(session: AsyncSession, ecn_id: str) -> int:
     Anything counted through a JOIN on ecn_items is invisible once that link
     is nullable, and the consequence here is specific: the submit guard would
     report "no content" for an ECN that visibly has content on it, and the
-    author could not submit at all. BOM changes (ADR-014) and MPNs (ADR-016)
-    are therefore counted on their own ecn_id.
-
-    Routing operations still hang off ecn_items and are still counted through
-    it — until migration 0035 decouples them too, at which point this needs
-    the same treatment.
+    author could not submit at all. Every content type now carries its own
+    ecn_id — BOM changes (ADR-014), MPNs and routing operations (ADR-016) —
+    so all four counts are anchored directly and none of them join.
     """
     row = await session.execute(
         sa.text(
             "SELECT "
             "  (SELECT COUNT(*) FROM ecn_items WHERE ecn_id = :ecn_id) "
-            "+ (SELECT COUNT(*) FROM ecn_routing_operations r "
-            "     JOIN ecn_items i ON i.id = r.ecn_item_id WHERE i.ecn_id = :ecn_id) "
+            "+ (SELECT COUNT(*) FROM ecn_routing_operations WHERE ecn_id = :ecn_id) "
             "+ (SELECT COUNT(*) FROM ecn_bom_changes WHERE ecn_id = :ecn_id) "
             "+ (SELECT COUNT(*) FROM ecn_mpns WHERE ecn_id = :ecn_id)"
         ),

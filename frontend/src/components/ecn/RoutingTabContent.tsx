@@ -48,6 +48,17 @@ export default function RoutingTabContent({ ecnId, onManageItem }: Props) {
               <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${CHANGE_TYPE_BADGE[op.change_type] ?? "bg-neutral-100 text-neutral-600"}`}>
                 {op.change_type}
               </span>
+              {/* ADR-016 — no item row on the ECN. Styled to match the
+                  "BOM only" / "MPN only" badges so all three tabs read the
+                  same way. */}
+              {op.ecn_item_id === null && (
+                <span
+                  className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-neutral-100 text-neutral-500"
+                  title="Routing-only change — this product is not an item on this ECN, so no item-master change is implied"
+                >
+                  Routing only
+                </span>
+              )}
             </div>
             <p className="text-sm text-neutral-700 mt-0.5 truncate">{op.operation_description}</p>
             <p className="text-xs text-neutral-400 mt-0.5">
@@ -55,13 +66,17 @@ export default function RoutingTabContent({ ecnId, onManageItem }: Props) {
               {op.setup_time != null ? ` · ${op.setup_time} min setup` : ""}
             </p>
           </div>
-          <button
-            type="button"
-            className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 text-xs font-medium text-[#0066cc] hover:underline"
-            onClick={() => onManageItem(op.ecn_item_id)}
-          >
-            Manage
-          </button>
+          {/* "Manage" opens the owning item's panel — only possible when
+              there is one. A standalone routing change has no item to open. */}
+          {op.ecn_item_id !== null && (
+            <button
+              type="button"
+              className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 text-xs font-medium text-[#0066cc] hover:underline"
+              onClick={() => onManageItem(op.ecn_item_id as string)}
+            >
+              Manage
+            </button>
+          )}
         </div>
       ))}
     </div>

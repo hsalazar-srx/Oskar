@@ -538,7 +538,7 @@ async def update_bom_change(
     fields = body.model_dump(exclude_none=True, exclude={"actor_role"})
     try:
         change = await svc.update_bom_change(
-            ecn_id, None, change_id, actor_role=body.actor_role, **fields
+            ecn_id, change_id, actor_role=body.actor_role, **fields
         )
     except ECNNotFound:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BOM change not found")
@@ -562,7 +562,7 @@ async def delete_bom_change(
 ) -> None:
     svc = ECNService(session)
     try:
-        await svc.delete_bom_change(ecn_id, None, change_id, actor_role=actor_role)
+        await svc.delete_bom_change(ecn_id, change_id, actor_role=actor_role)
     except ECNNotFound:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BOM change not found")
     except ECNValidationError as exc:

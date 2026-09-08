@@ -245,9 +245,14 @@ class RoutingOperationRequest:
 
 @dataclass
 class RoutingOperationResponse:
-    """Routing operation row as returned by the API."""
+    """Routing operation row as returned by the API.
+
+    ecn_item_id is nullable since ADR-016/migration 0035 — a standalone
+    routing change carries no item row, mirroring Stargile's ZECNROUT, which
+    holds its own RTPRNO rather than pointing at the items table.
+    """
     id: str
-    ecn_item_id: str
+    ecn_item_id: str | None
     operation_number: int
     operation_description: str
     work_centre: str
@@ -257,8 +262,10 @@ class RoutingOperationResponse:
     movex_snapshot: dict | None
     created_at: datetime
     updated_at: datetime
-    # Populated only by list_all_routing_operations (ECN-wide aggregate view)
-    # — None on the per-item path (list_routing_operations), already scoped.
+    # item_number is a real column on the row since ADR-016, so every read
+    # path populates it — it is how a standalone routing change names its
+    # product. line_number still comes from the item row, so it stays None
+    # when there is no linked item.
     item_number: str | None = None
     line_number: int | None = None
 

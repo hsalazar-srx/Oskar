@@ -394,7 +394,7 @@ class TestRoutingOperations:
         item = await svc.create_item(ecn_id, line_number=10, item_number="LF-RUP")
         op = await svc.create_routing_operation(ecn_id, item.id, self._op_req())
         updated = await svc.update_routing_operation(
-            ecn_id, item.id, op.id, work_centre="SMT02", run_time=90.0,
+            ecn_id, op.id, work_centre="SMT02", run_time=90.0,
         )
         assert updated.work_centre == "SMT02"
         assert updated.run_time == 90.0
@@ -404,7 +404,7 @@ class TestRoutingOperations:
         ecn_id = await _make_ecn(db_session)
         item = await svc.create_item(ecn_id, line_number=10, item_number="LF-RDEL")
         op = await svc.create_routing_operation(ecn_id, item.id, self._op_req())
-        await svc.delete_routing_operation(ecn_id, item.id, op.id)
+        await svc.delete_routing_operation(ecn_id, op.id)
         ops = await svc.list_routing_operations(ecn_id, item.id)
         assert ops == []
 
@@ -431,7 +431,7 @@ class TestRoutingOperations:
             {"id": ecn_id},
         )
         with pytest.raises(ECNValidationError, match="DRAFT"):
-            await svc.update_routing_operation(ecn_id, item.id, op.id, work_centre="SMT99")
+            await svc.update_routing_operation(ecn_id, op.id, work_centre="SMT99")
 
     async def test_delete_routing_op_non_draft_raises(self, db_session: AsyncSession):
         import sqlalchemy as sa
@@ -444,7 +444,7 @@ class TestRoutingOperations:
             {"id": ecn_id},
         )
         with pytest.raises(ECNValidationError, match="DRAFT"):
-            await svc.delete_routing_operation(ecn_id, item.id, op.id)
+            await svc.delete_routing_operation(ecn_id, op.id)
 
 
 class TestListAllRoutingOperations:

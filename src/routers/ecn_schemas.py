@@ -368,6 +368,31 @@ class BulkItemRow(BaseModel):
         return v
 
 
+class StandaloneRoutingOpBody(BaseModel):
+    """ADR-016 — create a routing operation with no item row on the ECN.
+
+    Same fields as RoutingOpBody plus item_number, which the item-scoped path
+    derives from the item instead. Kept as a separate model rather than making
+    item_number optional on RoutingOpBody: on the item-scoped route it would
+    be a field that is silently ignored, which is worse than not offering it.
+    Mirrors CreateStandaloneMPNBody.
+    """
+    item_number: str = Field(..., min_length=1, max_length=15)
+    operation_number: int = Field(..., ge=1)
+    operation_description: str = Field(..., min_length=1, max_length=30)
+    work_centre: str = Field(..., min_length=1, max_length=8)
+    run_time: float = Field(..., ge=0)
+    setup_time: float | None = Field(None, ge=0)
+    change_type: str
+
+    @field_validator("change_type")
+    @classmethod
+    def validate_change_type(cls, v: str) -> str:
+        if v not in VALID_CHANGE_TYPES:
+            raise ValueError(f"change_type must be one of {sorted(VALID_CHANGE_TYPES)}")
+        return v
+
+
 class RoutingOpBody(BaseModel):
     operation_number: int = Field(..., ge=1)
     operation_description: str = Field(..., min_length=1, max_length=30)
@@ -704,7 +729,10 @@ class ECNItemOut(BaseModel):
 
 class RoutingOpOut(BaseModel):
     id: str
-    ecn_item_id: str
+    # Nullable since ADR-016 — a standalone routing change has no item row.
+    # The frontend uses this to decide whether a row offers "Manage item",
+    # the same way BOMChangeOut and MPNOut already do.
+    ecn_item_id: str | None
     operation_number: int
     operation_description: str
     work_centre: str
