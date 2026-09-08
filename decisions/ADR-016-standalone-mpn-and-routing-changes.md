@@ -240,13 +240,54 @@ wonders why an id looks wrong.
 has the right pattern; it simply was not applied consistently when 0034 made a new column
 nullable.
 
-**The rule:** any time a migration makes a column nullable, grep for `str(` on that field
-across the service layer in the same commit. A nullable column reached through a bare `str()`
-is a bug waiting for its first NULL.
+A convention alone would not have prevented these — both were caught by reading the diff,
+which is not a control. So there is a check.
 
-Enforcement options considered are recorded in the follow-up work rather than decided here —
-the honest position is that a convention alone did not prevent this one, so something
-mechanical is wanted.
+### `scripts/check_nullable_str.py`
+
+Run in pre-commit over `src/`, and asserted by `tests/scripts/test_check_nullable_str.py`
+so a regression is a failing test rather than a hook someone can skip with `-n`.
+
+It detects the two shapes the real bugs took:
+
+**1. Dataclass field.** Uses the signal the codebase already maintains honestly — the field
+annotation. A field declared `X | None` assigned a bare `str(...)` in a constructor call is
+the bug, and needs no database to see:
+
+```python
+@dataclass
+class ECNMPNDetail:
+    ecn_item_id: str | None      # declared optional
+...
+    ecn_item_id=str(row[1]),     # converted unconditionally  ==> flagged
+```
+
+**2. SQL bind parameters.** No annotation to lean on, so this half matches dict keys against
+an explicit `NULLABLE_ID_KEYS` list. Deliberately manual: deriving nullability from column
+names alone produced false positives, because two tables can share a column name where only
+one is nullable — three such matches were confirmed, all NOT NULL in reality.
+
+Both guard styles used in the codebase pass (`if x is not None else None` and
+`if x else None`), and non-Optional fields are never flagged — a check that cries wolf gets
+turned off.
+
+**It immediately earned its place:** on first run it flagged `workflow.py:959`, the routing
+outbox, which I had missed. Correct today (`ecn_routing_operations.ecn_item_id` is still NOT
+NULL and the query INNER JOINs `ecn_items`), but it is precisely the line migration 0035 will
+activate. Guarded defensively, with the reason in a comment.
+
+### Checklist when a migration makes a column nullable
+
+The check covers the two known shapes; it cannot cover every possible one. So, in the same
+commit as the migration:
+
+1. Run `python scripts/check_nullable_str.py` — it will not catch a shape it does not know.
+2. If the column is an id used as a bind parameter, add its key to `NULLABLE_ID_KEYS`.
+3. Grep every read path for `JOIN` on that column. An INNER JOIN through a now-nullable
+   column drops rows **silently** — six of these existed here, and the two that mattered
+   would have made an MPN-only ECN unsubmittable and stopped an alias reaching M3, both with
+   no error anywhere. This failure mode is quieter than `str(None)` and cost more to find.
+4. Check unique indexes keyed on that column (see "the unique-index rebuild" above).
 
 ---
 

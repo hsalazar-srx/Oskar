@@ -956,7 +956,14 @@ class ECNWorkflowMixin:
                     "ON CONFLICT (idempotency_key) DO NOTHING RETURNING id"
                 ),
                 {
-                    "id": new_id, "ecn_id": ecn_id, "item_id": str(item_id),
+                    # Correct today — ecn_routing_operations.ecn_item_id is
+                    # still NOT NULL and this query INNER JOINs ecn_items, so
+                    # item_id cannot be None. Guarded anyway because migration
+                    # 0035 (ADR-016) makes that column nullable, and an
+                    # unguarded str() would then quietly write the string
+                    # "None" into movex_outbox.ecn_item_id.
+                    "id": new_id, "ecn_id": ecn_id,
+                    "item_id": str(item_id) if item_id is not None else None,
                     "mi_tx": mi_tx,
                     "mi_params": json.dumps(mi_params),
                     "ikey": idempotency_key,

@@ -3,8 +3,9 @@
 # Run manually: pre-commit run --all-files
 #
 # Hooks:
-#   gitleaks  — secret/credential scanning (blocks commits containing secrets)
-#   pip-audit — Python dependency vulnerability scan (advisory DB)
+#   gitleaks            — secret/credential scanning (blocks commits containing secrets)
+#   pip-audit           — Python dependency vulnerability scan (advisory DB)
+#   check-nullable-str  — str(None) writes the literal string "None" (ADR-016)
 
 repos:
 
@@ -22,3 +23,17 @@ repos:
         args: [-r, requirements.txt]
         pass_filenames: false
         files: requirements.txt
+
+      # A nullable column reached through a bare str() silently becomes the
+      # string "None" — valid, so nothing raises, and only visible when
+      # someone reads the row back and wonders why an id looks wrong. Two of
+      # these appeared while migration 0034 made ecn_mpns.ecn_item_id
+      # nullable; both were caught by reading the diff, which is not a
+      # control. See ADR-016 and scripts/check_nullable_str.py.
+      - id: check-nullable-str
+        name: check for str(None) on nullable columns
+        language: system
+        entry: python scripts/check_nullable_str.py
+        args: [src]
+        pass_filenames: false
+        files: ^src/.*\.py$
