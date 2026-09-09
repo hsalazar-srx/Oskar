@@ -11,9 +11,11 @@ const CHANGE_TYPE_BADGE: Record<string, string> = {
 interface Props {
   ecnId: string
   onManageItem: (itemId: string) => void
+  /** Opens the ADR-016 add drawer. Absent when the ECN is not editable. */
+  onAddOp?: () => void
 }
 
-export default function RoutingTabContent({ ecnId, onManageItem }: Props) {
+export default function RoutingTabContent({ ecnId, onManageItem, onAddOp }: Props) {
   const { data: ops = [], isLoading } = useQuery({
     queryKey: ["ecn-routing-all", ecnId],
     queryFn: () => fetchAllRoutingOps(ecnId),
@@ -27,7 +29,19 @@ export default function RoutingTabContent({ ecnId, onManageItem }: Props) {
     return (
       <div className="py-10 flex flex-col items-center gap-2">
         <p className="text-sm text-[#94a3b8]">No routing operations defined yet.</p>
-        <p className="text-xs text-[#cbd5e1]">Open an item and use its Routing Ops tab to add one.</p>
+        {onAddOp ? (
+          <button
+            type="button"
+            onClick={onAddOp}
+            className="text-xs font-medium text-[#0066cc] hover:underline"
+          >
+            Add an operation
+          </button>
+        ) : (
+          <p className="text-xs text-[#cbd5e1]">
+            Routing operations can be added while the ECN is in Draft.
+          </p>
+        )}
       </div>
     )
   }

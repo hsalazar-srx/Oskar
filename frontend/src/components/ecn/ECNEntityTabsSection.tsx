@@ -10,6 +10,7 @@ import { RoutingUploadDrawer } from "@/components/ecn/RoutingUploadDrawer"
 import { BOMChangesUploadDrawer } from "@/components/ecn/BOMChangesUploadDrawer"
 import AddBomChangeDrawer from "@/components/ecn/AddBomChangeDrawer"
 import AddMpnDrawer from "@/components/ecn/AddMpnDrawer"
+import AddRoutingOpDrawer from "@/components/ecn/AddRoutingOpDrawer"
 import { MPNUploadDrawer } from "@/components/ecn/MPNUploadDrawer"
 import { exportItems, exportRoutingOps, exportBomChanges, exportMPNs } from "@/api/ecn"
 
@@ -45,6 +46,7 @@ export default function ECNEntityTabsSection({
   const [addBomChangeOpen, setAddBomChangeOpen] = useState(false)
   const [mpnUploadOpen, setMpnUploadOpen] = useState(false)
   const [addMpnOpen, setAddMpnOpen] = useState(false)
+  const [addRoutingOpen, setAddRoutingOpen] = useState(false)
 
   function manageItem(itemId: string, entityTab: "routing" | "bom" | "mpns") {
     onSelectItem(itemId, entityTab)
@@ -74,6 +76,13 @@ export default function ECNEntityTabsSection({
             <>
               <ExportButton canExport={canExport} label="↓ Export" onExport={() => exportRoutingOps(ecnId, ecnNumber)} />
               <UploadButton canUpload={canUpload} label="↑ Upload Routing" onClick={() => setRoutingUploadOpen(true)} />
+              {/* ADR-016 — author a routing change with no item on the ECN.
+                  Gated on canUpload, matching the BOM and MPN add buttons. */}
+              {canUpload && (
+                <Button size="sm" variant="outline" onClick={() => setAddRoutingOpen(true)}>
+                  + Add operation
+                </Button>
+              )}
             </>
           )}
           {tab === "bom" && (
@@ -110,7 +119,11 @@ export default function ECNEntityTabsSection({
       <div className="p-5">
         {tab === "items" && <ItemsTabContent items={items} onSelectItem={(id) => onSelectItem(id)} />}
         {tab === "routing" && (
-          <RoutingTabContent ecnId={ecnId} onManageItem={(id) => manageItem(id, "routing")} />
+          <RoutingTabContent
+            ecnId={ecnId}
+            onManageItem={(id) => manageItem(id, "routing")}
+            onAddOp={canUpload ? () => setAddRoutingOpen(true) : undefined}
+          />
         )}
         {tab === "bom" && (
           <BOMChangesTabContent ecnId={ecnId} onManageItem={(id) => manageItem(id, "bom")} />
@@ -164,6 +177,13 @@ export default function ECNEntityTabsSection({
         ecnId={ecnId}
         open={addMpnOpen}
         onClose={() => setAddMpnOpen(false)}
+        onSuccess={onItemsChanged}
+      />
+
+      <AddRoutingOpDrawer
+        ecnId={ecnId}
+        open={addRoutingOpen}
+        onClose={() => setAddRoutingOpen(false)}
         onSuccess={onItemsChanged}
       />
     </div>
