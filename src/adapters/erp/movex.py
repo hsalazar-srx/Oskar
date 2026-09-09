@@ -467,9 +467,65 @@ class MovexRestAdapter(ERPAdapter):
             data["records"] = [_uppercase_keys(r) for r in data["records"]]
         return payload
 
-    async def search_items(self, query: str, limit: int = 50) -> list[dict[str, Any]]:
-        resp = await self._get("/items", params={"q": query, "limit": limit})
-        return resp.json()
+    async def search_items(
+        self, query: str, limit: int = 50, *, facility: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Search the item master via MMS200MI.LstItmFac (GET, returns a list).
+
+        Rewritten 2026-09-09. The previous implementation called
+        `GET /items?q=`, an endpoint that does not exist on movex-rest-api —
+        it had no CONO (mandatory on every multi-company M3 table), no
+        `data.records` unwrapping, and no caller. It could never have worked.
+
+        M3 offers no MI transaction that filters items by description, so the
+        substring match is applied here over the facility's item list.
+        LstItmFac returns ITNO + ITDS per record, which is what makes that
+        possible; a DB2 direct query would push the filter server-side and is
+        the better long-term answer if this proves slow
+        (movex-rest-api/docs/SPEC-item-search-endpoint.md).
+
+        Matching is case-insensitive against item number and description, with
+        item-number prefix matches ranked first — someone typing "LFAM05"
+        wants items starting with it, not every item with that fragment buried
+        in a description.
+
+        NOTE: LstItmFac's response-field offsets were wrong in movex-rest-api's
+        config until 2026-09-09 (declared 3 fields, none with startIndex, so
+        the parser read sequentially from position 0 while the record starts at
+        index 16). Any deployment older than that fix returns misaligned values.
+        """
+        params: dict[str, Any] = {"CONO": self.cono}
+        if facility:
+            params["FACI"] = facility
+
+        resp = await self._get("/MMS200MI/LstItmFac", params=params)
+        payload = resp.json()
+        if payload.get("success") is False:
+            return []
+
+        records = payload.get("data", {}).get("records", []) or []
+        needle = query.strip().upper()
+        if not needle:
+            return []
+
+        matches: list[dict[str, Any]] = []
+        for record in records:
+            r = _uppercase_keys(record)
+            itno = str(r.get("ITNO") or "").strip()
+            itds = str(r.get("ITDS") or "").strip()
+            if not itno:
+                continue
+            if needle in itno.upper() or needle in itds.upper():
+                matches.append({
+                    "item_number": itno,
+                    "description": itds,
+                    "facility": str(r.get("FACI") or "").strip(),
+                })
+
+        # Prefix matches first, then alphabetical — stable and predictable.
+        matches.sort(key=lambda m: (0 if m["item_number"].upper().startswith(needle) else 1,
+                                    m["item_number"]))
+        return matches[:limit]
 
     async def get_ecn(self, ecn_id: str) -> dict[str, Any]:
         resp = await self._get(f"/ecn/{ecn_id}")

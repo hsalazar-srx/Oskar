@@ -210,10 +210,20 @@ class ERPAdapter(ABC):
         ...
 
     @abstractmethod
-    async def search_items(self, query: str, limit: int = 50) -> list[dict[str, Any]]:
-        """Search item master by description or item number prefix (MMS200MI.GetItmBasic).
+    async def search_items(
+        self, query: str, limit: int = 50, *, facility: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Search the item master by item number or description substring.
 
-        Used by the ECN item search UI. Returns a list of matching item records.
+        Returns dicts with `item_number`, `description` and `facility`, item-
+        number prefix matches first. Empty list when nothing matches or the
+        query is blank — never raises for "no results".
+
+        The docstring here previously named MMS200MI.GetItmBasic, which is an
+        EXACT-item lookup and cannot serve a search; corrected 2026-09-09 when
+        the method was first implemented for real. M3 has no MI transaction
+        that filters items by description, so implementations are expected to
+        filter application-side (see MovexRestAdapter.search_items).
         """
         ...
 
